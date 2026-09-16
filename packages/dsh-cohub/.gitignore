@@ -1,0 +1,21 @@
+# 构建产物
+lib/
+
+# 生成的 skills.ts（由 scripts/generate-skills.ts 生成）
+src/skills.ts
+
+# 本地测试 profile 与依赖
+.test/
+node_modules/
+
+# 误生成的包管理器锁文件（本项目以 package-lock.json 为准）
+pnpm-lock.yaml
+
+# dsh 会话导出/分析产物
+analysis/
+
+# Playwright MCP 测试临时产物
+.playwright-mcp/
+
+# 本地临时工作目录（worktree/bare 仓库测试产物）
+.tmp/

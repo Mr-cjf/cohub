@@ -1,0 +1,109 @@
+{
+  "name": "dsh-cohub",
+  "version": "0.4.10",
+  "description": "DeepSeek Harness 版 CoHub：中文智能体编排——双 preset 模式（co-orchestrator 纯调度 + cohub-cordis 创造模式）/ 12 技能（11 专职代理 + orchestrator）/ 多模型共识",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./co-cordis-plugin": "./lib/co-cordis-plugin.js",
+    "./package.json": "./package.json",
+    "./client": {
+      "default": "./lib/client.js"
+    }
+  },
+  "files": [
+    "lib",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "presets"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "bun run scripts/generate-skills.ts && bun run scripts/guard-schema.ts && bun build src/index.ts --outdir lib --target node --format esm --external @deepseek-ai/cordis --external @deepseek-ai/schemastery --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-system-prompt --external @deepseek-ai/dsh-skill --external @deepseek-ai/dsh-home-paths --external @deepseek-ai/dsh-settings && bun build src/co-cordis-plugin.ts --outdir lib --target node --format esm --external @deepseek-ai/dsh-tools && bun run scripts/build-client.js",
+    "lint:schema": "bun run scripts/guard-schema.ts",
+    "prepublishOnly": "npm run build",
+    "build:client": "bun run scripts/build-client.js",
+    "audit": "node scripts/audit-session.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-subagent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
+    "react": "^18.2.0",
+    "@deepseek-ai/dsh-api-remotes": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-system-prompt": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-skill": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-home-paths": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6"
+  },
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "chinese",
+    "agent",
+    "orchestra",
+    "dual-mode",
+    "tool-restriction"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mr-cjf/cohub.git",
+    "directory": "packages/dsh-cohub"
+  }
+}

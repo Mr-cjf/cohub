@@ -14,3 +14,6 @@ lib/
 *.log
 .DS_Store
 desktop.ini
+
+# IDE 配置
+.idea/

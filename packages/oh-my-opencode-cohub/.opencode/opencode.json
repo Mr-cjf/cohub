@@ -1,0 +1,45 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    ".opencode/rules/Git工作流.md",
+    ".opencode/rules/上下文效率.md",
+    ".opencode/rules/发版规范.md"
+  ],
+  "skills": {
+    "paths": [".opencode/skills"]
+  },
+  "permission": {
+    "edit": "allow",
+    "bash": {
+      "bun *": "allow",
+      "tsc *": "allow",
+      "git diff *": "allow",
+      "git log *": "allow",
+      "git status *": "allow",
+      "git branch *": "allow",
+      "git show *": "allow",
+      "git add *": "ask",
+      "git commit *": "ask",
+      "git push *": "ask",
+      "git checkout *": "ask",
+      "git merge *": "ask",
+      "git stash *": "ask",
+      "git remote *": "allow",
+      "git fetch *": "allow",
+      "git mv *": "ask",
+      "curl *": "ask",
+      "node *": "allow",
+      "npm *": "allow",
+      "npx *": "allow",
+      "New-Item *": "allow",
+      "Test-Path *": "allow",
+      "Remove-Item *": "ask",
+      "*": "ask"
+    },
+    "webfetch": "allow",
+    "websearch": "allow",
+    "external_directory": {
+      "*": "ask"
+    }
+  }
+}

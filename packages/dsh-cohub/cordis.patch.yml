@@ -1,0 +1,79 @@
+# dsh-cohub bundle patch —— 在 profile 组合中挂载 CoHub 插件行。
+# 行 id 为 "cohub"：profile 级 cordis.patch.yml 可用该 id 覆盖 config
+#（如关闭 council 或配置 councillors 模型列表、调整 P3 字段）。
+- insert:
+    - id: cohub
+      name: 'dsh-cohub'
+      config:
+        # councillors 非空时注册 council_session 工具（多模型共识），示例：
+        #   - { name: expert1, provider: deepseek-official, model: deepseek-v4-flash }
+        councillors: []
+        councilTimeoutMs: 180000
+        # skills: delegate 委派路由，按 skill 名覆盖子代理的 provider/model/maxTokens。
+        # skills 现在可通过 DSH settings（settings.yaml 的 cohub.skills）配置，此处为默认值/组合层（base）；未配置则继承父模型。示例：
+        # skills:
+        #   - { name: co-fixer, provider: deepseek-official, model: deepseek-v4-flash }
+        #   - { name: co-explorer, provider: deepseek-official, model: deepseek-v4-flash }
+        skills: []
+        # delegateEnvContract: delegate 委派时是否在子代理 prompt 前注入「执行器环境契约」
+        # （通用原则 + 探测式自适应，避免子代理在陌生执行环境现场盲试）。默认开；可关闭/可覆盖文本：
+        #   delegateEnvContract: { enabled: true }                    # 默认
+        #   delegateEnvContract: { enabled: false }                   # 关闭注入
+        #   delegateEnvContract: { enabled: true, text: "..." }       # 部署覆盖为已知环境契约
+        # 缺省文本为「通用原则 + 探测流程」（不写死 await import()/require/600s 等环境断言）。
+        # delegateRetry: delegate 中止/失败后的自动重试。默认不重试（保持现状）：
+        #   delegateRetry: { maxRetries: 0, retryDelayMs: 1000, retryableReasons: ["aborted"] }
+        #   - maxRetries: 0 = 不重试；>0 时仅对 retryableReasons 中的 reason 重试
+        #   - retryableReasons: 默认仅 "aborted"；未知 stopReason 一律不重试（保守，跨版本安全）
+        # delegateRetry.stall（P3-1 N2 停滞检测）：默认关闭（enabled=false）。启用后会在 spawn 子代理
+        # 时挂载 StallWatchdog，按 session/event 在线估计 S1-S4 信号并提前中止（复用 delegateRetry 重试预算）：
+        #   delegateRetry:
+        #     maxRetries: 2
+        #     retryDelayMs: 1500
+        #     retryableReasons: ["aborted"]
+        #     stall:
+        #       enabled: true
+        #       consecutiveErrors: 3      # S1 连续同类错误阈值
+        #       idleMs: 180000            # S2 无结果空转毫秒
+        #       reasoningWithoutAction: 50 # S3 纯推理无动作阈值（连续推理块数，期间 0 工具调用）
+        #       loopCount: 3              # S4 同工具名 + 同参数重复次数
+        #       graceMs: 30000            # 宽限窗口（最近一次成功工具结果距今超过它才允许触发）
+        #       recoverable: true         # 触发后按 retryableReasons 判定（false 则直接失败）
+        # envSignatures（P3-2 N1 环境契约持久化）：默认 auto（无缓存时与 P1 行为完全一致）。
+        # 累计同一归一化签名达 confirmCount 次后写入 dshHomePath("cohub","env-signatures.json")；
+        # 下次 spawn 命中缓存（指纹 + TTL 有效）→ 用确定性契约文本前馈注入，跳过探针。
+        #   envSignatures:
+        #     use: auto                  # auto / off / manual
+        #     ttlMs: 604800000           # 7 天（到期重探，防环境静默升级）
+        #     confirmCount: 2            # 观察一致次数（防瞬态误判）
+        # schedule（P3-3 N3 调度参数）：通过 systemPrompt.section 注入实际生效值（cohub:schedule），
+        # 子代理与主代理均可见该段；text 为函数，settings 卡片改了立即重读无需重启。
+        #   schedule:
+        #     maxParallelBatch: 3        # 单批并行委派上限（本环境观测值，部署可调）
+        #     wallClockBudgetMs: 600000  # 单次执行单元墙钟预算（10 分钟）
+        #     useJobTracking: auto       # auto / on / off（auto = 有 job 能力则后台跟踪）
+        #     adaptiveBatch: auto        # auto / off（auto = 提示词级按本会话已观测错误/超时收放批大小）
+
+# ── tool-cordis：本文件【刻意不挂】────────────────────────────────────────────
+# @deepseek-ai/dsh-tool-cordis 会把一组 Host 级 inspect provider（Service /
+# Event / Builtin / Tool）注册进**进程单例**注册表；dsh-cordis-host-runner 的
+# CordisInspectRegistryService.register() 见到同名 id 直接抛错：
+#   Error: Host Cordis inspect provider "Service" is already registered
+#
+# 官方「创造模式」（dsh-agent-presets 的 `cordis` preset）**自带这一行**，它是
+# 部署自带的 preset，不能改（升级会覆盖），而一个 preset 的 standing mount 又由
+# DSH 共享并常驻（dsh-agent-presets 的 ensureStanding）。因此任何第二份挂载 ——
+# 不管在别的 preset 里，还是这里的 host 层顶层 insert —— 都会让创造模式的
+# standing mount 失败：
+#   [preset-tree] Error: failed to apply loader entry tool-cordis (...)
+# 而 agent 创建就发生在 preset 的 compose 阶段（setup 里 ensureStanding），失败
+# 会回滚 agent 创建，表现为每次对话都报：
+#   client api: session/prompt failed: Failed to fetch (gateway/internal)
+#
+# 这正是 v0.4.9 发布后的实际故障：官方创造模式（默认 preset 之一）会话几乎无法
+# 对话，host 同时以 ~10 次/秒重试失败的挂载，日志写到 10MB/分钟。v0.4.10 撤销了
+# 这里的 insert —— 全进程只由官方创造模式挂它。
+#
+# cohub-cordis 需要 cordis_define / cordis_run / cordis_mount / cordis_inspect_*
+# 时，直接用官方**创造模式**会话（见 README「cohub-cordis agent preset」一节）。
+# 本文件其余部分只挂 cohub 插件行，不受影响。

@@ -1,0 +1,283 @@
+// src/context/extractor.ts — 从父 session 消息中提取结构化信息
+
+import type { RelevantFile } from './types';
+
+/** 常见源代码/配置文件扩展名 */
+const KNOWN_EXTENSIONS = new Set([
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'md', 'mdx',
+  'css', 'scss', 'less', 'html', 'htm', 'py', 'rs', 'go', 'java',
+  'cpp', 'c', 'h', 'hpp', 'rb', 'php', 'swift', 'kt', 'scala',
+  'yml', 'yaml', 'toml', 'xml', 'sql', 'env', 'sh', 'bash', 'ps1',
+  'dockerfile', 'gitignore', 'editorconfig',
+]);
+
+/**
+ * 匹配文本中的文件路径（Windows/Mac/Linux 绝对或相对路径）。
+ *
+ * 支持的路径格式：
+ *   - Windows 绝对路径: C:\path\to\file.ts
+ *   - Unix 绝对路径: /path/to/file.ts
+ *   - 显式相对路径: ./path/to/file.ts, ../path/to/file.ts
+ *   - Home 路径: ~/path/to/file.ts
+ *   - 裸相对路径: path/to/file.ts (fix #)
+ */
+const FILE_PATH_RE = /`?((?:[A-Za-z]:[\\\/]|\.{1,2}[\\\/]|~\/|\/|[\w-]+[\\\/])[\w\-\.\\\/]+\.\w{1,10})`?/g;
+
+/** SDK v2 Part 格式（简化） */
+interface SdkPart {
+  type?: string;
+  text?: string;
+  tool?: string;
+  state?: {
+    status?: string;
+    input?: Record<string, unknown>;
+    output?: string;
+    error?: string;
+  };
+}
+
+/** SDK v2 消息格式（简化） */
+interface SdkMessage {
+  info?: { role?: string };
+  parts?: SdkPart[];
+}
+
+/**
+ * 从消息列表中提取相关文件。
+ * 扫描 Read/Edit/Write/Glob/Grep 工具调用和 tool_result 中的路径。
+ */
+export function extractRelevantFiles(
+  messages: SdkMessage[],
+  maxFiles: number,
+  windowSize: number,
+): RelevantFile[] {
+  const recent = messages.slice(-windowSize);
+  const fileMap = new Map<string, RelevantFile>();
+
+  for (const msg of recent) {
+    for (const part of msg.parts ?? []) {
+      // 统一处理 type === 'tool' 的 part（SDK 统一使用此类型）
+      if (part.type === 'tool' && part.state) {
+        const state = part.state;
+        const input = (state.input ?? {}) as Record<string, unknown>;
+
+        // 1. 从 input 提取路径
+        const path = extractPath(input);
+        if (path) {
+          if (!fileMap.has(path)) {
+            fileMap.set(path, { path, summary: '' });
+          }
+          const existing = fileMap.get(path)!;
+          // 提取行号范围
+          if (typeof input.offset === 'number') {
+            const limit = typeof input.limit === 'number' ? input.limit : 50;
+            existing.lines = `${input.offset}-${input.offset + limit}`;
+          }
+          // 提取编辑摘要
+          if (typeof input.oldString === 'string') {
+            existing.summary = `编辑: ${input.oldString.slice(0, 80)}`;
+          }
+          // 从 output 提取摘要
+          if (state.status === 'completed' && typeof state.output === 'string' && !existing.summary) {
+            existing.summary = state.output.slice(0, 100).replace(/\n/g, ' ');
+          }
+        }
+
+        // 2. 扫描 input 中的字符串值（如 prompt 字段里的文件路径）
+        for (const value of Object.values(input)) {
+          if (typeof value !== 'string') continue;
+          let match: RegExpExecArray | null;
+          FILE_PATH_RE.lastIndex = 0;
+          while ((match = FILE_PATH_RE.exec(value)) !== null) {
+            const rawPath = match[1];
+            const ext = rawPath.split('.').pop()?.toLowerCase();
+            if (!ext || !KNOWN_EXTENSIONS.has(ext)) continue;
+            const cleanPath = rawPath.replace(/^`|`$/g, '');
+            if (!fileMap.has(cleanPath)) {
+              fileMap.set(cleanPath, { path: cleanPath, summary: '' });
+            }
+          }
+        }
+
+        // 3. 从 completed 状态的 output 中扫描额外路径
+        if (state.status === 'completed' && typeof state.output === 'string') {
+          let match: RegExpExecArray | null;
+          FILE_PATH_RE.lastIndex = 0;
+          while ((match = FILE_PATH_RE.exec(state.output)) !== null) {
+            const rawPath = match[1];
+            const ext = rawPath.split('.').pop()?.toLowerCase();
+            if (!ext || !KNOWN_EXTENSIONS.has(ext)) continue;
+            const cleanPath = rawPath.replace(/^`|`$/g, '');
+            if (!fileMap.has(cleanPath)) {
+              fileMap.set(cleanPath, { path: cleanPath, summary: '' });
+            }
+          }
+        }
+      }
+      // 从文本内容中扫描文件路径（独立于 tool_result 块，扫描所有 text 类型 part）
+      if (typeof part.text === 'string') {
+        let match: RegExpExecArray | null;
+        FILE_PATH_RE.lastIndex = 0;
+        while ((match = FILE_PATH_RE.exec(part.text)) !== null) {
+          const rawPath = match[1];
+          // 提取扩展名验证
+          const ext = rawPath.split('.').pop()?.toLowerCase();
+          if (!ext || !KNOWN_EXTENSIONS.has(ext)) continue;
+          // 清理路径中的 Markdown 反引号
+          const cleanPath = rawPath.replace(/^`|`$/g, '');
+          if (!fileMap.has(cleanPath)) {
+            fileMap.set(cleanPath, { path: cleanPath, summary: '' });
+          }
+        }
+      }
+    }
+  }
+
+  // 过滤 denylist 中的无关路径（插件自身目录、配置文件、日志等）
+  const DENY_PATTERNS = [
+    /node_modules/,
+    /\.git\//,
+    /\.config[\\\/]opencode/,
+    /\.local[\\\/]share/,
+    /storage[\\\/]oh-my-opencode-cohub/,
+    /oh-my-opencode-cohub\.schema\.json$/,
+    /stats\.json$/,
+    /\.log$/,
+  ];
+  const isDenied = (path: string) => DENY_PATTERNS.some((p) => p.test(path));
+
+  return Array.from(fileMap.values())
+    .filter((f) => !isDenied(f.path))
+    .slice(0, maxFiles);
+}
+
+function extractPath(obj: Record<string, unknown>): string | undefined {
+  if (typeof obj.filePath === 'string') return obj.filePath;
+  if (typeof obj.path === 'string') return obj.path;
+  if (typeof obj.file === 'string') return obj.file;
+  if (typeof obj.filepath === 'string') return obj.filepath;
+  return undefined;
+}
+
+/**
+ * 从 assistant 消息中提取关键决策。
+ * 匹配包含决策关键词的句子。
+ */
+export function extractDecisions(
+  messages: SdkMessage[],
+  maxDecisions: number,
+  windowSize: number,
+): string[] {
+  const recent = messages.slice(-windowSize);
+  const decisions: string[] = [];
+  const keywords = /(认定|决定|确认|方案是|结论|应该|不建议|必须|禁止|采用)/;
+
+  for (const msg of recent) {
+    if (msg.info?.role !== 'assistant') continue;
+    for (const part of msg.parts ?? []) {
+      if (part.type !== 'text' || !part.text) continue;
+      const sentences = part.text.split(/[。！？\n]/);
+      for (const s of sentences) {
+        const trimmed = s.trim();
+        if (trimmed.length > 10 && trimmed.length < 200 && keywords.test(trimmed)) {
+          decisions.push(trimmed);
+          if (decisions.length >= maxDecisions) return decisions;
+        }
+      }
+    }
+  }
+
+  return decisions;
+}
+
+/**
+ * 从 bash 输出中提取编译/测试错误。
+ */
+export function extractErrors(
+  messages: SdkMessage[],
+  maxErrors: number,
+  windowSize: number,
+): string[] {
+  const recent = messages.slice(-windowSize);
+  const errors: string[] = [];
+  const errorPatterns = /(error|Error|TypeError|ReferenceError|SyntaxError|RangeError|FAIL|failed|cannot find|cannot resolve|not found|unexpected token)/;
+
+  for (const msg of recent) {
+    for (const part of msg.parts ?? []) {
+      if (part.type !== 'tool' || !part.state) continue;
+      const state = part.state;
+      const output = state.status === 'error'
+        ? (typeof state.error === 'string' ? state.error : '')
+        : (typeof state.output === 'string' ? state.output : '');
+      if (!output) continue;
+      const lines = output.split('\n');
+      for (const line of lines) {
+        if (errorPatterns.test(line)) {
+          errors.push(line.trim().slice(0, 200));
+          if (errors.length >= maxErrors) return errors;
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * 估算文本的 token 数。
+ * 中文字符（CJK 及东亚表意区）按 1 token/字符，其余字符按 0.25 token/字符。
+ */
+export function estimateTokens(text: string): number {
+  let used = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    const isCjk =
+      (code >= 0x4e00 && code <= 0x9fff) || // CJK 统一表意文字
+      (code >= 0x3400 && code <= 0x4dbf) || // CJK 扩展 A
+      (code >= 0xf900 && code <= 0xfaff) || // CJK 兼容表意文字
+      (code >= 0x3040 && code <= 0x30ff) || // 日文假名
+      (code >= 0xac00 && code <= 0xd7af);   // 韩文谚文
+    used += isCjk ? 1 : 0.25;
+  }
+  return used;
+}
+
+/**
+ * 强制 prompt 预算约束。
+ * 若 full 的估算 token 数 ≤ maxTokens → 返回 full（完整保留）；
+ * 否则 → 返回 base（丢弃全部 CoHub 注入后缀，只保留用户原始 prompt）。
+ */
+export function enforcePromptBudget(base: string, full: string, maxTokens: number): string {
+  if (estimateTokens(full) <= maxTokens) return full;
+  return truncateByTokens(base, maxTokens);
+}
+
+/**
+ * 按 token 预算截断文本。
+ * P2-5: 估算规则区分中西文——中文字符（CJK 及东亚表意区）按 1 token/字符，
+ * 其余字符按 4 字符 ≈ 1 token（原统一 4 字符/token 对中文低估 2-4 倍）。
+ * 仅用于 summary 策略下文件正文裁剪；空文本或 maxTokens<=0 返回空串；
+ * 未超预算时原样返回，超预算时保留头部并在末尾追加省略标记。
+ */
+export function truncateByTokens(text: string, maxTokens: number): string {
+  if (!text || maxTokens <= 0) return '';
+  if (estimateTokens(text) <= maxTokens) return text;
+  // 逐字符累计估算 token 数，找到首个超过预算的位置作为截断点
+  let used = 0;
+  let cut = text.length;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    const isCjk =
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0x3040 && code <= 0x30ff) ||
+      (code >= 0xac00 && code <= 0xd7af);
+    used += isCjk ? 1 : 0.25;
+    if (used > maxTokens) {
+      cut = i;
+      break;
+    }
+  }
+  return text.slice(0, cut) + '\n… [正文已按 token 预算截断]';
+}

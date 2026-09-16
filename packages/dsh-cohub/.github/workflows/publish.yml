@@ -1,0 +1,37 @@
+# 本 workflow 位于子包内，GitHub Actions 只加载仓库根 .github/workflows/，当前不会被自动运行。
+# 如需启用，请复制到仓库根并设置 working-directory: packages/dsh-cohub
+# 工作流文件：.github/workflows/publish.yml（与 npm 发布动作语义一致）
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'dsh-v*'        # 推送 dsh-v* 标签时触发发布
+  workflow_dispatch:    # 支持手动触发
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # 授予 OIDC 令牌，用于 npm provenance（可信发布）证明
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.x
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Publish
+        run: npm publish --provenance --access public

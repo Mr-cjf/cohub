@@ -1,0 +1,3 @@
+name: CoHub 调度者（带 Cordis）（cohub-cordis）
+description: co-orchestrator 主代理 + co_* 运行时工具（co_inspect_list / co_define / co_run 等），可直接委派 co-cordis 子代理修插件、试挂载、审核 harness 组合。纯调度纪律 + cordis 能力。需要无 cordis 的纯调度版本请用 co-orchestrator。co-cordis 子代理
+order: 5

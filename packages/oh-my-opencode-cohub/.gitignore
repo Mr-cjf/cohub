@@ -1,0 +1,34 @@
+node_modules/
+# dist/
+*.tsbuildinfo
+
+.idea
+
+.superpowers
+
+# 自动生成的 prompts .ts 文件（由 scripts/generate-prompts.ts 生成）
+/src/prompts/*.ts
+
+dist/
+
+# OpenCode 源码参考（不提交）
+opencode-source/
+
+# 打包产物
+*.tgz
+
+# 参考资料
+references/
+
+# 本地调试 / 修补工具产物
+.zcode/
+.playwright-mcp/
+opencode-patch-kit/
+opencode-patches/
+recovery/**/*.exe
+recovery/**/*.zip
+
+# 未随迁目录，防将来误加
+opencode-patches/
+opencode-patch-kit/
+recovery/

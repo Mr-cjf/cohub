@@ -1,0 +1,2 @@
+name: CoHub 调度者（co-orchestrator）
+description: 纯调度主代理：分析需求 → 委派 12 个专职子代理 → 审核结果，必要时发起多模型共识；加载 co-orchestrator 技能工作，全中文输出。
