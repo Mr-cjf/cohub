@@ -9,6 +9,10 @@ on:
       - 'dsh-v*'        # 推送 dsh-v* 标签时触发发布
   workflow_dispatch:    # 支持手动触发
 
+concurrency:
+  group: publish-dsh
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -32,6 +36,15 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: 校验 tag 版本与 package.json 版本一致
+        run: |
+          TAG_VERSION=$(echo "${{ github.ref }}" | sed 's/refs\/tags\/dsh-v//')
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag 版本 ($TAG_VERSION) 与 package.json 版本 ($PKG_VERSION) 不一致"
+            exit 1
+          fi
 
       - name: Publish
         run: npm publish --provenance --access public

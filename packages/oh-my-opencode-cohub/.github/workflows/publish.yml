@@ -1,7 +1,7 @@
 # 本 workflow 位于子包内，GitHub Actions 只加载仓库根 .github/workflows/，当前不会被自动运行。
 # 如需启用，请复制到仓库根并设置 working-directory: packages/oh-my-opencode-cohub
 name: Publish to npm
-	
+
 on:
   push:
     tags:

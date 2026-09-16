@@ -2,7 +2,7 @@
 
 OpenCode 中文智能体编排插件 CoHub——纯调度模式、全中文提示词、编排引擎、上下文共享、规范分析代理、方案制定代理。
 
-[![GitHub](https://img.shields.io/badge/GitHub-Mr--cjf%2Foh--my--opencode--cohub-blue?logo=github)](https://github.com/Mr-cjf/oh-my-opencode-cohub)
+[![GitHub](https://img.shields.io/badge/GitHub-Mr--cjf%2Fcohub-blue?logo=github)](https://github.com/Mr-cjf/cohub)
 
 ## 特性
 
@@ -259,7 +259,7 @@ bunx oh-my-opencode-cohub uninstall && bun pm cache rm && bunx oh-my-opencode-co
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/Mr-cjf/oh-my-opencode-cohub.git && cd oh-my-opencode-cohub
+git clone https://github.com/Mr-cjf/cohub.git && cd cohub/packages/oh-my-opencode-cohub
 
 # 2. 安装依赖
 npm install

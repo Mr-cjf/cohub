@@ -54,7 +54,7 @@ dsh plugin --profile web add dsh-cohub
 本地开发安装：
 
 ```bash
-dsh plugin --profile web add C:\Users\14023\Desktop\dsh-cohub
+dsh plugin --profile web add <monorepo>/packages/dsh-cohub
 ```
 
 或手动：profile 的 package.json

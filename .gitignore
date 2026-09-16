@@ -10,7 +10,6 @@ lib/
 # 本地缓存与临时文件
 .tmp/
 .playwright-mcp/
-.zcode/
 *.log
 .DS_Store
 desktop.ini
