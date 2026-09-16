@@ -1,0 +1,10 @@
+{
+  "name": "cohub",
+  "private": true,
+  "description": "CoHub 中文智能体编排体系 monorepo：ZCode / OpenCode / DSH 三平台插件",
+  "scripts": {
+    "build:zcode": "cd packages/zcode-cohub && npm run build",
+    "build:opencode": "cd packages/oh-my-opencode-cohub && npm run build",
+    "build:dsh": "cd packages/dsh-cohub && npm run build"
+  }
+}

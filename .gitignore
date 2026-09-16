@@ -1,0 +1,16 @@
+# 依赖与构建产物
+node_modules/
+dist/
+lib/
+*.tsbuildinfo
+
+# 打包存档
+*.tgz
+
+# 本地缓存与临时文件
+.tmp/
+.playwright-mcp/
+.zcode/
+*.log
+.DS_Store
+desktop.ini
