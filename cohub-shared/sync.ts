@@ -24,8 +24,10 @@ function isReserved(targetDir: string, filename: string): boolean {
 
 type Checksums = Record<string, string>;
 
+// 行尾归一化：CRLF → LF，确保哈希计算与平台行尾解耦。
+// checksums.json 中记录的是 LF 形态的哈希，归一化后直接可比对。
 function sha256(data: string): string {
-  return crypto.createHash("sha256").update(data, "utf-8").digest("hex");
+  return crypto.createHash("sha256").update(data.replace(/\r\n/g, "\n"), "utf-8").digest("hex");
 }
 
 function loadChecksums(): Checksums {
