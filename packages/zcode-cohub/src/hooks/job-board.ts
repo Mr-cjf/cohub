@@ -10,21 +10,17 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
+
+import { getStateDir } from "../utils/paths.js";
+import { STALE_TASK_MS } from "../shared/constants.js";
 
 // Resolve tracker state file path — 与 src/tracker.ts 落盘路径严格一致
 // 数据目录: <ZCODE_HOME>/cli/plugins/data/zcode-cohub@local（与 scripts/install.ts 的 DATA_DIR 同源）
-const zcodeHome = process.env.ZCODE_HOME
-  ? path.resolve(process.env.ZCODE_HOME)
-  : path.join(os.homedir(), ".zcode");
-const stateDir = path.join(zcodeHome, "cli", "plugins", "data", "zcode-cohub@local");
+const stateDir = getStateDir();
 const trackerFile = path.join(stateDir, "tracker-state.json");
 
-// 非终态任务（pending/running）的过期阈值：30 分钟。
-// 与 src/tracker.ts 的 STALE_TASK_MS 保持一致（两个独立部署单元，不强行共享代码）：
-// MCP 进程收不到子代理的结束回调，超时任务只能视同已结束；tracker 只在 persist() 时清理，
-// 读侧再补一道同样的时间衰减，防止落盘后长时间无新 persist 时面板残留过期条目。
-const STALE_TASK_MS = 30 * 60 * 1000;
+// 非终态任务（pending/running）的过期阈值：常量已抽取到 src/shared/constants.ts，
+// tracker 只在 persist() 时清理，读侧再补一道同样的时间衰减，防止落盘后长时间无新 persist 时面板残留过期条目。
 
 try {
   if (fs.existsSync(trackerFile)) {

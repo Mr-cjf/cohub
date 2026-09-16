@@ -6,49 +6,14 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 
-// --- Storage ---
+import { getStateDir, getTrackerFilePath } from "./utils/paths.js";
+import { writeFileAtomic } from "./utils/fs-atomic.js";
+import { readJsonFileSafe } from "./utils/fs-json.js";
+import { STALE_TASK_MS } from "./shared/constants.js";
 
-/** 状态目录路径 */
-function getStateDir(): string {
-  const zcodeHome = process.env.ZCODE_HOME
-    ? path.resolve(process.env.ZCODE_HOME)
-    : path.join(os.homedir(), ".zcode");
-  return path.join(zcodeHome, "cli", "plugins", "data", "zcode-cohub@local");
-}
-
-/** 状态文件路径 */
-function getTrackerFilePath(): string {
-  return path.join(getStateDir(), "tracker-state.json");
-}
-
-/** 原子写：先写临时文件再 rename，避免读端拿到撕裂的 JSON */
-function writeFileAtomic(filePath: string, data: string): void {
-  const tmpPath = filePath + ".tmp";
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    fs.writeFileSync(tmpPath, data, "utf-8");
-    fs.renameSync(tmpPath, filePath);
-  } catch (err) {
-    // rename 失败时尽力清理临时文件
-    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-    throw err;
-  } finally {
-    // 确保成功路径下 .tmp 已被 rename 消耗、失败路径下也已尽力删除
-    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-  }
-}
-
-/**
- * 非终态任务（pending/running）的过期阈值：30 分钟。
- * MCP 侧无法观察子代理的生命周期 —— 子代理由 Agent 工具 spawn/结束，本进程收不到任何回调，
- * 因此 co_delegate 登记的任务永远不会被更新为终态；超时即视为已结束，落盘前按 failed 归档，
- * 避免 job-board 面板永久残留一条耗时无限增长的 running 条目。
- */
-const STALE_TASK_MS = 30 * 60 * 1000;
+// Re-export for external consumers (hooks/job-board.ts, hooks/agent-tracker.ts)
+export { STALE_TASK_MS };
 
 // --- Types ---
 
@@ -472,31 +437,30 @@ export interface TrackerState {
  * 向后兼容：aliasCounters 缺失时从已有 job 的 alias 字段推导计数起点。
  */
 export function readTrackerState(): TrackerState {
-  try {
-    const filePath = getTrackerFilePath();
-    if (!fs.existsSync(filePath)) {
-      return { jobs: [], updatedAt: Date.now() };
+  const parsed = readJsonFileSafe<Record<string, unknown>>(
+    getTrackerFilePath(),
+    { jobs: [], updatedAt: Date.now() },
+    (v): v is Record<string, unknown> =>
+      typeof v === "object" && v !== null && !Array.isArray(v),
+  );
+
+  const jobs = (Array.isArray(parsed.jobs) ? parsed.jobs : []) as JobRecord[];
+  let aliasCounters: Record<string, number> | undefined =
+    (parsed.aliasCounters as Record<string, number> | undefined) ?? undefined;
+
+  // 旧文件无 aliasCounters 时从 jobs 推导
+  if (!aliasCounters) {
+    const derived = deriveAliasCountersFromJobs(jobs);
+    aliasCounters = {};
+    for (const [key, value] of derived) {
+      aliasCounters[key] = value;
     }
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    const jobs = Array.isArray(parsed.jobs) ? parsed.jobs : [];
-    let aliasCounters: Record<string, number> | undefined = parsed.aliasCounters ?? undefined;
-    // 旧文件无 aliasCounters 时从 jobs 推导
-    if (!aliasCounters) {
-      const derived = deriveAliasCountersFromJobs(jobs);
-      aliasCounters = {};
-      for (const [key, value] of derived) {
-        aliasCounters[key] = value;
-      }
-    }
-    return {
-      jobs,
-      aliasCounters,
-      updatedAt: parsed.updatedAt ?? Date.now(),
-    };
-  } catch {
-    return { jobs: [], updatedAt: Date.now() };
   }
+  return {
+    jobs,
+    aliasCounters,
+    updatedAt: (parsed.updatedAt as number) ?? Date.now(),
+  };
 }
 
 /**

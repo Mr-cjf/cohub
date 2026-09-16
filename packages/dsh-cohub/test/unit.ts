@@ -20,15 +20,15 @@ cohub.apply(root, { councillors: [], councilTimeoutMs: 180_000 });
 // ① systemPrompt 服务存在且可调用
 console.log('systemPrompt 服务:', typeof root.systemPrompt?.section === 'function' ? 'OK' : 'MISSING');
 
-// ② skills 快照：应含 12 个 co-* 技能
+// ② skills 快照：应含 13 个 co-* 技能
 const snap: any = await root.skills.snapshot({});
 const names = snap.skills.map((s: any) => s.name).sort();
-console.log('技能数:', names.length, '(期望 12)');
+console.log('技能数:', names.length, '(期望 13)');
 console.log('技能清单:', names.join(', '));
 
 const EXPECTED = [
-  'co-council','co-designer','co-explorer','co-fixer','co-librarian',
-  'co-orchestrator','co-observer','co-oracle','co-planner','co-rule-app','co-rule-project','co-rule-user',
+  'co-cordis','co-council','co-designer','co-explorer','co-fixer','co-librarian',
+  'co-observer','co-oracle','co-orchestrator','co-planner','co-rule-app','co-rule-project','co-rule-user',
 ].sort();
 const okSkills = JSON.stringify(names) === JSON.stringify(EXPECTED);
 console.log('技能清单校验:', okSkills ? 'PASS' : 'FAIL');
@@ -46,7 +46,7 @@ console.log('内容校验:', okContent ? 'PASS' : 'FAIL');
 
 // ③b brief 校验：12 个 skill 均有 brief 且含中文
 const { COHUB_SKILLS } = await import('../src/skills.ts');
-const okBrief = COHUB_SKILLS.length === 12 && COHUB_SKILLS.every((s: any) => !!s.brief?.trim() && /[\u4e00-\u9fff]/.test(s.brief));
+const okBrief = COHUB_SKILLS.length === 13 && COHUB_SKILLS.every((s: any) => !!s.brief?.trim() && /[\u4e00-\u9fff]/.test(s.brief));
 for (const s of COHUB_SKILLS) {
   console.log(`  brief ${s.name}: ${s.brief?.length ?? 0} 字, 含中文=${/[\u4e00-\u9fff]/.test(s.brief ?? '')}`);
 }

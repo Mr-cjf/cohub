@@ -20,6 +20,9 @@ import { dirname, join, relative } from "node:path";
 /** 安装台账文件名（位于 preset root 的上一级，避免被 roster 扫描为 preset） */
 const INSTALL_RECORD_NAME = ".cohub-preset-install.json";
 
+/** 安装台账版本号 */
+const INSTALL_RECORD_VERSION = 1;
+
 /** 单个 preset 的安装记录 */
 export interface PresetInstallEntry {
   /** 记录写入时的插件版本 */
@@ -163,7 +166,7 @@ function readRecord(userRoot: string): InstallRecord | null {
   try {
     const raw = readFileSync(recordPathFor(userRoot), "utf8");
     const parsed = JSON.parse(raw);
-    if (parsed && parsed.version === 1 && parsed.presets && typeof parsed.presets === "object") {
+    if (parsed && parsed.version === INSTALL_RECORD_VERSION && parsed.presets && typeof parsed.presets === "object") {
       return parsed as InstallRecord;
     }
     return null;
@@ -211,7 +214,7 @@ export function installShippedPresets(
     // 无台账：可能是首次安装，也可能是老版本升级上来（旧实现不写台账）。
     // 统一走「仅新增」语义：已存在的目录不动，保证不踩用户或旧版内容。
     result.degraded = existsSync(recordPathFor(userRoot)) ? "install record unreadable" : undefined;
-    record = { version: 1, presets: {} };
+    record = { version: INSTALL_RECORD_VERSION, presets: {} };
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const dst = join(userRoot, entry.name);

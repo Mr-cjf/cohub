@@ -483,7 +483,7 @@ const CoHubPlugin: Plugin = async (input, options) => {
           });
           _lastAlias = alias;
           syncTrackerState(input.sessionID ?? '');
-          tracker.pruneTerminalJobs(30 * 60 * 1000); // 清理超 30 分钟未更新的终态 job，防止 jobs Map 无限膨胀
+          tracker.pruneTerminalJobs(STALE_TIMEOUT_MS); // 清理超 30 分钟未更新的终态 job，防止 jobs Map 无限膨胀
 
           // 注册到 orchestration engine
           if (orchestrationLayer && subagentType && description) {

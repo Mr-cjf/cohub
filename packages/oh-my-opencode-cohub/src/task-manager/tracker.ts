@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { JobRecord, TaskStatus, TaskArgs } from './types';
-import type { ContextStrategy } from '../context/types';
+import { type ContextStrategy, DEFAULT_CONTEXT_CONFIG } from '../context/types';
 
 // ===== 性能指标统计（T9）=====
 
@@ -20,18 +20,9 @@ export const STATS_FILE = path.join(
   'stats.json',
 );
 
-/** 各代理的默认上下文策略（与 context/types.ts 默认配置一致；contextStrategy 未显式赋值时用于分组） */
-const AGENT_DEFAULT_STRATEGY: Record<string, ContextStrategy> = {
-  'co-fixer': 'relevant',
-  'co-designer': 'relevant',
-  'co-planner': 'relevant',
-  'co-oracle': 'summary',
-  'co-council': 'summary',
-};
-
-/** 按代理推断默认上下文策略 */
+/** 按代理推断默认上下文策略（直接读 DEFAULT_CONTEXT_CONFIG.strategy，`?? 'none'` 兜底） */
 export function defaultStrategyFor(agent: string): ContextStrategy {
-  return AGENT_DEFAULT_STRATEGY[agent] ?? 'none';
+  return DEFAULT_CONTEXT_CONFIG.strategy[agent] ?? 'none';
 }
 
 /** 参与统计的指标记录（从 JobRecord 抽取） */

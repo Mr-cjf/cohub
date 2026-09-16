@@ -55,11 +55,12 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
   });
   const assembly: any = await root.systemPrompt.assemble({});
   const section = assembly.sections.find((s: any) => s.name === "cohub:schedule");
-  check("注入段存在（name=cohub:schedule）", !!section);
-  check("注入段含实际批大小 7", !!section && section.text.includes("7"));
-  check("注入段含实际墙钟 234567", !!section && section.text.includes("234567"));
-  check("注入段含 useJobTracking=on", !!section && section.text.includes("job 跟踪 on"));
-  check("注入段含 adaptiveBatch=off", !!section && section.text.includes("批间自适应 off"));
+  // 2026-09-01 起：调度参数不再注入 systemPrompt，改为运行时读取 settings（见 src/index.ts ④b 注释）
+  check("注入段已移除（name=cohub:schedule）", !section);
+  check("不再注入批大小 7", !section || !section.text?.includes("7"));
+  check("不再注入墙钟 234567", !section || !section.text?.includes("234567"));
+  check("不再注入 useJobTracking=on", !section || !section.text?.includes("job 跟踪 on"));
+  check("不再注入 adaptiveBatch=off", !section || !section.text?.includes("批间自适应 off"));
   root.dispose?.();
 }
 

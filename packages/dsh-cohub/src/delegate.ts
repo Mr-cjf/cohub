@@ -18,7 +18,7 @@
 // > DEFAULT_ENV_CONTRACT（探针式）；use="off" 不读不写；读写失败静默降级，行为不劣化。
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
-import { EnvSignatureLearner, envFingerprint, pickEnvContractText, readEnvSignatures, writeEnvSignatures, type EnvSignaturesConfig } from "./env-signatures.ts";
+import { EnvSignatureLearner, envFingerprint, normalizeErrorSignature, pickEnvContractText, readEnvSignatures, writeEnvSignatures, type EnvSignaturesConfig } from "./env-signatures.ts";
 import { contentText } from "./text-utils.ts";
 
 /** 单个 skill 的路由配置（来自组合层 cordis.patch.yml 或 DSH settings 的 cohub.skills） */
@@ -70,20 +70,37 @@ export interface DelegateConfig {
   envSignatures?: EnvSignaturesConfig;
 }
 
-/** 归一化错误签名（S1）：从 tool/result data 提取可比较的错误特征；无法提取返回 null */
-function normalizeErrorSignature(data: any): string | null {
-  if (!data || typeof data !== "object") return null;
-  const err = data.error;
-  if (typeof err === "string" && err.trim()) return "err:" + err.trim().slice(0, 120);
-  if (err && typeof err === "object") {
-    const msg = typeof (err as any).message === "string" ? (err as any).message : "";
-    const code = typeof (err as any).code === "string" ? (err as any).code : "";
-    if (msg || code) return "err:" + (code ? code + " " : "") + msg.slice(0, 120);
-  }
-  const text = contentText(data?.message?.content).trim();
-  if (text) return "err:" + text.slice(0, 120);
-  return data?.message?.isError === true ? "err:unknown" : null;
+/** delegate 委派时注入子代理的统一 persona 文本 */
+export const DELEGATE_PERSONA = "你是被委派的专职代理：严格遵循任务消息中的角色定义、关键约束、输出格式与工具指令，并完成末尾的具体任务。";
+
+/** 子代理 spawn transport 名（非 LLM provider；别跟 agentOptions.provider 搞混） */
+export const DEFAULT_SPAWN_TRANSPORT = "spawn";
+
+/** 从 DelegateConfig 提取 envContract */
+export function createEnvContract(config: DelegateConfig): { enabled: boolean; text?: string } {
+  return {
+    enabled: config.delegateEnvContract?.enabled ?? true,
+    text: config.delegateEnvContract?.text,
+  };
 }
+
+/** 从 DelegateConfig 提取 envSig 归一配置 */
+export function createEnvSig(config: DelegateConfig): EnvSignaturesConfig {
+  return {
+    use: (config.envSignatures?.use ?? "auto") as "auto" | "off" | "manual",
+    ttlMs: Math.max(0, config.envSignatures?.ttlMs ?? 604_800_000),
+    confirmCount: Math.max(1, Math.trunc(config.envSignatures?.confirmCount ?? 2)),
+    contract: config.envSignatures?.contract,
+    errorCategories: config.envSignatures?.errorCategories,
+    cachePath: config.envSignatures?.cachePath,
+  };
+}
+
+/** delegate / delegate_batch 共用 output 配置 */
+export const DELEGATE_OUTPUT_CONFIG = {
+  schema: { type: "string" as const },
+  render: (_args: unknown, value: unknown) => [{ type: "text", text: String(value) }],
+} as const;
 
 /** 归一化工具参数（S4）：空白折叠 + 截断，用于「同工具名 + 同参数」比较 */
 function normalizeArguments(args: unknown): string {
@@ -419,11 +436,7 @@ export function buildDelegatePrompt(params: {
  */
 export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config: DelegateConfig = {}, getSettings?: () => any) {
   // 生效的注入/重试配置（防御式默认，未配置或配置为 undefined 时回落保守默认）
-  const envContract = {
-    enabled: config.delegateEnvContract?.enabled ?? true,
-    // text 保留原始覆盖值（undefined = 未覆盖），最终文本由 pickEnvContractText 决定
-    text: config.delegateEnvContract?.text,
-  };
+  const envContract = createEnvContract(config);
   // P3-3（N3）：delegateRetry（含 N2 stall 子配置）与 schedule 的生效值 = 当前 cohub settings
   // 优先（settings 未配置时回落 config，行为与现状完全一致）。settings 可在运行期变化
   // （设置卡片），故在每次 execute 时解析，而非工具注册时固定。
@@ -451,14 +464,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
   }
 
   // P3-2（N1）：环境契约持久化配置归一（默认 auto；无缓存时行为不变；读写失败静默降级）
-  const envSig = {
-    use: (config.envSignatures?.use ?? "auto") as "auto" | "off" | "manual",
-    ttlMs: Math.max(0, config.envSignatures?.ttlMs ?? 604_800_000),
-    confirmCount: Math.max(1, Math.trunc(config.envSignatures?.confirmCount ?? 2)),
-    contract: config.envSignatures?.contract,
-    errorCategories: config.envSignatures?.errorCategories,
-    cachePath: config.envSignatures?.cachePath,
-  };
+  const envSig = createEnvSig(config);
 
   return defineTool({
     name: "delegate",
@@ -476,10 +482,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       },
     },
 
-    output: {
-      schema: { type: "string" },
-      render: (_args: unknown, value: unknown) => [{ type: "text", text: String(value) }],
-    },
+    output: DELEGATE_OUTPUT_CONFIG,
 
     isConcurrencySafe: () => true,
 
@@ -581,11 +584,11 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         //    agentOptions.provider 才是 LLM 供应商名，两者不同，别搞混）
         let run: any;
         try {
-          run = await ctx.subagents.start("spawn", {
+          run = await ctx.subagents.start(DEFAULT_SPAWN_TRANSPORT, {
             label: "delegate:" + args.skill,
             prompt: [{ type: "text", text: promptText }],
             parent,
-            persona: "你是被委派的专职代理：严格遵循任务消息中的角色定义、关键约束、输出格式与工具指令，并完成末尾的具体任务。",
+            persona: DELEGATE_PERSONA,
             ...(agentOptions ? { agentOptions } : {}),
             signal,
           });

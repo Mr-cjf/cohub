@@ -10,16 +10,13 @@
  * 任何异常均静默吞掉以保证不阻塞工具调用。
  */
 
-import * as fs from "node:fs";
-
 import {
   readTrackerState,
   registerExternalJob,
   completeOldestBySkill,
   failTaskBySkill,
 } from "../tracker.js";
-
-const STDIN_TIMEOUT_MS = 3000;
+import { readStdinSync, type StdinPayload } from "./shared/stdin.js";
 
 try {
   const payload = readStdinSync();
@@ -76,49 +73,3 @@ try {
   process.exit(0);
 }
 
-// --- Helpers ---
-
-interface StdinPayload {
-  hook_event_name?: string;
-  tool_name?: string;
-  tool_input?: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-/**
- * 从 stdin 同步读取完整 JSON payload。
- * 通过 fs.readSync 循环读取全部可用字节，带超时保护。
- */
-function readStdinSync(): StdinPayload | null {
-  const fd = process.stdin.fd;
-
-  // TTY 说明无管道数据
-  if (process.stdin.isTTY) return null;
-
-  const start = Date.now();
-  const chunks: Buffer[] = [];
-  const buf = Buffer.alloc(65536);
-
-  try {
-    let n: number;
-    while (true) {
-      if (Date.now() - start > STDIN_TIMEOUT_MS) break;
-      n = fs.readSync(fd, buf, 0, 65536, null);
-      if (n <= 0) break; // EOF
-      chunks.push(Buffer.from(buf.subarray(0, n)));
-    }
-  } catch {
-    // readSync 异常（如 EAGAIN）时尝试解析已读内容
-  }
-
-  if (chunks.length === 0) return null;
-
-  const raw = Buffer.concat(chunks).toString("utf-8").trim();
-  if (!raw) return null;
-
-  try {
-    return JSON.parse(raw) as StdinPayload;
-  } catch {
-    return null;
-  }
-}

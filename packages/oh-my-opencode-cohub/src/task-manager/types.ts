@@ -1,4 +1,5 @@
 import type { ContextStrategy } from '../context/types';
+import type { FailureCategory } from './quality';
 
 export type TaskStatus = 'running' | 'completed' | 'errored' | 'cancelled';
 
@@ -20,7 +21,7 @@ export interface JobRecord {
   quality?: {
     /** 0-1 质量评分；undefined 表示未执行 assessQuality（与 score:0 的"质量最差"语义区分） */
     score?: number;
-    failureCategory?: 'timeout' | 'empty' | 'error' | 'quality-low';
+    failureCategory?: FailureCategory;
     latencyMs?: number;                                 // 任务耗时
     tokens?: { input: number; output: number };
   };

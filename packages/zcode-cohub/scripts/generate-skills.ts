@@ -6,6 +6,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractFrontmatter } from "./shared/frontmatter.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,24 +20,9 @@ interface SkillBrief {
   brief: string;
 }
 
-function extractFrontmatter(content: string): { name?: string; description?: string } {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) return {};
-
-  const frontmatter: Record<string, string> = {};
-  const lines = match[1].split("\n");
-  for (const line of lines) {
-    const kv = line.match(/^(\w+):\s*(.+)/);
-    if (kv) {
-      frontmatter[kv[1]] = kv[2].trim();
-    }
-  }
-  return frontmatter;
-}
-
 function extractBrief(content: string): string {
   // Extract first paragraph after frontmatter
-  const afterFrontmatter = content.replace(/^---\n[\s\S]*?\n---\n*/, "").trim();
+  const afterFrontmatter = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n*/, "").trim();
   const firstLine = afterFrontmatter.split("\n")[0].trim();
   // Clean up markdown formatting
   return firstLine

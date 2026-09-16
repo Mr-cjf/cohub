@@ -8,12 +8,16 @@ import {
   buildAgentOptions,
   resolveContractText,
   buildDelegatePrompt,
+  createEnvContract,
+  createEnvSig,
+  DELEGATE_PERSONA,
+  DEFAULT_SPAWN_TRANSPORT,
+  DELEGATE_OUTPUT_CONFIG,
   type SkillRouteSource,
   type DelegateConfig,
   type SkillRouteConfig,
 } from "./delegate.ts";
 import type { CoHubSkill } from "./skills.ts";
-import type { EnvSignaturesConfig } from "./env-signatures.ts";
 import { contentText } from "./text-utils.ts";
 
 /** 单个批量委派任务 */
@@ -51,18 +55,8 @@ export function createDelegateBatchTool(
   config: DelegateConfig = {},
   getSettings?: () => any,
 ) {
-  const envContract = {
-    enabled: config.delegateEnvContract?.enabled ?? true,
-    text: config.delegateEnvContract?.text,
-  };
-  const envSig: EnvSignaturesConfig = {
-    use: (config.envSignatures?.use ?? "auto") as "auto" | "off" | "manual",
-    ttlMs: Math.max(0, config.envSignatures?.ttlMs ?? 604_800_000),
-    confirmCount: Math.max(1, Math.trunc(config.envSignatures?.confirmCount ?? 2)),
-    contract: config.envSignatures?.contract,
-    errorCategories: config.envSignatures?.errorCategories,
-    cachePath: config.envSignatures?.cachePath,
-  };
+  const envContract = createEnvContract(config);
+  const envSig = createEnvSig(config);
 
   function resolveRuntimeConfig() {
     const settingsNow = getSettings ? (getSettings() ?? {}) : {};
@@ -93,10 +87,7 @@ export function createDelegateBatchTool(
       },
     },
 
-    output: {
-      schema: { type: "string" },
-      render: (_args: unknown, value: unknown) => [{ type: "text", text: String(value) }],
-    },
+    output: DELEGATE_OUTPUT_CONFIG,
 
     isConcurrencySafe: () => true,
 
@@ -144,11 +135,11 @@ export function createDelegateBatchTool(
           }
 
           try {
-            const run = await ctx.subagents.start("spawn", {
+            const run = await ctx.subagents.start(DEFAULT_SPAWN_TRANSPORT, {
               label: `delegate_batch:${taskId}:${task.skill}`,
               prompt: [{ type: "text", text: promptText }],
               parent,
-              persona: "你是被委派的专职代理：严格遵循任务消息中的角色定义、关键约束、输出格式与工具指令，并完成末尾的具体任务。",
+              persona: DELEGATE_PERSONA,
               ...(agentOptions ? { agentOptions } : {}),
               signal: ac.signal,
             });

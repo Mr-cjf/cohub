@@ -3,6 +3,7 @@
 // 多模型并行不再手动建 session：直接走 ctx.subagents seam + agentOptions 路由覆盖。
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { contentText } from "./text-utils.ts";
+import { DEFAULT_SPAWN_TRANSPORT } from "./delegate.ts";
 
 /** 单个 councillor 配置（来自 cordis.patch.yml 的 cohub 行 config） */
 export interface CouncillorConfig {
@@ -114,7 +115,7 @@ export function createCouncilTool(config: CouncilRuntimeConfig, ctx: any) {
       if (councillors.length === 0) {
         throw new Error("council_session: no councillors configured (set councillors on the cohub row in $DSH_HOME/cordis.patch.yml)");
       }
-      const provider = config.councilProvider ?? "spawn";
+      const provider = config.councilProvider ?? DEFAULT_SPAWN_TRANSPORT;
       const timeoutMs = config.councilTimeoutMs ?? 180_000;
 
       // 并行启动所有 councillor

@@ -9,10 +9,13 @@
  * 静默执行：不满足条件时 stdout 为空。任何异常静默 exit 0。
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { getStateDir } from "../utils/paths.js";
+import { writeFileAtomic } from "../utils/fs-atomic.js";
+import { readJsonFileSafe } from "../utils/fs-json.js";
+import { readStdinSync, type StdinPayload } from "./shared/stdin.js";
 
 // --- Constants ---
 
@@ -27,9 +30,6 @@ const COOLDOWN_MS = 15 * 60 * 1000;
 
 /** Session 无活动超时：2 小时，超出则清理 */
 const STALE_SESSION_MS = 2 * 60 * 60 * 1000;
-
-/** stdin 读取超时：3 秒 */
-const STDIN_TIMEOUT_MS = 3000;
 
 /** 提醒文案 */
 const WARN_MESSAGE =
@@ -47,14 +47,6 @@ interface SessionState {
   lastWarnedAt?: number;
 }
 
-interface StdinPayload {
-  hook_event_name?: string;
-  tool_name?: string;
-  tool_input?: Record<string, unknown>;
-  session_id?: string;
-  [key: string]: unknown;
-}
-
 export interface GrepEventResult {
   warn: boolean;
   message?: string;
@@ -62,30 +54,9 @@ export interface GrepEventResult {
 
 // --- State management ---
 
-/** 状态目录路径（与 tracker.ts 的 getStateDir 一致） */
-function getStateDir(): string {
-  const zcodeHome = process.env.ZCODE_HOME
-    ? path.resolve(process.env.ZCODE_HOME)
-    : path.join(os.homedir(), ".zcode");
-  return path.join(zcodeHome, "cli", "plugins", "data", "zcode-cohub@local");
-}
-
 /** 状态文件路径 */
 function getStateFilePath(): string {
   return path.join(getStateDir(), "grep-counter-state.json");
-}
-
-/** 原子写：先写临时文件再 rename，避免读端拿到撕裂的 JSON */
-function writeFileAtomic(filePath: string, data: string): void {
-  const tmpPath = filePath + ".tmp";
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    fs.writeFileSync(tmpPath, data, "utf-8");
-    fs.renameSync(tmpPath, filePath);
-  } catch {
-    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-  }
 }
 
 /**
@@ -93,20 +64,19 @@ function writeFileAtomic(filePath: string, data: string): void {
  * 文件不存在或损坏时返回空状态。
  */
 export function readGrepCounterState(): GrepCounterState {
-  try {
-    const filePath = getStateFilePath();
-    if (!fs.existsSync(filePath)) {
-      return { sessions: {}, updatedAt: Date.now() };
-    }
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    return {
-      sessions: (parsed.sessions as Record<string, SessionState>) ?? {},
-      updatedAt: (parsed.updatedAt as number) ?? Date.now(),
-    };
-  } catch {
+  const parsed = readJsonFileSafe<Record<string, unknown> | null>(
+    getStateFilePath(),
+    null,
+    (v): v is Record<string, unknown> =>
+      typeof v === "object" && v !== null && !Array.isArray(v),
+  );
+  if (parsed === null) {
     return { sessions: {}, updatedAt: Date.now() };
   }
+  return {
+    sessions: (parsed.sessions as Record<string, SessionState>) ?? {},
+    updatedAt: (parsed.updatedAt as number) ?? Date.now(),
+  };
 }
 
 /**
@@ -280,39 +250,4 @@ const isMain =
 
 if (isMain) {
   main();
-}
-
-// --- stdin 读取（与 agent-tracker.ts 同模式） ---
-
-function readStdinSync(): StdinPayload | null {
-  const fd = process.stdin.fd;
-
-  if (process.stdin.isTTY) return null;
-
-  const start = Date.now();
-  const chunks: Buffer[] = [];
-  const buf = Buffer.alloc(65536);
-
-  try {
-    let n: number;
-    while (true) {
-      if (Date.now() - start > STDIN_TIMEOUT_MS) break;
-      n = fs.readSync(fd, buf, 0, 65536, null);
-      if (n <= 0) break;
-      chunks.push(Buffer.from(buf.subarray(0, n)));
-    }
-  } catch {
-    // readSync 异常时尝试解析已读内容
-  }
-
-  if (chunks.length === 0) return null;
-
-  const raw = Buffer.concat(chunks).toString("utf-8").trim();
-  if (!raw) return null;
-
-  try {
-    return JSON.parse(raw) as StdinPayload;
-  } catch {
-    return null;
-  }
 }

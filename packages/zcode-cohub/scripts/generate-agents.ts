@@ -27,6 +27,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractFrontmatter } from "./shared/frontmatter.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -86,21 +87,6 @@ interface AgentTemplate {
   disallowedTools?: string[];
   maxTurns?: number;
   body: string;
-}
-
-function extractFrontmatter(content: string): { name?: string; description?: string } {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return {};
-
-  const frontmatter: Record<string, string> = {};
-  const lines = match[1].split("\n");
-  for (const line of lines) {
-    const kv = line.match(/^(\w+):\s*(.+)/);
-    if (kv) {
-      frontmatter[kv[1]] = kv[2].trim();
-    }
-  }
-  return frontmatter;
 }
 
 function extractBody(content: string): string {
