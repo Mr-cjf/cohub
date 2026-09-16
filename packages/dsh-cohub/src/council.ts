@@ -4,6 +4,8 @@
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { contentText } from "./text-utils.ts";
 import { DEFAULT_SPAWN_TRANSPORT } from "./delegate.ts";
+import { shortModelLabel } from "./shared/model.ts";
+export { shortModelLabel };
 
 /** 单个 councillor 配置（来自 cordis.patch.yml 的 cohub 行 config） */
 export interface CouncillorConfig {
@@ -18,11 +20,6 @@ export interface CouncilRuntimeConfig {
   councillors: CouncillorConfig[];
   councilTimeoutMs: number;
   councilProvider: string;
-}
-
-/** "provider/model" → "model"（展示用短名） */
-export function shortModelLabel(model: string): string {
-  return model.split("/").pop() ?? model;
 }
 
 /** 合并用户 prompt 与 councillor 专属前缀 */
