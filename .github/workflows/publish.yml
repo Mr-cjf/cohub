@@ -1,0 +1,142 @@
+# monorepo 根级发布工作流——这是仓库中唯一会被 GitHub Actions 加载的发布工作流。
+# 依赖 npm Trusted Publisher（OIDC）认证，无需 NPM_TOKEN。
+# workflow 文件名必须为 publish.yml，与 npm 侧 Trusted Publisher 配置保持一致。
+# actions/setup-node@v7 已移除假 token 导出，不再需要 workaround 清空环境变量。
+
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - zcode-v*
+      - opencode-v*
+      - dsh-v*
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 选择要发布的包
+        type: choice
+        required: true
+        options:
+          - zcode-cohub
+          - oh-my-opencode-cohub
+          - dsh-cohub
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish-zcode:
+    if: startsWith(github.ref, 'refs/tags/zcode-v') || (github.event_name == 'workflow_dispatch' && inputs.package == 'zcode-cohub')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-zcode
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: packages/zcode-cohub
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - run: npm run build
+      - name: 版本一致性校验
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#zcode-v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "❌ 版本不一致: tag=$TAG_VERSION, package.json=$PKG_VERSION"
+            exit 1
+          fi
+          echo "✅ 版本一致: $TAG_VERSION"
+      - name: 手动触发版本提示
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "⚠️ 手动触发：即将发布 zcode-cohub@$PKG_VERSION，请确认版本号正确"
+      - name: 发布到 npm
+        run: npm publish --provenance --access public
+
+  publish-opencode:
+    if: startsWith(github.ref, 'refs/tags/opencode-v') || (github.event_name == 'workflow_dispatch' && inputs.package == 'oh-my-opencode-cohub')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-opencode
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: packages/oh-my-opencode-cohub
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - run: npm run build
+      - name: 版本一致性校验
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#opencode-v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "❌ 版本不一致: tag=$TAG_VERSION, package.json=$PKG_VERSION"
+            exit 1
+          fi
+          echo "✅ 版本一致: $TAG_VERSION"
+      - name: 手动触发版本提示
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "⚠️ 手动触发：即将发布 oh-my-opencode-cohub@$PKG_VERSION，请确认版本号正确"
+      - name: 发布到 npm
+        run: npm publish --provenance --access public
+
+  publish-dsh:
+    if: startsWith(github.ref, 'refs/tags/dsh-v') || (github.event_name == 'workflow_dispatch' && inputs.package == 'dsh-cohub')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-dsh
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: packages/dsh-cohub
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - run: npm run build
+      - name: 版本一致性校验
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#dsh-v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "❌ 版本不一致: tag=$TAG_VERSION, package.json=$PKG_VERSION"
+            exit 1
+          fi
+          echo "✅ 版本一致: $TAG_VERSION"
+      - name: 手动触发版本提示
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "⚠️ 手动触发：即将发布 dsh-cohub@$PKG_VERSION，请确认版本号正确"
+      - name: 发布到 npm
+        run: npm publish --provenance --access public
