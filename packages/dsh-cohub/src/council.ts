@@ -5,7 +5,17 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { contentText } from "./text-utils.ts";
 import { DEFAULT_SPAWN_TRANSPORT } from "./delegate.ts";
 import { shortModelLabel } from "./shared/model.ts";
+import {
+  type CouncillorResult,
+  formatCouncillorPrompt,
+  formatCouncillorResults,
+} from "./shared/consensus.ts";
 export { shortModelLabel };
+export {
+  type CouncillorResult,
+  formatCouncillorPrompt,
+  formatCouncillorResults,
+} from "./shared/consensus.ts";
 
 /** 单个 councillor 配置（来自 cordis.patch.yml 的 cohub 行 config） */
 export interface CouncillorConfig {
@@ -20,63 +30,6 @@ export interface CouncilRuntimeConfig {
   councillors: CouncillorConfig[];
   councilTimeoutMs: number;
   councilProvider: string;
-}
-
-/** 合并用户 prompt 与 councillor 专属前缀 */
-export function formatCouncillorPrompt(userPrompt: string, councillorPrompt?: string): string {
-  if (!councillorPrompt) return userPrompt;
-  return `${councillorPrompt}\n\n---\n\n${userPrompt}`;
-}
-
-export interface CouncillorResult {
-  name: string;
-  model: string;
-  status: string;
-  result?: string;
-  error?: string;
-}
-
-/** 聚合各 councillor 结果（纯函数，移植自 cohub） */
-export function formatCouncillorResults(
-  originalPrompt: string,
-  results: CouncillorResult[],
-): string {
-  const completed = results.filter(r => r.status === "completed" && r.result);
-  const failed = results.filter(r => r.status !== "completed" || !r.result);
-
-  if (completed.length === 0) {
-    const errors = results
-      .map(r => `**${r.name}** (${shortModelLabel(r.model)}): ${r.status} — ${r.error ?? "Unknown"}`)
-      .join("\n");
-    return [
-      "---", "", "**Original Prompt**:", originalPrompt, "", "---", "",
-      "**Councillor Responses**:",
-      "All councillors failed to produce output:",
-      errors, "",
-      "Please generate a response based on the original prompt alone.",
-    ].join("\n");
-  }
-
-  const parts: string[] = [
-    "---", "", "**Original Prompt**:", originalPrompt, "", "---", "",
-    "**Councillor Responses**:",
-    completed.map(r => `**${r.name}** (${shortModelLabel(r.model)}):\n${r.result}`).join("\n\n"),
-  ];
-
-  if (failed.length > 0) {
-    parts.push("", "---", "", "**Failed/Timed-out Councillors**:",
-      failed.map(r => `**${r.name}**: ${r.status} — ${r.error ?? "Unknown"}`).join("\n"));
-  }
-
-  parts.push(
-    "", "---", "",
-    "You MUST follow the Synthesis Process steps before producing output: " +
-      "review each councillor response individually, then produce the required output " +
-      "with a synthesized Council Response, per-councillor details using their exact names, " +
-      "and a Council Summary with consensus confidence rating (unanimous, majority, or split).",
-  );
-
-  return parts.join("\n");
 }
 
 /**

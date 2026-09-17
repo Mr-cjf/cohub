@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { JobRecord, TaskStatus, TaskArgs } from './types';
+import { writeJsonFileAtomic } from '../shared/fs-atomic';
 import { type ContextStrategy, DEFAULT_CONTEXT_CONFIG } from '../context/types';
 
 // ===== 性能指标统计（T9）=====
@@ -426,8 +427,7 @@ export class TaskTracker {
   persistStats(window: number = DEFAULT_STATS_WINDOW): void {
     try {
       const recent = this.collectStatsRecords().slice(-Math.max(1, window));
-      fs.mkdirSync(path.dirname(STATS_FILE), { recursive: true });
-      fs.writeFileSync(STATS_FILE, JSON.stringify(recent, null, 2), 'utf8');
+      writeJsonFileAtomic(STATS_FILE, recent);
     } catch {
       // 统计持久化失败不影响任务追踪主流程
     }

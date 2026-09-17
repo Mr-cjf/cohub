@@ -6,7 +6,7 @@
  * C 类（依赖 @opencode-ai/sdk / @opencode-ai/plugin）不搬。
  */
 
-import { shortModelLabel } from "./model.js";
+import { shortModelLabel } from "./model.ts";
 
 // ============================================================================
 // Type Definitions（从 council.ts 与 quality.ts 搬移到共享层）
@@ -320,7 +320,8 @@ export function formatCouncillorResults(
     })
     .join("\n\n");
 
-  const failedEntries = councillorResults.filter((cr) => cr.status !== "completed");
+  // completed 但无产出文本的，同样算失败——否则该 councillor 会在输出里静默消失
+  const failedEntries = councillorResults.filter((cr) => cr.status !== "completed" || !cr.result);
   const failedSection = failedEntries
     .map((cr) => `**${cr.name}**: ${cr.status} — ${cr.error ?? "Unknown"}`)
     .join("\n");

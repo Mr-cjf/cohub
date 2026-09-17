@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { writeJsonFileAtomic } from '../shared/fs-atomic';
 import { execSync } from 'node:child_process';
 
 const PACKAGE_NAME = 'oh-my-opencode-cohub';
@@ -267,9 +268,7 @@ export function writeDefaultConfig(): { success: boolean; message: string } {
       _comment: '未找到可用供应商。请在 opencode.json 中配置 provider 后重新运行 install，或手动在此文件中配置 model 和 variant。',
     };
     try {
-      const dir = path.dirname(COHUB_CONFIG_PATH);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(COHUB_CONFIG_PATH, JSON.stringify(fallbackConfig, null, 2), 'utf-8');
+      writeJsonFileAtomic(COHUB_CONFIG_PATH, fallbackConfig);
       return { success: true, message: '✓ 已创建 oh-my-opencode-cohub.json（无可用 provider，请手动配置模型）' };
     } catch {
       return { success: false, message: '⚠ 无法创建配置文件' };
@@ -351,9 +350,7 @@ export function writeDefaultConfig(): { success: boolean; message: string } {
   };
 
   try {
-    const dir = path.dirname(COHUB_CONFIG_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(COHUB_CONFIG_PATH, JSON.stringify(defaultConfig, null, 2), 'utf-8');
+    writeJsonFileAtomic(COHUB_CONFIG_PATH, defaultConfig);
     return { success: true, message: `✓ 已智能匹配 ${matched}/12 个代理的模型，生成 oh-my-opencode-cohub.json` };
   } catch {
     return { success: false, message: '⚠ 无法创建配置文件' };
@@ -504,7 +501,7 @@ export function installToCacheDir(version: string): { success: boolean; message:
 
     // 创建临时 package.json
     const pkgJson = { private: true };
-    fs.writeFileSync(path.join(targetDir, 'package.json'), JSON.stringify(pkgJson, null, 2), 'utf-8');
+    writeJsonFileAtomic(path.join(targetDir, 'package.json'), pkgJson);
 
     // npm install cohub
     const pkgSpec = `${PACKAGE_NAME}@${version}`;

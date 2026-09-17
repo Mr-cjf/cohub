@@ -25,6 +25,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { appendLog } from './utils/log.js';
+import { writeFileAtomic } from './shared/fs-atomic';
 import { createOrchestrationLayer } from './orchestration';
 import { stripExistingContracts } from './orchestration/contract';
 import { enforcePromptBudget } from './context/extractor';
@@ -152,15 +153,12 @@ const CoHubPlugin: Plugin = async (input, options) => {
   // 定时写入 tracker 状态供 TUI 面板轮询
   function syncTrackerState(sessionId: string) {
     try {
-      if (!fs.existsSync(STATE_DIR)) {
-        fs.mkdirSync(STATE_DIR, { recursive: true });
-      }
       const state = {
         updatedAt: Date.now(),
         runningAgents: tracker.getRunningAgents(sessionId),
         runningCount: tracker.getRunningCount(sessionId),
       };
-      fs.writeFileSync(STATE_FILE, JSON.stringify(state), 'utf-8');
+      writeFileAtomic(STATE_FILE, JSON.stringify(state));
     } catch { /* 静默失败 */ }
   }
 
@@ -168,9 +166,6 @@ const CoHubPlugin: Plugin = async (input, options) => {
   const AGENT_CONFIG_FILE = path.join(STATE_DIR, 'cohub-state.json');
   function syncAgentConfig() {
     try {
-      if (!fs.existsSync(STATE_DIR)) {
-        fs.mkdirSync(STATE_DIR, { recursive: true });
-      }
       const configs = agents.filter(a => (a.config as Record<string, unknown>).model).map(a => {
         const modelStr = (a.config as Record<string, unknown>).model as string;
         const parts = modelStr.split('/');
@@ -184,7 +179,7 @@ const CoHubPlugin: Plugin = async (input, options) => {
           provider,
         };
       });
-      fs.writeFileSync(AGENT_CONFIG_FILE, JSON.stringify({ updatedAt: Date.now(), agents: configs }), 'utf-8');
+      writeFileAtomic(AGENT_CONFIG_FILE, JSON.stringify({ updatedAt: Date.now(), agents: configs }));
       void appendLog('syncAgentConfig', `已同步 ${configs.length} 个 agent: ${JSON.stringify(
         configs.map(c => ({ name: c.name, model: c.model, variant: c.variant })),
       )}`);
@@ -441,7 +436,7 @@ const CoHubPlugin: Plugin = async (input, options) => {
         c.agent[name] = merged;
       }
 
-      try { fs.writeFileSync(path.join(STATE_DIR, 'config-hook-ran.json'), JSON.stringify({ ran: true, count: agents.length })); } catch (err) {
+      try { writeFileAtomic(path.join(STATE_DIR, 'config-hook-ran.json'), JSON.stringify({ ran: true, count: agents.length })); } catch (err) {
         void appendLog('config', '双重注册写入文件失败', err);
       }
       void appendLog('config.hook', `config hook 注入完成: ${JSON.stringify(

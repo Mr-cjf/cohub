@@ -11,6 +11,7 @@
  */
 
 import type { TaskTracker } from "../tracker.js";
+import { tokenize, jaccard } from "../shared/consensus.js";
 
 // --- Types ---
 
@@ -173,7 +174,7 @@ function synthesize(
   // 2. Compute Jaccard similarity between each pair
   // 3. If all pairs > threshold → 一致, if majority → 多数, else → 分歧
 
-  const conclusions: { name: string; text: string; tokens: Set<string> }[] = [];
+  const conclusions: { name: string; text: string; tokens: string[] }[] = [];
 
   for (const [name, response] of entries) {
     // Extract last meaningful paragraph as conclusion
@@ -181,13 +182,8 @@ function synthesize(
     const conclusion =
       paragraphs.length > 0 ? paragraphs[paragraphs.length - 1] : response;
 
-    // Tokenize (simple: split by whitespace + punctuation for CJK+EN)
-    const tokens = new Set(
-      conclusion
-        .toLowerCase()
-        .split(/[\s，。、；：""''（）．,!\.;:\(\)]+/)
-        .filter((t) => t.length > 0),
-    );
+    // Tokenize via shared layer (regex + STOPWORDS filtering)
+    const tokens = tokenize(conclusion);
 
     conclusions.push({ name, text: conclusion, tokens });
   }
@@ -199,11 +195,7 @@ function synthesize(
 
   for (let i = 0; i < conclusions.length; i++) {
     for (let j = i + 1; j < conclusions.length; j++) {
-      const a = conclusions[i].tokens;
-      const b = conclusions[j].tokens;
-      const intersection = new Set([...a].filter((x) => b.has(x)));
-      const union = new Set([...a, ...b]);
-      const similarity = intersection.size / (union.size || 1);
+      const similarity = jaccard(conclusions[i].tokens, conclusions[j].tokens);
       totalSimilarity += similarity;
       pairSims.push(similarity);
       pairCount++;
@@ -229,11 +221,7 @@ function synthesize(
     let score = 0;
     for (let j = 0; j < conclusions.length; j++) {
       if (i === j) continue;
-      const a = conclusions[i].tokens;
-      const b = conclusions[j].tokens;
-      const intersection = new Set([...a].filter((x) => b.has(x)));
-      const union = new Set([...a, ...b]);
-      score += intersection.size / (union.size || 1);
+      score += jaccard(conclusions[i].tokens, conclusions[j].tokens);
     }
     if (score > bestScore) {
       bestScore = score;
