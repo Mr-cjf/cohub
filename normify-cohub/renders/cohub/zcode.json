@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "id": "cohub.zcode",
+  "updated_at": "2026-09-17T01:40:08.595Z",
+  "mode": "groups",
+  "max_columns": 2,
+  "reading": {
+    "zh": "ZCode 版是 MCP stdio Server + hooks 形态：入口暴露 4 个工具，hook 在会话各阶段旁路介入。",
+    "en": "The ZCode edition is an MCP stdio server plus hooks: the entry exposes four tools while hooks intervene at various session stages."
+  },
+  "groups": [
+    {
+      "id": "entry",
+      "title": {
+        "zh": "入口与安装",
+        "en": "Entry & Install"
+      },
+      "children": [
+        "cohub.zcode.entry",
+        "cohub.zcode.install"
+      ]
+    },
+    {
+      "id": "runtime",
+      "title": {
+        "zh": "工具与追踪",
+        "en": "Tools & Tracking"
+      },
+      "children": [
+        "cohub.zcode.tools",
+        "cohub.zcode.tracker"
+      ]
+    },
+    {
+      "id": "ext",
+      "title": {
+        "zh": "扩展点",
+        "en": "Extension Points"
+      },
+      "children": [
+        "cohub.zcode.hooks",
+        "cohub.zcode.context"
+      ]
+    },
+    {
+      "id": "assets",
+      "title": {
+        "zh": "技能资产",
+        "en": "Skill Assets"
+      },
+      "children": [
+        "cohub.zcode.skills",
+        "cohub.zcode.agents-template",
+        "cohub.zcode.skills-briefs",
+        "cohub.zcode.utils"
+      ]
+    }
+  ]
+}

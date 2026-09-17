@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "cohub.opencode.cli",
+  "updated_at": "2026-09-17T01:53:56.258Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "命令入口与配置读写。",
+    "en": "Command entry and configuration I/O."
+  },
+  "order": [
+    "cohub.opencode.cli.main",
+    "cohub.opencode.cli.config-io"
+  ]
+}

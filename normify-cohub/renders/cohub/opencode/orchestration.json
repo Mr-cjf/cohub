@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "cohub.opencode.orchestration",
+  "updated_at": "2026-09-17T01:52:53.774Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "类型 → 契约 → 重试 → 调度 → 引擎。",
+    "en": "Types, contract, retry, scheduler, engine."
+  },
+  "order": [
+    "cohub.opencode.orchestration.types",
+    "cohub.opencode.orchestration.contract",
+    "cohub.opencode.orchestration.retry",
+    "cohub.opencode.orchestration.scheduler",
+    "cohub.opencode.orchestration.engine"
+  ]
+}

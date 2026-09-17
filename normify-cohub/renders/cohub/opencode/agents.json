@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "cohub.opencode.agents",
+  "updated_at": "2026-09-17T01:52:53.615Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "12 个 agent 按职责分四类。",
+    "en": "The 12 agents grouped into four responsibility classes."
+  },
+  "order": [
+    "cohub.opencode.agents.orchestration",
+    "cohub.opencode.agents.analysis",
+    "cohub.opencode.agents.execution",
+    "cohub.opencode.agents.rules"
+  ]
+}

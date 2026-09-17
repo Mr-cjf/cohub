@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "cohub.opencode.hooks",
+  "updated_at": "2026-09-17T01:50:07.677Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "按平台 hook 触发时机排列：配置 → 工具调用前后 → 会话事件 → 消息变换。",
+    "en": "Ordered by hook timing: config, tool call lifecycle, session events, then message transformation."
+  },
+  "order": [
+    "cohub.opencode.hooks.config",
+    "cohub.opencode.hooks.tool-lifecycle",
+    "cohub.opencode.hooks.session-events",
+    "cohub.opencode.hooks.message-transform"
+  ]
+}

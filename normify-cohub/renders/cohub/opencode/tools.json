@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "cohub.opencode.tools",
+  "updated_at": "2026-09-17T01:50:07.596Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "council 是核心工具，另外三个为它提供参数自适应、模型统计与任务终止。",
+    "en": "Council is the central tool; the other three supply adaptive parameters, model statistics, and job termination."
+  },
+  "order": [
+    "cohub.opencode.tools.council",
+    "cohub.opencode.tools.job-control",
+    "cohub.opencode.tools.adaptive-params",
+    "cohub.opencode.tools.model-stats"
+  ]
+}

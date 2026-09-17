@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "id": "cohub.opencode",
+  "updated_at": "2026-09-17T01:53:59.309Z",
+  "mode": "groups",
+  "max_columns": 2,
+  "reading": {
+    "zh": "从入口与资产，到三大核心引擎（上下文/编排/任务），再到工具与 Hook，最后是 CLI 与工具函数。",
+    "en": "From entry and assets, through the three core engines, into tools and hooks, and finally the CLI and utilities."
+  },
+  "groups": [
+    {
+      "id": "entry",
+      "title": {
+        "zh": "入口与资产",
+        "en": "Entry & Assets"
+      },
+      "children": [
+        "cohub.opencode.entry",
+        "cohub.opencode.agents",
+        "cohub.opencode.prompts",
+        "cohub.opencode.instructions",
+        "cohub.opencode.config",
+        "cohub.opencode.tui"
+      ]
+    },
+    {
+      "id": "core",
+      "title": {
+        "zh": "核心引擎",
+        "en": "Core Engines"
+      },
+      "children": [
+        "cohub.opencode.context",
+        "cohub.opencode.orchestration",
+        "cohub.opencode.task-manager"
+      ]
+    },
+    {
+      "id": "tools",
+      "title": {
+        "zh": "工具与 Hook",
+        "en": "Tools & Hooks"
+      },
+      "children": [
+        "cohub.opencode.tools",
+        "cohub.opencode.hooks"
+      ]
+    },
+    {
+      "id": "cli",
+      "title": {
+        "zh": "命令行",
+        "en": "CLI"
+      },
+      "children": [
+        "cohub.opencode.utils"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "cohub.zcode.hooks",
+  "updated_at": "2026-09-17T01:40:22.471Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "从共享的 stdin 读取，到各时机的 hook：会话启动 → 用户输入 → 工具调用前后。",
+    "en": "From the shared stdin reader to each hook timing: session start, user input, and tool call boundaries."
+  },
+  "order": [
+    "cohub.zcode.hooks.stdin",
+    "cohub.zcode.hooks.chinese-inject",
+    "cohub.zcode.hooks.job-board",
+    "cohub.zcode.hooks.orchestrate-remind",
+    "cohub.zcode.hooks.agent-tracker",
+    "cohub.zcode.hooks.grep-counter"
+  ]
+}

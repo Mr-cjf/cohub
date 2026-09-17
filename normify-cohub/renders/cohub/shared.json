@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "cohub.shared",
+  "updated_at": "2026-09-17T01:26:37.492Z",
+  "mode": "groups",
+  "max_columns": 3,
+  "reading": {
+    "zh": "从基础工具到文本/共识，最后是向三包分发代码的同步脚本。",
+    "en": "From base helpers to text and consensus, ending with the sync script that distributes code to the three packages."
+  },
+  "groups": [
+    {
+      "id": "core",
+      "title": {
+        "zh": "基础工具",
+        "en": "Base Helpers"
+      },
+      "children": [
+        "cohub.shared.model",
+        "cohub.shared.chinese",
+        "cohub.shared.fs-json",
+        "cohub.shared.fs-atomic"
+      ]
+    },
+    {
+      "id": "text",
+      "title": {
+        "zh": "文本与共识",
+        "en": "Text & Consensus"
+      },
+      "children": [
+        "cohub.shared.token-estimator",
+        "cohub.shared.consensus"
+      ]
+    },
+    {
+      "id": "infra",
+      "title": {
+        "zh": "同步基础设施",
+        "en": "Sync Infrastructure"
+      },
+      "children": [
+        "cohub.shared.sync"
+      ]
+    }
+  ]
+}

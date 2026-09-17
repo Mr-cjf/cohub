@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "cohub.opencode.task-manager",
+  "updated_at": "2026-09-17T01:52:53.869Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "以 tracker 为核心，quality 与 stats 在其上做质量评估与统计。",
+    "en": "Tracker at the core, with quality assessment and statistics layered on top."
+  },
+  "order": [
+    "cohub.opencode.task-manager.types",
+    "cohub.opencode.task-manager.tracker",
+    "cohub.opencode.task-manager.quality"
+  ]
+}

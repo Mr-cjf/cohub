@@ -1,0 +1,4 @@
+# Normify 结构数据：固定为 LF，保证 receipt.json 记录的产物 SHA-256
+# 在任意平台 clone 后均可复现（本仓库 core.autocrlf=true，默认会把文本文件
+# checkout 成 CRLF，导致哈希不匹配）。
+normify-cohub/** text eol=lf

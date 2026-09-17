@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "cohub.dsh.delegate",
+  "updated_at": "2026-09-17T01:27:02.571Z",
+  "mode": "grid",
+  "reading": {
+    "zh": "工具层负责装配与 spawn，停滞看门狗旁路观测子代理事件流并决定是否提前中止。",
+    "en": "The tool layer assembles and spawns; the stall watchdog observes the subagent event stream and decides whether to abort early."
+  },
+  "order": [
+    "cohub.dsh.delegate.tool",
+    "cohub.dsh.delegate.stall"
+  ]
+}

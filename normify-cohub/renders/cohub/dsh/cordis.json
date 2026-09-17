@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "cohub.dsh.cordis",
+  "updated_at": "2026-09-17T01:27:08.820Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "先查（inspect）后改（define/run/stop/remove）。",
+    "en": "Inspect first, then define, run, stop, or remove."
+  },
+  "order": [
+    "cohub.dsh.cordis.inspect",
+    "cohub.dsh.cordis.lifecycle"
+  ]
+}

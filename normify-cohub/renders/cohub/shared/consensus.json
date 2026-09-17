@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "cohub.shared.consensus",
+  "updated_at": "2026-09-17T01:26:45.050Z",
+  "mode": "groups",
+  "reading": {
+    "zh": "从左到右：分词与相似度 → 结论抽取 → 重试决策 → 结果格式化。",
+    "en": "Left to right: tokenizing and similarity, summary extraction, retry decisions, and result formatting."
+  },
+  "order": [
+    "cohub.shared.consensus.algorithm",
+    "cohub.shared.consensus.summary",
+    "cohub.shared.consensus.retry",
+    "cohub.shared.consensus.format"
+  ]
+}

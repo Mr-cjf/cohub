@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "id": "cohub.dsh.skills",
+  "updated_at": "2026-09-17T01:27:17.553Z",
+  "mode": "groups",
+  "max_columns": 2,
+  "reading": {
+    "zh": "13 个技能按职责分四类：调度、分析规划、执行、规则与插件。",
+    "en": "The 13 skills fall into four groups: orchestration, analysis, execution, and rules/plugin."
+  },
+  "groups": [
+    {
+      "id": "orch",
+      "title": {
+        "zh": "调度",
+        "en": "Orchestration"
+      },
+      "children": [
+        "cohub.dsh.skills.orchestration"
+      ]
+    },
+    {
+      "id": "analysis",
+      "title": {
+        "zh": "分析与规划",
+        "en": "Analysis"
+      },
+      "children": [
+        "cohub.dsh.skills.analysis"
+      ]
+    },
+    {
+      "id": "exec",
+      "title": {
+        "zh": "执行",
+        "en": "Execution"
+      },
+      "children": [
+        "cohub.dsh.skills.execution"
+      ]
+    },
+    {
+      "id": "rules",
+      "title": {
+        "zh": "规则与插件",
+        "en": "Rules & Plugin"
+      },
+      "children": [
+        "cohub.dsh.skills.rules",
+        "cohub.dsh.skills.cordis"
+      ]
+    }
+  ]
+}

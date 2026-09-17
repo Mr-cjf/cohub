@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "cohub.opencode.context",
+  "updated_at": "2026-09-17T01:52:53.696Z",
+  "mode": "layers",
+  "reading": {
+    "zh": "从左到右：类型契约 → 策略解析 → 提取 → 格式化 → 引擎统管。",
+    "en": "Left to right: type contracts, strategy resolution, extraction, formatting, and the engine that ties them together."
+  },
+  "order": [
+    "cohub.opencode.context.types",
+    "cohub.opencode.context.strategy",
+    "cohub.opencode.context.extractor",
+    "cohub.opencode.context.formatter",
+    "cohub.opencode.context.engine"
+  ]
+}

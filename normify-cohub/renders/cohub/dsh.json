@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "id": "cohub.dsh",
+  "updated_at": "2026-09-17T01:26:55.636Z",
+  "mode": "groups",
+  "max_columns": 2,
+  "reading": {
+    "zh": "按「入口 → 委派核心 → 运行时适配 → 技能资产」读。",
+    "en": "Read as: entry, delegation core, runtime adapters, then skill assets."
+  },
+  "groups": [
+    {
+      "id": "entry",
+      "title": {
+        "zh": "插件入口",
+        "en": "Plugin Entry"
+      },
+      "children": [
+        "cohub.dsh.entry",
+        "cohub.dsh.client",
+        "cohub.dsh.presets"
+      ]
+    },
+    {
+      "id": "delegation",
+      "title": {
+        "zh": "委派与共识",
+        "en": "Delegation & Council"
+      },
+      "children": [
+        "cohub.dsh.delegate",
+        "cohub.dsh.delegate-batch",
+        "cohub.dsh.council"
+      ]
+    },
+    {
+      "id": "runtime",
+      "title": {
+        "zh": "运行时适配",
+        "en": "Runtime Adapters"
+      },
+      "children": [
+        "cohub.dsh.env-signatures",
+        "cohub.dsh.preset-install",
+        "cohub.dsh.cordis"
+      ]
+    },
+    {
+      "id": "assets",
+      "title": {
+        "zh": "技能资产",
+        "en": "Skill Assets"
+      },
+      "children": [
+        "cohub.dsh.skills"
+      ]
+    }
+  ]
+}
