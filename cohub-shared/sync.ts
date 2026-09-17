@@ -14,8 +14,13 @@ const TARGETS = [
 
 // 保留文件名黑名单：按目标包区分，防止覆盖目标包自身的独立文件。
 // zcode-cohub 的 constants.ts 是包内既有合法文件，不属于共享集。
+// dsh-cohub：fs-atomic / fs-json / token-estimator 无业务消费者，停同步。
+// oh-my-opencode-cohub：fs-json 无业务消费者，停同步。
+// zcode-cohub：chinese / token-estimator 无业务消费者，停同步。
 const TARGET_RESERVED: Map<string, Set<string>> = new Map([
-  [TARGETS[2], new Set(["constants.ts"])],
+  [TARGETS[0], new Set(["fs-atomic.ts", "fs-json.ts", "token-estimator.ts"])],
+  [TARGETS[1], new Set(["fs-json.ts"])],
+  [TARGETS[2], new Set(["constants.ts", "chinese.ts", "token-estimator.ts"])],
 ]);
 
 function isReserved(targetDir: string, filename: string): boolean {
