@@ -46,13 +46,11 @@
         #     use: auto                  # auto / off / manual
         #     ttlMs: 604800000           # 7 天（到期重探，防环境静默升级）
         #     confirmCount: 2            # 观察一致次数（防瞬态误判）
-        # schedule（P3-3 N3 调度参数）：通过 systemPrompt.section 注入实际生效值（cohub:schedule），
-        # 子代理与主代理均可见该段；text 为函数，settings 卡片改了立即重读无需重启。
+        # schedule（P3-3 N3 调度参数）：运行时代码直接读取 settings 使用。
+        # useJobTracking / adaptiveBatch 已于 2026-09-03 移除（死参数）。
         #   schedule:
         #     maxParallelBatch: 3        # 单批并行委派上限（本环境观测值，部署可调）
         #     wallClockBudgetMs: 600000  # 单次执行单元墙钟预算（10 分钟）
-        #     useJobTracking: auto       # auto / on / off（auto = 有 job 能力则后台跟踪）
-        #     adaptiveBatch: auto        # auto / off（auto = 提示词级按本会话已观测错误/超时收放批大小）
 
 # ── tool-cordis：本文件【刻意不挂】────────────────────────────────────────────
 # @deepseek-ai/dsh-tool-cordis 会把一组 Host 级 inspect provider（Service /

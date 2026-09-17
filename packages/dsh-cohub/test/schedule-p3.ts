@@ -29,12 +29,13 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
   const def = Config({});
   check("缺省 maxParallelBatch=3", def.schedule.maxParallelBatch === 3);
   check("缺省 wallClockBudgetMs=600000", def.schedule.wallClockBudgetMs === 600_000);
-  check("缺省 useJobTracking=auto", def.schedule.useJobTracking === "auto");
-  check("缺省 adaptiveBatch=auto", def.schedule.adaptiveBatch === "auto");
-  try { Config({ schedule: { useJobTracking: "bogus" } }); check("非法 useJobTracking 被拒", false); }
-  catch { check("非法 useJobTracking 被拒", true); }
-  try { Config({ schedule: { adaptiveBatch: "bogus" } }); check("非法 adaptiveBatch 被拒", false); }
-  catch { check("非法 adaptiveBatch 被拒", true); }
+  // useJobTracking / adaptiveBatch 已于 2026-09-03 从 ScheduleConfig 移除；以下反向断言验证不存在
+  check("useJobTracking 已移除 → undefined", def.schedule.useJobTracking === undefined);
+  check("adaptiveBatch 已移除 → undefined", def.schedule.adaptiveBatch === undefined);
+  let ok1 = true; try { Config({ schedule: { useJobTracking: "bogus" } }); } catch { ok1 = false; }
+  check("useJobTracking 已移除 → 传参不报错（schema 忽略未知 key）", ok1);
+  let ok2 = true; try { Config({ schedule: { adaptiveBatch: "bogus" } }); } catch { ok2 = false; }
+  check("adaptiveBatch 已移除 → 传参不报错（schema 忽略未知 key）", ok2);
   const over = Config({ schedule: { maxParallelBatch: 5 } });
   check("部分覆盖保留其他缺省", over.schedule.maxParallelBatch === 5 && over.schedule.wallClockBudgetMs === 600_000);
 }
@@ -51,7 +52,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
   cohub.apply(root, {
     councillors: [],
     councilTimeoutMs: 180_000,
-    schedule: { maxParallelBatch: 7, wallClockBudgetMs: 234_567, useJobTracking: "on", adaptiveBatch: "off" },
+    schedule: { maxParallelBatch: 7, wallClockBudgetMs: 234_567 },
   });
   const assembly: any = await root.systemPrompt.assemble({});
   const section = assembly.sections.find((s: any) => s.name === "cohub:schedule");
@@ -70,7 +71,8 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
   const parsed = CohubSettingsSchema({ schedule: { maxParallelBatch: 5, wallClockBudgetMs: 123_456 }, delegateRetry: { maxRetries: 2 } });
   check("settings.schedule.maxParallelBatch=5", parsed.schedule.maxParallelBatch === 5);
   check("settings.schedule.wallClockBudgetMs=123456", parsed.schedule.wallClockBudgetMs === 123_456);
-  check("settings.schedule.useJobTracking 缺省 auto", parsed.schedule.useJobTracking === "auto");
+  // useJobTracking 已从 CohubSettingsSchema 移除 → 反向断言
+  check("settings.schedule.useJobTracking 已移除 → undefined", parsed.schedule.useJobTracking === undefined);
   check("settings.delegateRetry.maxRetries=2", parsed.delegateRetry.maxRetries === 2);
   check("settings.delegateRetry.stall 缺省 enabled=false", parsed.delegateRetry.stall.enabled === false);
   const empty = CohubSettingsSchema({});

@@ -47,13 +47,6 @@ window.__ModuleLoader__.load({
       batchSize: "批大小（单批并行委派上限）",
       wallClock: "墙钟预算（毫秒）",
       maxRetries: "委派重试上限（0 = 不重试）",
-      useJobTrackingLabel: "Job 跟踪",
-      adaptiveBatchLabel: "批间自适应",
-      useJobTrackingAuto: "auto（自动）",
-      useJobTrackingOn: "on（启用）",
-      useJobTrackingOff: "off（关闭）",
-      adaptiveBatchAuto: "auto（自适应）",
-      adaptiveBatchOff: "off（固定）",
       retryDelayMs: "重试间隔（毫秒）",
       retryableReasons: "可重试原因（逗号分隔）",
       retryableReasonsHint: "如 aborted, error；未知原因不重试",
@@ -101,13 +94,6 @@ window.__ModuleLoader__.load({
       batchSize: "Batch size (max parallel delegates)",
       wallClock: "Wall-clock budget (ms)",
       maxRetries: "Delegate retry limit (0 = no retry)",
-      useJobTrackingLabel: "Job tracking",
-      adaptiveBatchLabel: "Adaptive batch",
-      useJobTrackingAuto: "auto (automatic)",
-      useJobTrackingOn: "on (enabled)",
-      useJobTrackingOff: "off (disabled)",
-      adaptiveBatchAuto: "auto (adaptive)",
-      adaptiveBatchOff: "off (fixed)",
       retryDelayMs: "Retry delay (ms)",
       retryableReasons: "Retryable reasons (comma-separated)",
       retryableReasonsHint: "e.g. aborted, error; unknown reasons will not retry",
@@ -332,9 +318,7 @@ window.__ModuleLoader__.load({
         var s = snapshot.value && snapshot.value.schedule;
         return {
           maxParallelBatch: s && typeof s.maxParallelBatch === "number" ? s.maxParallelBatch : 3,
-          wallClockBudgetMs: s && typeof s.wallClockBudgetMs === "number" ? s.wallClockBudgetMs : 600000,
-          useJobTracking: s && typeof s.useJobTracking === "string" ? s.useJobTracking : "auto",
-          adaptiveBatch: s && typeof s.adaptiveBatch === "string" ? s.adaptiveBatch : "auto"
+          wallClockBudgetMs: s && typeof s.wallClockBudgetMs === "number" ? s.wallClockBudgetMs : 600000
         };
       });
       var [retryDraft, setRetryDraft] = React.useState(function () {
@@ -379,9 +363,7 @@ window.__ModuleLoader__.load({
           var s = snapshot.value && snapshot.value.schedule;
           setScheduleDraft({
             maxParallelBatch: s && typeof s.maxParallelBatch === "number" ? s.maxParallelBatch : 3,
-            wallClockBudgetMs: s && typeof s.wallClockBudgetMs === "number" ? s.wallClockBudgetMs : 600000,
-            useJobTracking: s && typeof s.useJobTracking === "string" ? s.useJobTracking : "auto",
-            adaptiveBatch: s && typeof s.adaptiveBatch === "string" ? s.adaptiveBatch : "auto"
+            wallClockBudgetMs: s && typeof s.wallClockBudgetMs === "number" ? s.wallClockBudgetMs : 600000
           });
           var r = snapshot.value && snapshot.value.delegateRetry;
           setRetryDraft({
@@ -541,9 +523,7 @@ window.__ModuleLoader__.load({
         var s = snapshot.value && snapshot.value.schedule;
         setScheduleDraft({
           maxParallelBatch: s && typeof s.maxParallelBatch === "number" ? s.maxParallelBatch : 3,
-          wallClockBudgetMs: s && typeof s.wallClockBudgetMs === "number" ? s.wallClockBudgetMs : 600000,
-          useJobTracking: s && typeof s.useJobTracking === "string" ? s.useJobTracking : "auto",
-          adaptiveBatch: s && typeof s.adaptiveBatch === "string" ? s.adaptiveBatch : "auto"
+          wallClockBudgetMs: s && typeof s.wallClockBudgetMs === "number" ? s.wallClockBudgetMs : 600000
         });
         var r = snapshot.value && snapshot.value.delegateRetry;
         setRetryDraft({
@@ -600,9 +580,7 @@ window.__ModuleLoader__.load({
             if (!Number.isFinite(wall) || wall < 0) wall = 600000;
             await scope.set("schedule", {
               maxParallelBatch: batch,
-              wallClockBudgetMs: wall,
-              useJobTracking: scheduleDraft.useJobTracking || "auto",
-              adaptiveBatch: scheduleDraft.adaptiveBatch || "auto"
+              wallClockBudgetMs: wall
             });
           }
           if (retryTouched || stallTouched) {
@@ -789,21 +767,6 @@ window.__ModuleLoader__.load({
             React.createElement("div", { className: "cohub-field" },
               React.createElement("label", { className: "cohub-label" }, t("wallClock")),
               React.createElement("input", { className: "cohub-input", type: "number", min: 0, step: 1000, value: scheduleDraft.wallClockBudgetMs, disabled: !writable, onChange: function (event) { updateSchedule("wallClockBudgetMs", event.target.value); } })
-            ),
-            React.createElement("div", { className: "cohub-field" },
-              React.createElement("label", { className: "cohub-label" }, t("useJobTrackingLabel")),
-              React.createElement("select", { className: "cohub-select", value: scheduleDraft.useJobTracking, disabled: !writable, onChange: function (event) { updateSchedule("useJobTracking", event.target.value); } },
-                React.createElement("option", { value: "auto" }, t("useJobTrackingAuto")),
-                React.createElement("option", { value: "on" }, t("useJobTrackingOn")),
-                React.createElement("option", { value: "off" }, t("useJobTrackingOff"))
-              )
-            ),
-            React.createElement("div", { className: "cohub-field" },
-              React.createElement("label", { className: "cohub-label" }, t("adaptiveBatchLabel")),
-              React.createElement("select", { className: "cohub-select", value: scheduleDraft.adaptiveBatch, disabled: !writable, onChange: function (event) { updateSchedule("adaptiveBatch", event.target.value); } },
-                React.createElement("option", { value: "auto" }, t("adaptiveBatchAuto")),
-                React.createElement("option", { value: "off" }, t("adaptiveBatchOff"))
-              )
             )
           )
         ),

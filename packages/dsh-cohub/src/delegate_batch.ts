@@ -61,20 +61,24 @@ export function createDelegateBatchTool(
   function resolveRuntimeConfig() {
     const settingsNow = getSettings ? (getSettings() ?? {}) : {};
     const scheduleCfg = settingsNow.schedule ?? (config as any).schedule;
+    // maxParallelBatch：从 settings 读取（默认 3），与硬上限 MAX_BATCH_SIZE 取小值；
+    // 保留 MAX_BATCH_SIZE 作为绝对安全上限（防止配置错误导致超量并行）。
+    const rawMaxParallel = Math.max(1, scheduleCfg?.maxParallelBatch ?? 3);
     return {
       wallClockBudgetMs: Math.max(0, scheduleCfg?.wallClockBudgetMs ?? 600_000),
+      maxParallelBatch: Math.min(rawMaxParallel, MAX_BATCH_SIZE),
     };
   }
 
   return defineTool({
     name: "delegate_batch",
-    description: "批量并行委派：一次调用同时启动多个子代理任务，返回每个任务的结构化结果。适合并行派发多个无依赖的独立任务（如同时让多个 co-explorer 探索不同目录，或多个 co-fixer 修改不同文件）。每个 task 只尝试一次，不重试。上限 20 个任务。",
+    description: "批量并行委派：一次调用同时启动多个子代理任务，返回每个任务的结构化结果。适合并行派发多个无依赖的独立任务（如同时让多个 co-explorer 探索不同目录，或多个 co-fixer 修改不同文件）。每个 task 只尝试一次，不重试。上限由 `schedule.maxParallelBatch` 配置（默认 3，最大 20）。",
 
     parameters: {
       tasks: {
         type: "array",
         required: true,
-        description: "任务列表，每个任务包含 id（可选，用于结果映射）、skill（代理名）、prompt（具体任务描述）。上限 20 个。",
+        description: "任务列表，每个任务包含 id（可选，用于结果映射）、skill（代理名）、prompt（具体任务描述）。上限由 schedule.maxParallelBatch 限制（默认 3，最大 20）。",
         items: {
           type: "object",
           additionalProperties: false,
@@ -95,15 +99,15 @@ export function createDelegateBatchTool(
       const parent = exec?.agent;
       if (!parent) throw new Error("delegate_batch requires a calling agent (exec.agent was undefined)");
 
-      const { wallClockBudgetMs } = resolveRuntimeConfig();
+      const { wallClockBudgetMs, maxParallelBatch } = resolveRuntimeConfig();
       const tasks = args.tasks ?? [];
 
       if (tasks.length === 0) {
         return "delegate_batch: 无任务";
       }
 
-      if (tasks.length > MAX_BATCH_SIZE) {
-        return `delegate_batch: 任务数 ${tasks.length} 超过上限 ${MAX_BATCH_SIZE}，请分批执行。`;
+      if (tasks.length > maxParallelBatch) {
+        return `delegate_batch: 任务数 ${tasks.length} 超过上限 ${maxParallelBatch}，请分批执行。`;
       }
 
       // 所有 task 共享同一份环境契约文本（只计算一次，避免重复 I/O）

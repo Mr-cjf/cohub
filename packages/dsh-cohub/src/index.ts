@@ -101,18 +101,14 @@ const EnvSignatures = z.object({
   errorCategories: z.array(z.string()).default(DEFAULT_ERROR_CATEGORIES),
 }).default({});
 
-/** P3-3（N3）调度参数配置（N3 小切片）：批大小 / 墙钟预算 / job 跟踪 / 批间自适应。
- * 跨环境三态：缺省值（3 / 600s）仅为本环境观测值，部署可调；useJobTracking 无 job 能力时前台逐批降级；
- * adaptiveBatch 为提示词级自适应（不在代码层调度，避免过度优化）。 */
+/** P3-3（N3）调度参数配置：批大小 / 墙钟预算。
+ * 缺省值（3 / 600s）仅为本环境观测值，部署可调。
+ * useJobTracking 与 adaptiveBatch 已于 2026-09-03 移除（声明但代码不读的死参数）。 */
 const ScheduleConfig = z.object({
   /** 单批并行委派上限；缺省 3（本环境观测值，部署可调） */
   maxParallelBatch: z.number().default(3),
   /** 单次执行单元墙钟预算（毫秒）；600_000 仅为本环境观测值，部署可调 */
   wallClockBudgetMs: z.number().default(600_000),
-  /** 后台任务跟踪：auto（有则轮询）/ on / off（前台逐批降级） */
-  useJobTracking: z.union(["auto", "on", "off"]).default("auto"),
-  /** 批间自适应：auto（提示词级，按本会话已观测错误/超时收放批大小）/ off（固定配置值） */
-  adaptiveBatch: z.union(["auto", "off"]).default("auto"),
 }).default({});
 
 export const name = "cohub";
@@ -155,12 +151,6 @@ const CohubSettingsSchema = z.object({
   schedule: ScheduleConfig,
   delegateRetry: DelegateRetry,
 });
-
-/** P3-3（N3）：已弃用——不再通过全局 systemPrompt.section 注入调度参数。
- * 调度参数只对调度者（Orchestrator）有意义，子代理无需知晓。
- * 调度约束已在 presets 的 agent.cordis.yml persona 中声明，
- * 运行时的实际生效值由 delegate.ts/delegate_batch.ts 直接读取 settings 使用。 */
-function renderScheduleParams(_schedule) { return ""; }
 
 /** 本包内置的 agent preset 目录（随 files 字段打包进 npm 包） */
 const SHIPPED_PRESETS_DIR = fileURLToPath(new URL("../presets/", import.meta.url));
@@ -267,7 +257,6 @@ export function apply(ctx, config) {
 // ④b 调度参数注入：已移除（2026-09-01）。
   //    之前通过 systemPrompt.section("cohub:schedule") 全局注入，但子代理不需要调度参数。
   //    约束改为在 presets/*/agent.cordis.yml persona 中声明，运行时代码直接读取 settings。
-  //    renderScheduleParams 保留（空函数）以兼容外部引用。
 
   
 

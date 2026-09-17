@@ -494,9 +494,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       const { retry, stall, schedule } = resolveRuntimeConfig();
       const RETRYABLE = new Set(retry.retryableReasons);
       ctx.logger?.info?.("[cohub schedule] 生效调度参数：batch=" + (schedule?.maxParallelBatch ?? 3)
-        + " wallMs=" + (schedule?.wallClockBudgetMs ?? 600_000)
-        + " jobTracking=" + (schedule?.useJobTracking ?? "auto")
-        + " adaptiveBatch=" + (schedule?.adaptiveBatch ?? "auto"));
+        + " wallMs=" + (schedule?.wallClockBudgetMs ?? 600_000));
 
       // ① 按 skill 名精确匹配技能 + 查找路由配置（共享函数）
       const { skill, route } = resolveSkillAndRoute(args.skill, getRoutes, ctx);
