@@ -93,6 +93,10 @@ export class ContextEngine {
 
   /**
    * Clean up context for a completed task.
+   *
+   * 调用点：`delegateHandler` 在装配完提示词后立即移除本次任务的 context——
+   * context 的全部消费（getFormattedContext / getContext）都发生在同一次
+   * handler 调用内，返回后即无用；不移除则 contexts 随 co_delegate 次数单调增长。
    */
   removeContext(taskId: string): void {
     this.contexts.delete(taskId);
@@ -100,6 +104,10 @@ export class ContextEngine {
 
   /**
    * Clean up stale contexts older than `maxAgeMs`.
+   *
+   * 调用点：MCP Server 的定期清理定时器（src/index.ts，带 unref）。
+   * 定位为兜底：兜住任何"注册了但未走 removeContext 收尾"的路径，
+   * 防止本 Map 在极长生命周期会话中无界增长。
    */
   cleanupStale(maxAgeMs = 300_000): void {
     const now = Date.now();

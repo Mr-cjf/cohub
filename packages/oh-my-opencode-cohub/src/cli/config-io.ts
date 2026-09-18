@@ -15,30 +15,140 @@ function getTuiConfigPath(): string {
   return path.join(os.homedir(), '.config', 'opencode', 'tui.json');
 }
 
-function readJSON(filePath: string): Record<string, unknown> | null {
-  try {
-    if (!fs.existsSync(filePath)) return null;
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    try {
-      return JSON.parse(raw);
-    } catch {
-      // JSONC 兼容：去掉 // 行注释后重试
-      return JSON.parse(raw.replace(/\/\/.*$/gm, ''));
+/**
+ * 剥离 JSONC 注释（行注释与块注释）与尾逗号——**字符串感知**状态机。
+ *
+ * 旧实现用 `raw.replace(/\/\/.*$/gm, '')` 直接正则剥离，会误伤字符串内容
+ * （例如 `"url": "http://host/x"` 会被截断成 `"url": "http:`，导致解析失败）。
+ * 本实现按字符扫描：字符串字面量（含转义）内的 `//`、`/*`、`,` 一律原样保留，
+ * 仅剥离字符串外的注释，并把「后随 } 或 ] 的逗号」替换为空格（保持位置不变）。
+ */
+function stripJsonc(raw: string): string {
+  const out: string[] = [];
+  let inString = false;
+  let escaped = false;
+  let pendingComma = -1;
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (inString) {
+      out.push(ch);
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      i++;
+      continue;
     }
-  } catch { return null; }
+    if (ch === '"') { inString = true; pendingComma = -1; out.push(ch); i++; continue; }
+    if (ch === '/' && raw[i + 1] === '/') {          // 行注释
+      i += 2;
+      while (i < raw.length && raw[i] !== '\n') i++;
+      continue;
+    }
+    if (ch === '/' && raw[i + 1] === '*') {          // 块注释
+      i += 2;
+      while (i < raw.length && !(raw[i] === '*' && raw[i + 1] === '/')) i++;
+      i += 2;
+      continue;
+    }
+    if (ch === ',') { pendingComma = out.length; out.push(ch); i++; continue; }
+    if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') { out.push(ch); i++; continue; }
+    if ((ch === '}' || ch === ']') && pendingComma >= 0) {
+      out[pendingComma] = ' ';                       // 去尾逗号
+    }
+    pendingComma = -1;
+    out.push(ch);
+    i++;
+  }
+  return out.join('');
 }
 
-function writeJSON(filePath: string, data: unknown): void {
+/**
+ * 读取结果：
+ * - `{ ok: true, value: null }` —— 文件不存在或为空，可安全新建；
+ * - `{ ok: true, value: obj }` —— 成功解析（含 JSONC 兜底）；
+ * - `{ ok: false, reason }`    —— **文件存在但无法安全解析**，调用方必须中止写入。
+ */
+type ReadResult = { ok: true; value: Record<string, unknown> | null } | { ok: false; reason: string };
+
+function readJsonFile(filePath: string): ReadResult {
+  let raw: string;
+  try {
+    if (!fs.existsSync(filePath)) return { ok: true, value: null };
+    raw = fs.readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    return { ok: false, reason: `读取失败: ${(err as Error).message}` };
+  }
+  if (raw.trim() === '') return { ok: true, value: null };
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false, reason: '顶层不是 JSON 对象' };
+    }
+    return { ok: true, value: parsed as Record<string, unknown> };
+  } catch { /* 落入 JSONC 兜底 */ }
+
+  try {
+    const parsed: unknown = JSON.parse(stripJsonc(raw));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false, reason: '顶层不是 JSON 对象' };
+    }
+    return { ok: true, value: parsed as Record<string, unknown> };
+  } catch (err) {
+    return { ok: false, reason: (err as Error).message };
+  }
+}
+
+/** 宽松读取（**只读路径专用**）：解析失败返回 null，返回结果绝不写回文件 */
+function readJSONLoose(filePath: string): Record<string, unknown> | null {
+  const r = readJsonFile(filePath);
+  return r.ok ? r.value : null;
+}
+
+/**
+ * 读取「即将被写回」的配置。文件畸形时返回中止消息——
+ * 绝不用 `{}` 顶替后写回（那会静默销毁用户原配置，参照 zcode-cohub install.ts 的「拒绝覆盖」策略）。
+ */
+function loadConfigForWrite(
+  filePath: string,
+  label: string,
+): { ok: true; config: Record<string, unknown> } | { ok: false; message: string } {
+  const r = readJsonFile(filePath);
+  if (!r.ok) {
+    return {
+      ok: false,
+      message: `⚠ 拒绝覆盖 ${label}（JSON 解析失败）: ${filePath}\n   ${r.reason}\n   请先修复该文件语法后重新运行；原文件未被修改。`,
+    };
+  }
+  return { ok: true, config: r.value ?? {} };
+}
+
+/** 备份为 `<file>.bak`；已存在则不覆盖（保留首次备份，避免重装冲掉好备份） */
+function backupFile(filePath: string): void {
+  const bak = filePath + '.bak';
+  if (fs.existsSync(bak)) return;
+  if (fs.existsSync(filePath)) fs.copyFileSync(filePath, bak);
+}
+
+/**
+ * 写回配置。默认**先备份**——本文件的所有写入目标（opencode.json / tui.json /
+ * tui-state.json / oh-my-opencode-slim.json）都是宿主或他人插件的文件，不属于本插件自有数据。
+ */
+function writeJSON(filePath: string, data: unknown, opts: { backup?: boolean } = {}): void {
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (opts.backup !== false) backupFile(filePath);
   const content = JSON.stringify(data, null, 2) + '\n';
   fs.writeFileSync(filePath, content, 'utf-8');
 }
 
-/** 添加 CoHub 到 opencode.json 的 plugin 数组 */
+/** 添加 CoHub 到 opencode.json 的 plugin 数组（宿主配置：解析失败中止 + 写入前备份） */
 export function addPluginToOpenCodeConfig(version: string): { success: boolean; message: string } {
   const configPath = getOpencodeConfigPath();
-  let config = readJSON(configPath) ?? {};
+  const loaded = loadConfigForWrite(configPath, 'opencode.json');
+  if (!loaded.ok) return { success: false, message: loaded.message };
+  const config = loaded.config;
   const plugins: string[] = Array.isArray(config.plugin) ? [...config.plugin] : [];
 
   const pkgSpec = `${PACKAGE_NAME}@${version}`;
@@ -62,10 +172,12 @@ export function addPluginToOpenCodeConfig(version: string): { success: boolean; 
   return { success: true, message: `✓ 已添加 "${pkgSpec}" 到 opencode.json 的 plugin 数组` };
 }
 
-/** 添加 CoHub 到 tui.json 的 plugin 数组 */
+/** 添加 CoHub 到 tui.json 的 plugin 数组（宿主配置：解析失败中止 + 写入前备份） */
 export function addPluginToTuiConfig(): { success: boolean; message: string } {
   const configPath = getTuiConfigPath();
-  let config = readJSON(configPath) ?? {};
+  const loaded = loadConfigForWrite(configPath, 'tui.json');
+  if (!loaded.ok) return { success: false, message: loaded.message };
+  const config = loaded.config;
   const plugins: string[] = Array.isArray(config.plugin) ? [...config.plugin] : [];
 
   if (plugins.some(p => p.includes(PACKAGE_NAME))) {
@@ -88,8 +200,9 @@ function getOhMyConfigPath(): string {
  *  避免 opencode.json 的空 agent 定义覆盖插件注入的 model/variant */
 export function registerCoHubAgents(): { success: boolean; message: string } {
   const configPath = getOpencodeConfigPath();
-  let config = readJSON(configPath);
-  if (!config) { config = {}; }
+  const loaded = loadConfigForWrite(configPath, 'opencode.json');
+  if (!loaded.ok) return { success: false, message: loaded.message };
+  const config = loaded.config;
 
   let needUpdate = false;
 
@@ -229,7 +342,7 @@ function findBestModel(
 }
 
 function flattenModelsFromOpenCode(): FlatModel[] {
-  const opencodeConfig = readJSON(getOpencodeConfigPath());
+  const opencodeConfig = readJSONLoose(getOpencodeConfigPath());
   if (!opencodeConfig) return [];
 
   const providerRecord = (opencodeConfig as Record<string, unknown>)?.config as Record<string, unknown> | undefined;
@@ -363,9 +476,11 @@ export function uninstallCoHub(): { success: boolean; messages: string[] } {
   const messages: string[] = [];
 
   // 1. 从 opencode.json 移除 CoHub plugin
+  //    ⚠️ 宿主配置：解析失败时**跳过**（不写回），避免把畸形文件覆盖成空配置
   const configPath = getOpencodeConfigPath();
-  let config = readJSON(configPath);
-  if (config) {
+  let config = readJSONLoose(configPath);
+  const configReadable = readJsonFile(configPath).ok;
+  if (config && configReadable) {
     const plugins: string[] = Array.isArray(config.plugin) ? [...config.plugin] : [];
     const before = plugins.length;
     const filtered = plugins.filter(p => {
@@ -399,15 +514,18 @@ export function uninstallCoHub(): { success: boolean; messages: string[] } {
     }
 
     writeJSON(configPath, config);
+  } else if (!configReadable) {
+    messages.push(`⚠ opencode.json 解析失败，已跳过（原文件未被覆盖）: ${configPath}`);
   } else {
     messages.push('⚠ opencode.json 不存在，跳过');
   }
 
-  // 3. 从 tui.json 移除 CoHub
+  // 3. 从 tui.json 移除 CoHub（宿主配置：解析失败时跳过写回）
   const tuiPath = getTuiConfigPath();
   if (fs.existsSync(tuiPath)) {
-    const tuiConfig = readJSON(tuiPath);
-    if (tuiConfig) {
+    const tuiReadable = readJsonFile(tuiPath).ok;
+    const tuiConfig = readJSONLoose(tuiPath);
+    if (tuiConfig && tuiReadable) {
       const tuiPlugins: string[] = Array.isArray(tuiConfig.plugin) ? [...tuiConfig.plugin] : [];
       const before = tuiPlugins.length;
       const filtered = tuiPlugins.filter(p => {
@@ -421,14 +539,18 @@ export function uninstallCoHub(): { success: boolean; messages: string[] } {
         writeJSON(tuiPath, tuiConfig);
         messages.push('✓ 已从 tui.json 的 plugin 数组移除 CoHub');
       }
+    } else if (!tuiReadable) {
+      messages.push(`⚠ tui.json 解析失败，已跳过（原文件未被覆盖）: ${tuiPath}`);
     }
   }
 
   // 4. 清理 tui-state.json 中的 co-* 残留（只删 co-* 前缀的，不碰 oh-my-opencode-slim 自己的）
+  //    ⚠️ 宿主/他人插件数据文件：解析失败时跳过，绝不覆盖
   const tuiStatePath = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-slim', 'tui-state.json');
   if (fs.existsSync(tuiStatePath)) {
-    let tuiState = readJSON(tuiStatePath);
-    if (tuiState) {
+    const tuiStateReadable = readJsonFile(tuiStatePath).ok;
+    let tuiState = readJSONLoose(tuiStatePath);
+    if (tuiState && tuiStateReadable) {
       let cleaned = false;
       if (tuiState.agentModels && typeof tuiState.agentModels === 'object') {
         const models = tuiState.agentModels as Record<string, unknown>;
@@ -450,10 +572,12 @@ export function uninstallCoHub(): { success: boolean; messages: string[] } {
   }
 
   // 5. 清理 oh-my-opencode-slim.json agents 字段中的 co-* 代理
+  //    ⚠️ 他人插件配置：解析失败时跳过，绝不覆盖
   const ohMyPath = getOhMyConfigPath();
   if (fs.existsSync(ohMyPath)) {
-    let ohMyConfig = readJSON(ohMyPath);
-    if (ohMyConfig && ohMyConfig.agents && typeof ohMyConfig.agents === 'object') {
+    const ohMyReadable = readJsonFile(ohMyPath).ok;
+    let ohMyConfig = readJSONLoose(ohMyPath);
+    if (ohMyConfig && ohMyReadable && ohMyConfig.agents && typeof ohMyConfig.agents === 'object') {
       let cleanedOhMy = false;
       const agents = ohMyConfig.agents as Record<string, unknown>;
       for (const key of Object.keys(agents)) {

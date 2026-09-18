@@ -12,6 +12,14 @@ type SdkClient = ReturnType<typeof createOpencodeClient>;
 export class ContextEngine {
   /** contextId → TaskContext */
   private registry = new Map<string, TaskContext>();
+  /**
+   * contextId → 最后一次被读写的时间戳（ms）。
+   * registry 的唯二读取者是 `formatContextDetails()`（index.ts 注入详情）与
+   * `consumeMarkedContext()`（消息标记替换）；两者都会刷新本时间戳。
+   * 定时清理据此判断条目是否已「过期未被合法消费」——
+   * 时间戳只在读写时更新，因此不会误删仍在被后续读取的条目。
+   */
+  private registryTouchedAt = new Map<string, number>();
   /** alias → 前置子代理结果 */
   private dependencyCache = new Map<string, DependencyResult>();
   /**
@@ -46,6 +54,7 @@ export class ContextEngine {
       errors: [],
       dependencies: [],
     });
+    this.registryTouchedAt.set(contextId, Date.now());
     return contextId;
   }
 
@@ -62,6 +71,7 @@ export class ContextEngine {
 
     if (args.strategy === 'none') return;
     context.strategy = args.strategy;
+    this.touch(contextId);
 
     try {
       const windowSize = this.config.relevantMessageWindow;
@@ -111,6 +121,9 @@ export class ContextEngine {
       }
     } catch {
       // SDK 调用失败时保留最小上下文
+    } finally {
+      // 填充结束（成功或失败）刷新时间戳：真正的"可被消费"起点在填充完成后
+      this.touch(contextId);
     }
   }
 
@@ -144,12 +157,14 @@ export class ContextEngine {
     const context = this.registry.get(contextId);
     if (!context) {
       // 上下文已过期或被清理，移除标记
+      this.registryTouchedAt.delete(contextId);
       return messageText.replace(CONTEXT_MARKER_PATTERN, '');
     }
 
     const result = replaceMarkerWithContext(messageText, context);
-    // 消费后清理
+    // 消费后清理（读取即消费：标记只出现一次，替换后不可能再被合法消费）
     this.registry.delete(contextId);
+    this.registryTouchedAt.delete(contextId);
     return result;
   }
 
@@ -160,6 +175,7 @@ export class ContextEngine {
   formatContextDetails(contextId: string): string {
     const context = this.registry.get(contextId);
     if (!context) return '';
+    this.touch(contextId);
 
     const parts: string[] = [];
 
@@ -310,5 +326,58 @@ export class ContextEngine {
         this.dependencyCache.delete(key);
       }
     }
+  }
+
+  /** 刷新 registry 条目的「最后读写时间」（内部使用） */
+  private touch(contextId: string): void {
+    if (this.registry.has(contextId)) this.registryTouchedAt.set(contextId, Date.now());
+  }
+
+  /**
+   * 显式释放一个已消费完的上下文（供调用方在注入完成后主动回收）。
+   * 未注册的 contextId 为无害 no-op。
+   */
+  releaseContext(contextId: string): void {
+    this.registry.delete(contextId);
+    this.registryTouchedAt.delete(contextId);
+  }
+
+  /**
+   * 清理长期未被读写的 registry 条目（默认 20 分钟）。
+   *
+   * 背景：`registry` 的唯一删除点原本在 `consumeMarkedContext()` 内，而该方法全仓库零调用
+   * （真实注入路径是 `formatContextDetails()`），于是每次委派都新增一条 TaskContext 且永不回收。
+   *
+   * 为何用「最后读写时间」而非 `createdAt`：TaskContext 类型上没有任何时间字段
+   * （见 `context/types.ts`），故另开 `registryTouchedAt` 侧表记录；且清理**不能早于消费**——
+   * 时间戳在 `fillContextAsync` 结束时刷新、并在每次 `formatContextDetails()` / `consumeMarkedContext()`
+   * 读取时刷新，因此仍会被读取的条目不会因登记时间久远而被误删。
+   * 阈值取 20 分钟（两倍于依赖缓存 TTL）：一次委派从登记到注入详情是秒级，
+   * 20 分钟已远超任何合法读写窗口，仅回收真正的泄漏。
+   *
+   * @returns 被回收的条目数
+   */
+  cleanupStaleContexts(maxAgeMs: number = 20 * 60 * 1000): number {
+    const now = Date.now();
+    let removed = 0;
+    for (const contextId of this.registry.keys()) {
+      const touchedAt = this.registryTouchedAt.get(contextId);
+      if (touchedAt === undefined) {
+        // 侧表缺失（异常路径）→ 视为刚登记，留给下一轮，避免误删活跃上下文
+        this.registryTouchedAt.set(contextId, now);
+        continue;
+      }
+      if (now - touchedAt > maxAgeMs) {
+        this.registry.delete(contextId);
+        this.registryTouchedAt.delete(contextId);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  /** 当前 registry 条目数（诊断/测试用，只读） */
+  get registrySize(): number {
+    return this.registry.size;
   }
 }

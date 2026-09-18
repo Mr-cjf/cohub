@@ -93,11 +93,16 @@ export function createCouncilTool(config: CouncilRuntimeConfig, ctx: any) {
         }
         const run = s.value;
         run.result.catch(() => {}); // dispose 后的拒绝不产生 unhandledRejection
+        // 超时定时器必须显式清理：race 输掉的那个分支不会被取消，若 councillor 正常早返回，
+        // 定时器会一直挂在事件循环上直到超时才 fire（缺省 180s），把宿主执行单元多钉住最多
+        // 180 秒。这里用 finally 保证「谁先返回」都会清理（正常返回 / 超时 / 抛错三条路径）。
+        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           const outcome = await Promise.race([
             run.result,
-            new Promise<never>((_, reject) => setTimeout(
-              () => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs)),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+            }),
           ]);
           results.push({
             name: c.name,
@@ -111,6 +116,7 @@ export function createCouncilTool(config: CouncilRuntimeConfig, ctx: any) {
             error: e instanceof Error ? e.message : String(e),
           });
         } finally {
+          if (timer !== undefined) clearTimeout(timer);
           try { run.dispose(); } catch { /* 已释放 */ }
         }
       }

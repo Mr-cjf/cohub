@@ -233,16 +233,30 @@ export class TaskTracker {
     const now = Date.now();
     let changed = false;
     for (const [id, job] of this.jobs) {
-      if (
-        (job.status === "completed" || job.status === "failed" || job.status === "cancelled") &&
-        job.completedAt != null &&
-        now - job.completedAt > maxAgeMs
-      ) {
+      if (isPrunableTerminalJob(job, now, maxAgeMs)) {
         this.jobs.delete(id);
         changed = true;
       }
     }
     if (changed) this.persist();
+  }
+
+  /**
+   * 落盘前的内存清理（原地删除、不落盘）。
+   * 与 pruneTerminalJobs() 共用同一判定谓词 isPrunableTerminalJob，
+   * 但**不调用 persist()**，避免与 persist() 相互递归。
+   * @returns 本次删除的条数
+   */
+  private pruneTerminalJobsInMemory(maxAgeMs: number): number {
+    const now = Date.now();
+    let removed = 0;
+    for (const [id, job] of this.jobs) {
+      if (isPrunableTerminalJob(job, now, maxAgeMs)) {
+        this.jobs.delete(id);
+        removed++;
+      }
+    }
+    return removed;
   }
 
   /**
@@ -321,13 +335,17 @@ export class TaskTracker {
 
   /**
    * 把 tracker 状态落盘到 stateDir/tracker-state.json（供 job-board hook 读取）。
-   * 落盘前先做过期清理：MCP 收不到子代理的完成回调，超过 STALE_TASK_MS 的 pending/running
-   * 视为已结束，避免面板永久残留 running 条目（条目随委派次数单调累积）。
+   * 落盘前先做过期清理，避免条目随委派次数单调累积：
+   * 1. sweepStaleJobs —— MCP 收不到子代理的完成回调，超过 STALE_TASK_MS 的 pending/running
+   *    视为已结束，避免面板永久残留 running 条目；
+   * 2. pruneTerminalJobsInMemory —— 删除超过 PRUNE_TERMINAL_JOB_MS 的终态（completed/failed/
+   *    cancelled）条目，否则终态条目只增不减，tracker-state.json 与外层全量 parse 开销单调增长。
    * 静默容忍任何失败：面板是辅助功能，磁盘问题不得影响主流程。
    */
   private persist(): void {
     try {
       this.sweepStaleJobs(STALE_TASK_MS);
+      this.pruneTerminalJobsInMemory(PRUNE_TERMINAL_JOB_MS);
       const aliasCounters: Record<string, number> = {};
       for (const [key, value] of this.aliasCounter) {
         aliasCounters[key] = value;
@@ -337,7 +355,8 @@ export class TaskTracker {
         aliasCounters,
         updatedAt: Date.now(),
       };
-      writeFileAtomic(getTrackerFilePath(), JSON.stringify(state, null, 2));
+      // 无缩进：本文件由 hook 全量 JSON.parse 消费（机器读），缩进纯属体积浪费。
+      writeFileAtomic(getTrackerFilePath(), JSON.stringify(state));
     } catch {
       // ignore — 面板是辅助功能，磁盘问题不得影响主流程
     }
@@ -465,9 +484,62 @@ export function readTrackerState(): TrackerState {
 
 /**
  * 原子写 tracker 状态文件。
+ *
+ * 写前先做终态清理：hook 进程（PreToolUse/PostToolUse）每次 Agent 调用都会
+ * 全量 parse → 追加/更新 → 全量写回，若不清理则终态条目只增不减，
+ * tracker-state.json 随会话时长单调增长，而 job-board hook 在每次
+ * UserPromptSubmit 都要全量 parse 该文件（热路径放大）。
+ * 清理使用与 TaskTracker.pruneTerminalJobs 相同的判定谓词。
  */
 export function writeTrackerState(state: TrackerState): void {
-  writeFileAtomic(getTrackerFilePath(), JSON.stringify(state, null, 2));
+  pruneTerminalJobsInState(state, PRUNE_TERMINAL_JOB_MS);
+  // 无缩进：本文件由 hook 全量 JSON.parse 消费（机器读），缩进纯属体积浪费。
+  writeFileAtomic(getTrackerFilePath(), JSON.stringify(state));
+}
+
+/**
+ * 终态任务（completed/failed/cancelled）的超龄保留阈值：10 分钟。
+ * 语义：终态条目仅供面板短期回顾，超过该时长即可安全移除；
+ * 与非终态过期阈值 STALE_TASK_MS（30 分钟）语义不同，勿混用。
+ */
+export const PRUNE_TERMINAL_JOB_MS = 600_000;
+
+/**
+ * 单个 job 是否可被清理：终态 + 有 completedAt + 已超龄。
+ * TaskTracker.pruneTerminalJobs 与 writeTrackerState 共用此谓词，避免两处判定漂移。
+ */
+function isPrunableTerminalJob(
+  job: JobRecord,
+  now: number,
+  maxAgeMs: number,
+): boolean {
+  return (
+    (job.status === "completed" ||
+      job.status === "failed" ||
+      job.status === "cancelled") &&
+    job.completedAt != null &&
+    now - job.completedAt > maxAgeMs
+  );
+}
+
+/**
+ * 原地删除 state.jobs 中已超龄的终态条目，返回删除条数。
+ * 非终态（pending/running）条目**永不**在此删除 —— 它们由 STALE_TASK_MS 的
+ * sweep 路径负责，避免误删仍在运行的任务导致 abortJob / 面板失联。
+ */
+export function pruneTerminalJobsInState(
+  state: TrackerState,
+  maxAgeMs = PRUNE_TERMINAL_JOB_MS,
+): number {
+  if (!Array.isArray(state.jobs)) return 0;
+  const now = Date.now();
+  const kept = state.jobs.filter((job) => !isPrunableTerminalJob(job, now, maxAgeMs));
+  const removed = state.jobs.length - kept.length;
+  if (removed > 0) {
+    state.jobs = kept;
+    state.updatedAt = Date.now();
+  }
+  return removed;
 }
 
 /**

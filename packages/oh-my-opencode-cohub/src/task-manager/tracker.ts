@@ -391,11 +391,27 @@ export class TaskTracker {
   }
 
   /**
-   * 终态收尾：确保 latencyMs 已记录（质量回送缺失时用 createdAt 差值补录）。
-   * P2-2: 未判定时 quality.score 保持 undefined（语义≠质量最差），
-   * 仅 assessQuality 实际执行过（updateQuality 传入）才携带 score。
+   * 终态收尾：写入终态即视为「已与父会话核对」——两种语义在此对齐。
+   *
+   * `terminalReconciled` 有两处语义：
+   * (a) Board 语义：终态任务不再出现在 `Reusable Sessions`（getBoardText 用它过滤）；
+   * (b) prune 语义：允许 `pruneTerminalJobs()` 回收。
+   *
+   * 背景任务的完成路径是 `session.idle` → `updateByChildSessionId()` → `finalize()`，
+   * 该路径原先不设本标记，而唯一的补设点是 `registerBeforeTask()` 的 `_reconciledForParent`
+   * 分支（要求同一 parent **再次**注册任务）。会话切换/结束后旧 parent 不再注册，
+   * 旧背景任务便永不满足 prune 条件 → 永久留在 jobs Map，且每轮 `getBoardText()` 都被遍历。
+   *
+   * 语义判断：finalize 只在这些终态写入路径上被调用（updateAfterTask 前台完成、
+   * updateByChildSessionId、cleanupStaleJobs、updateQuality、markCancelled、abortJob），
+   * 其中 markCancelled/abortJob 已经显式设过标记——即「进入终态」在本模块内本就
+   * 等价于「已核对」，因此在 finalize 内统一补设语义是正确的，不是权宜之计。
    */
   private finalize(job: JobRecord): void {
+    // 终态即视为已核对：保证任何终态路径都能被 pruneTerminalJobs 回收
+    if (job.status !== 'running') {
+      job.terminalReconciled = true;
+    }
     const latencyMs = Date.now() - job.createdAt;
     if (!job.quality) {
       job.quality = { latencyMs };

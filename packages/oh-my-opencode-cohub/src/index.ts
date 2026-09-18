@@ -19,6 +19,7 @@ import { ContextEngine } from './context/engine';
 import { resolveStrategy } from './context/strategy';
 import type { ContextStrategy } from './context/types';
 import { loadCoHubConfig, type AgentOverride } from './config/loader';
+import { appendCtxDiag, resolveCtxDiagSettings } from './context/diag-log';
 import { createCouncilTool, CouncilManager } from './tools/council';
 import { createCloseJobTool } from './tools/job-control';
 import * as fs from 'node:fs';
@@ -253,6 +254,8 @@ const CoHubPlugin: Plugin = async (input, options) => {
 
   // ===== 加载用户配置覆盖 =====
   const userConfig = loadCoHubConfig(projectDir);
+  // 诊断开关（缺省关闭）：在初始化时求值一次，热路径只读常量
+  const ctxDiag = resolveCtxDiagSettings(userConfig.diag);
   if (userConfig.agents) {
     for (const agent of agents) {
       const override = userConfig.agents[agent.name];
@@ -349,12 +352,20 @@ const CoHubPlugin: Plugin = async (input, options) => {
       appendLog('cleanupStaleJobs', '定时清理过期任务失败', err);
     }
   }, 30_000);
+  // 定时器不应钉住宿主进程（dispose 不被调用时的兜底；Node 下 Timeout 才有 unref）
+  if (typeof cleanupTimer.unref === 'function') cleanupTimer.unref();
 
   const contextCleanupTimer = setInterval(() => {
-    try { contextEngine.cleanupStaleDependencies(); } catch (err) {
+    try {
+      contextEngine.cleanupStaleDependencies();
+      // registry 兜底回收：正常路径已在注入完成后释放（见下方 releaseContext），
+      // 此处仅回收异常路径遗留的条目，防止长驻进程内存无限增长
+      contextEngine.cleanupStaleContexts();
+    } catch (err) {
       appendLog('contextCleanupTimer', '定时清理上下文失败', err);
     }
   }, 60_000);
+  if (typeof contextCleanupTimer.unref === 'function') contextCleanupTimer.unref();
 
   // ===== 构建 agent 对象（供直接返回 + config hook 双重注册） =====
   const agentConfigs: Record<string, unknown> = {};
@@ -530,29 +541,26 @@ const CoHubPlugin: Plugin = async (input, options) => {
               if (details) {
                 output.args[targetField] += details;
               }
+              // 注入即消费完毕：显式释放 registry 条目（本 contextId 不会再被读取——
+              // 标记消费路径 consumeMarkedContext 全仓库零调用，注入走的就是上面这次 formatContextDetails）
+              contextEngine.releaseContext(contextId);
 
-              // 诊断日志：记录完整上下文注入结果（超过 50KB 自动截断保留最后 30 条）
-              const logPath = path.join(os.tmpdir(), 'opencode', 'ctx-diag.log');
-              try {
-                const stat = fs.statSync(logPath);
-                if (stat.size > 50 * 1024) {
-                  // 超过 50KB，保留最后 30 条
-                  const lines = fs.readFileSync(logPath, 'utf-8').trim().split('\n');
-                  fs.writeFileSync(logPath, lines.slice(-30).join('\n') + '\n');
-                }
-              } catch { /* 文件不存在，跳过 */ }
-              const finalPrompt = typeof output.args?.prompt === 'string' ? output.args.prompt : '';
-              fs.appendFileSync(logPath, JSON.stringify({
-                time: new Date().toISOString(),
-                session: input.sessionID?.slice(0, 20) ?? '?',
-                subagent: subagentType,
-                strategy,
-                targetField,
-                hasDetails: !!details,
-                detailsLen: details ? details.length : 0,
-                detailsPreview: details ? details.replace(/\n/g, '\\n').slice(0, 200) : '',
-                promptEnd: finalPrompt.slice(-120),
-              }) + '\n');
+              // 诊断日志（opt-in，默认关闭）：开启后异步记录上下文注入结果，不阻塞事件循环。
+              // 开启方式：COHUB_CTX_DIAG=1 或配置 diag.enabled=true；详见 context/diag-log.ts
+              if (ctxDiag.enabled) {
+                const finalPrompt = typeof output.args?.prompt === 'string' ? output.args.prompt : '';
+                appendCtxDiag({
+                  time: new Date().toISOString(),
+                  session: input.sessionID?.slice(0, 20) ?? '?',
+                  subagent: subagentType,
+                  strategy,
+                  targetField,
+                  hasDetails: !!details,
+                  detailsLen: details ? details.length : 0,
+                  detailsPreview: details ? details.replace(/\n/g, '\\n').slice(0, 120) : '',
+                  promptEnd: finalPrompt.slice(-80),
+                }, ctxDiag.filePath);
+              }
 
             }
           }

@@ -23,6 +23,23 @@ const INSTALL_RECORD_NAME = ".cohub-preset-install.json";
 /** 安装台账版本号 */
 const INSTALL_RECORD_VERSION = 1;
 
+/**
+ * 合法 preset id 白名单：小写字母 / 数字 / 连字符，且必须以字母或数字开头。
+ *
+ * ⚠️ 为何必须校验（请勿删除此检查）：本文件的孤儿清理会用**台账里的键**直接
+ * `join(userRoot, id)` 并 `rmSync(..., { recursive: true, force: true })`。台账是磁盘上
+ * 的普通 JSON 文件（位于用户目录，可被篡改、损坏或由第三方写入），若键为
+ * `../../Documents` 之类的相对路径，join 会逃出 preset root，recursive 删除就会
+ * 落到 preset 目录**之外**的任意路径。凡是从台账读出的 id，在参与任何路径拼接 /
+ * 删除之前都必须先过这个正则。
+ */
+const PRESET_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+/** 台账键是否是可安全用于路径拼接的 preset id（见 PRESET_ID_PATTERN 的说明） */
+function isSafePresetId(id: unknown): id is string {
+  return typeof id === "string" && PRESET_ID_PATTERN.test(id);
+}
+
 /** 单个 preset 的安装记录 */
 export interface PresetInstallEntry {
   /** 记录写入时的插件版本 */
@@ -161,13 +178,45 @@ function adoptExistingPreset(id: string, src: string, dst: string, version: stri
   return { version, files: imported };
 }
 
-/** 读台账；不存在 / 损坏 / 版本不符都返回 null（调用方按「仅新增」降级） */
-function readRecord(userRoot: string): InstallRecord | null {
+/**
+ * 读台账；不存在 / 损坏 / 版本不符都返回 null（调用方按「仅新增」降级）。
+ *
+ * 除结构校验外，这里还**逐键校验 preset id**并丢弃不合法键（见 PRESET_ID_PATTERN 注释）：
+ * 台账键随后会被用于 join(userRoot, id) + rmSync(recursive)，不校验就等于把删除路径
+ * 交给台账文件的内容决定。
+ */
+function readRecord(userRoot: string, logger?: any): InstallRecord | null {
   try {
     const raw = readFileSync(recordPathFor(userRoot), "utf8");
     const parsed = JSON.parse(raw);
-    if (parsed && parsed.version === INSTALL_RECORD_VERSION && parsed.presets && typeof parsed.presets === "object") {
-      return parsed as InstallRecord;
+    if (
+      parsed &&
+      parsed.version === INSTALL_RECORD_VERSION &&
+      parsed.presets &&
+      typeof parsed.presets === "object" &&
+      !Array.isArray(parsed.presets)
+    ) {
+      // 采取「过滤非法键」而非「整体判损坏」：整体判损坏会让升级直接退化成「仅新增」，
+      // 等于任何人都能靠塞一个非法键关掉用户的 preset 升级能力（把安全修复变成可用性
+      // 攻击面）；过滤则只丢弃不合法的那几条，合法条目照常工作 —— 且非法条目被清出
+      // 内存中的 record，随后 writeRecordSafe 落盘时会被一并写掉。
+      const presets: Record<string, PresetInstallEntry> = {};
+      const dropped: string[] = [];
+      for (const [id, entry] of Object.entries(parsed.presets as Record<string, PresetInstallEntry>)) {
+        if (!isSafePresetId(id)) {
+          dropped.push(id);
+          continue;
+        }
+        presets[id] = entry;
+      }
+      if (dropped.length > 0) {
+        logger?.warn?.(
+          `cohub: 安装台账中含 ${dropped.length} 个非法 preset id，已忽略（可能是台账损坏或被伪造）：${dropped
+            .map((id) => JSON.stringify(id))
+            .join(", ")}`,
+        );
+      }
+      return { version: INSTALL_RECORD_VERSION, presets };
     }
     return null;
   } catch {
@@ -207,7 +256,7 @@ export function installShippedPresets(
     return result; // 没带 presets（本地源码开发）——静默跳过
   }
 
-  let record = readRecord(userRoot);
+  let record = readRecord(userRoot, logger);
   /** 本次包内实际提供的 preset id 集合（用于识别需要清理的孤儿目录） */
   const entryIds = new Set(entries.filter((e) => e.isDirectory()).map((e) => e.name));
   if (record === null) {
@@ -242,6 +291,11 @@ export function installShippedPresets(
     // 降级路径同样清理孤儿（老用户升级上来时 cohub-standard 已被取代）
     for (const id of Object.keys(record.presets)) {
       if (entryIds.has(id)) continue;
+      // 第二层防御：删除前再校验一次 id（台账键可能来自磁盘，绝不能直接拼进删除路径）
+      if (!isSafePresetId(id)) {
+        logger?.warn?.(`cohub: 跳过非法 preset id 的清理（疑似篡改的台账键）: ${JSON.stringify(id)}`);
+        continue;
+      }
       try {
         rmSync(join(userRoot, id), { recursive: true, force: true });
         delete record.presets[id];
@@ -329,6 +383,11 @@ export function installShippedPresets(
   // （例：cohub-standard 已被 cohub-cordis 取代）。只清理台账确认由本插件安装过的 id。
   for (const id of Object.keys(record.presets)) {
     if (entryIds.has(id)) continue;
+    // 第二层防御：删除前再校验一次 id（台账键可能来自磁盘，绝不能直接拼进删除路径）
+    if (!isSafePresetId(id)) {
+      logger?.warn?.(`cohub: 跳过非法 preset id 的清理（疑似篡改的台账键）: ${JSON.stringify(id)}`);
+      continue;
+    }
     try {
       rmSync(join(userRoot, id), { recursive: true, force: true });
       delete record.presets[id];

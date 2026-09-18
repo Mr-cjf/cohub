@@ -216,6 +216,11 @@ export async function delegateHandler(
     ? `strategy=${strategy}, files=${ctx.relevantFiles.length}, decisions=${ctx.keyDecisions.length}`
     : "no context";
 
+  // context 的全部消费均在本次 handler 内完成（上方 getFormattedContext / getContext），
+  // 返回后不再有任何读取方。此处释放，避免 ContextEngine.contexts 随 co_delegate 次数
+  // 单调增长（MCP Server 为常驻进程，进程生命周期 = 会话生命周期）。
+  contextEngine.removeContext(generatedId);
+
   return {
     success: true,
     task_id: generatedId,
