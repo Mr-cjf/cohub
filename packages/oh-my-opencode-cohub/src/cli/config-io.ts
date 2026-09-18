@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { writeJsonFileAtomic } from '../shared/fs-atomic';
+import { COUNCIL_TIMEOUT_MS } from '../shared/constants';
 import { execSync } from 'node:child_process';
 
 const PACKAGE_NAME = 'oh-my-opencode-cohub';
@@ -340,7 +341,7 @@ export function writeDefaultConfig(): { success: boolean; message: string } {
     agents,
     council: councilCount > 0 ? {
       default_preset: 'default',
-      timeout: 180000,
+      timeout: COUNCIL_TIMEOUT_MS,
       councillor_execution_mode: 'parallel',
       councillor_retries: 3,
       presets: {

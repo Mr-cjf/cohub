@@ -26,6 +26,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { appendLog } from './utils/log.js';
 import { writeFileAtomic } from './shared/fs-atomic';
+import { COUNCIL_TIMEOUT_MS, STALE_TASK_MS } from './shared/constants';
 import { createOrchestrationLayer } from './orchestration';
 import { stripExistingContracts } from './orchestration/contract';
 import { enforcePromptBudget } from './context/extractor';
@@ -280,7 +281,7 @@ const CoHubPlugin: Plugin = async (input, options) => {
   // ===== Council 初始化（无配置时使用内置默认预设） =====
   const DEFAULT_COUNCIL_CONFIG = {
     default_preset: 'default',
-    timeout: 180000,
+    timeout: COUNCIL_TIMEOUT_MS,
     councillor_execution_mode: 'parallel' as const,
     councillor_retries: 3,
     presets: {
@@ -326,11 +327,10 @@ const CoHubPlugin: Plugin = async (input, options) => {
     return undefined;
   }
 
-  // ===== 兜底：定时清理过期背景任务（30 分钟超时） =====
-  const STALE_TIMEOUT_MS = 30 * 60 * 1000;
+  // ===== 兜底：定时清理过期背景任务（30 分钟超时，阈值来自共享层 STALE_TASK_MS） =====
   const cleanupTimer = setInterval(() => {
     try {
-      const staleSessions = tracker.cleanupStaleJobs(STALE_TIMEOUT_MS);
+      const staleSessions = tracker.cleanupStaleJobs(STALE_TASK_MS);
       for (const sid of staleSessions) {
         // SDK 默认 ThrowOnError=false：HTTP 失败会 resolve 出 { data, error } 而非 reject，
         // 显式检查 res.error；catch 仅兜底网络层异常
@@ -478,7 +478,7 @@ const CoHubPlugin: Plugin = async (input, options) => {
           });
           _lastAlias = alias;
           syncTrackerState(input.sessionID ?? '');
-          tracker.pruneTerminalJobs(STALE_TIMEOUT_MS); // 清理超 30 分钟未更新的终态 job，防止 jobs Map 无限膨胀
+          tracker.pruneTerminalJobs(STALE_TASK_MS); // 清理超 30 分钟未更新的终态 job，防止 jobs Map 无限膨胀
 
           // 注册到 orchestration engine
           if (orchestrationLayer && subagentType && description) {

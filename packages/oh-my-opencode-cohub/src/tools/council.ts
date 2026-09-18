@@ -54,6 +54,7 @@ import {
   RetryBudget,
 } from '../shared/consensus.js';
 import { shortModelLabel } from '../shared/model.js';
+import { COUNCIL_TIMEOUT_MS } from '../shared/constants.js';
 
 // Re-export 共享层符号，保持 council.test.ts 与外部引用路径不变
 export {
@@ -306,7 +307,7 @@ export class CouncilManager {
     // ---- config defaults ----
     // T8: 显式配置优先；未配置时 timeout 作为自适应默认值，实际生效参数在
     // runCouncillors 中按 (strategy, agent) 历史成功率查自适应表获得
-    const timeout = this.config.timeout ?? 180_000;
+    const timeout = this.config.timeout ?? COUNCIL_TIMEOUT_MS;
     const executionMode = this.config.councillor_execution_mode ?? 'parallel';
     const maxRounds = this.config.max_rounds ?? 2;
     const consensusThreshold = this.config.consensus_threshold ?? 0.6;
