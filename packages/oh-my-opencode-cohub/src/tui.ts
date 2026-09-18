@@ -115,6 +115,9 @@ const plugin: TuiPluginModule = {
       spinnerIndex = (spinnerIndex + 1) % SPINNER_FRAMES.length;
       if (state && state.runningCount > 0) api.renderer.requestRender();
     }, 100);
+    // 与 index.ts 的 cleanupTimer 同样处理：onDispose 未被宿主调用时不钉住进程。
+    // TUI 进程另有 stdin/渲染器句柄保持事件循环活跃，unref 不会导致过早退出。
+    if (typeof spinnerTimer.unref === 'function') spinnerTimer.unref();
 
     api.slots.register({
       order: 800,

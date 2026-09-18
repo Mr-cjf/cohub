@@ -2,14 +2,16 @@
  * co_scan MCP Tool -- batch symbol reference scanner.
  *
  * Scans a directory tree for multiple symbol references in a single pass
- * using joint regexes per file batch. This avoids O(symbols x files) scanning
- * cost and replaces the pattern of "one grep per symbol".
+ * using joint regexes compiled once per symbol batch. This avoids
+ * O(symbols x files) scanning cost and replaces "one grep per symbol".
  *
  * Performance principle:
  *   Instead of running one grep per symbol (O(n_symbols x n_files)),
- *   we build a single joint regex per batch: \b(Sym1|Sym2|...|SymN)\b
- *   and scan each file once per batch. With batch size ~500, 1158 symbols
- *   become ~3 regex passes per file instead of 1158 separate scans.
+ *   we build a joint regex per batch: (?<![\w$])(Sym1|Sym2|...|SymN)(?![\w$])
+ *   compile it ONCE, and reuse it for every file. With batch size ~500,
+ *   1158 symbols become ~3 passes per file instead of 1158 separate scans.
+ *   Per-file work independent of the batch (line splitting) is done once
+ *   per file, not once per (file, batch) pair.
  */
 
 import { execFile } from "node:child_process";
@@ -259,7 +261,8 @@ interface FileScan {
 }
 
 /**
- * Scan a single file's content against a set of symbol entries.
+ * Scan the (already split) lines of a single file against ONE compiled symbol
+ * batch. See `compileBatch` for the content-independent per-batch work.
  *
  * Matching semantics:
  * - Lookbehind/lookahead (?<![\w$]) / (?![\w$]): ensures "Foo" does NOT match
@@ -278,16 +281,19 @@ interface FileScan {
  *   better to count a constructor as a reference than mis-report a zero-ref.
  *   Method/field declarations are also NOT skipped (known limitation, noted).
  */
-function scanContent(
-  content: string,
-  entries: { simple: string; escaped: string }[],
-  includeSamples: boolean,
-  countDeclarations: boolean,
-): FileScan {
-  const hits = new Map<string, number>();
-  const declarationHits = new Map<string, number>();
-  const sampleLines = new Map<string, string[]>();
+/** A compiled symbol batch: joint regex + its O(1) simple-name lookup table. */
+interface CompiledBatch {
+  regex: RegExp;
+  entriesBySimple: Map<string, { simple: string; escaped: string }>;
+}
 
+/**
+ * Compile one batch of symbol entries into a joint regex + lookup map.
+ *
+ * This depends only on the batch, NEVER on file content, so the caller must
+ * compile each batch exactly once and reuse it for every file (Fix 4a).
+ */
+function compileBatch(entries: { simple: string; escaped: string }[]): CompiledBatch {
   // Pre-build a map for O(1) lookup (Fix 4a micro-optimization)
   const entriesBySimple = new Map<string, { simple: string; escaped: string }>();
   for (const e of entries) {
@@ -300,8 +306,22 @@ function scanContent(
   // NOTE: \\w in template literal is required so \w reaches the regex engine
   const regex = new RegExp(`(?<![\\w$])(${entries.map((e) => e.escaped).join("|")})(?![\\w$])`, "g");
 
+  return { regex, entriesBySimple };
+}
+
+function scanContent(
+  lines: string[],
+  batch: CompiledBatch,
+  includeSamples: boolean,
+  countDeclarations: boolean,
+): FileScan {
+  const { regex, entriesBySimple } = batch;
+
+  const hits = new Map<string, number>();
+  const declarationHits = new Map<string, number>();
+  const sampleLines = new Map<string, string[]>();
+
   // Process line by line to map matches back to their source lines
-  const lines = content.split("\n");
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const line = lines[lineIdx];
     regex.lastIndex = 0;
@@ -427,17 +447,6 @@ export async function scanHandler(
     }
   }
 
-  // Build a map from simple name to original symbol(s)
-  const simpleToOriginals = new Map<string, string[]>();
-  for (const sym of symbols) {
-    const simple = simpleName(sym);
-    const list = simpleToOriginals.get(simple) || [];
-    if (!list.includes(sym)) {
-      list.push(sym);
-    }
-    simpleToOriginals.set(simple, list);
-  }
-
   // Set up timeout
   const timeout = new TimeoutController(timeout_ms);
 
@@ -472,9 +481,11 @@ export async function scanHandler(
     const truncatedByFileLimit = matchedFiles.length > max_files;
 
     // Phase 3: Build regex batches
-    const batches: { entries: SymbolEntry[] }[] = [];
+    // Each batch is compiled ONCE here (regex + lookup map) and reused for every
+    // file: compilation depends only on the symbol batch, never on file content.
+    const batches: CompiledBatch[] = [];
     for (let i = 0; i < entries.length; i += BATCH_SIZE) {
-      batches.push({ entries: entries.slice(i, i + BATCH_SIZE) });
+      batches.push(compileBatch(entries.slice(i, i + BATCH_SIZE)));
     }
 
     // Phase 4: Scan files with concurrency control
@@ -516,14 +527,19 @@ export async function scanHandler(
             return { file, scanned: false as const };
           }
 
-          // Run all batch regexes against this file
+          // Split ONCE per file (batches are content-independent) so the
+          // joint-regex design really does scan each file once per batch
+          // instead of re-splitting and re-compiling per batch.
+          const lines = content.split("\n");
+          const countDecl = input.count_declarations === true;
+
+          // Run all PRECOMPILED batch regexes against this file
           const mergedHits = new Map<string, number>();
           const mergedDeclarationHits = new Map<string, number>();
           const mergedSamples = new Map<string, string[]>();
 
-          const countDecl = input.count_declarations === true;
           for (const b of batches) {
-            const scan = scanContent(content, b.entries, include_samples || false, countDecl);
+            const scan = scanContent(lines, b, include_samples || false, countDecl);
             for (const [sym, count] of scan.hits) {
               mergedHits.set(sym, (mergedHits.get(sym) || 0) + count);
             }
@@ -659,7 +675,8 @@ export function createScanTool() {
     name: "co_scan",
     description:
       "批量符号引用扫描器。在一次扫描中同时统计多个符号在源码树中的引用次数，" +
-      "使用联合正则每文件只匹配一次，避免 O(符号数 x 文件数) 的线性开销。",
+      "使用联合正则分批匹配（每批 500 符号，正则预编译后全文件复用，每文件只做一次行切分），" +
+      "避免每个符号单独搜索造成的 O(符号数 x 文件数) 线性开销。",
     inputSchema: {
       type: "object" as const,
       properties: {

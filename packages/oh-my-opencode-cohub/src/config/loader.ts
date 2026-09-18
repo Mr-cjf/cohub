@@ -9,6 +9,8 @@ import { DEFAULT_CONTEXT_CONFIG } from '../context/types';
 //（纯类型 import + re-export，运行时零依赖；council.ts 不 import loader.ts，无循环依赖）
 import type { CouncilConfig, CouncilPreset, CouncillorConfig } from '../tools/council';
 export type { CouncilConfig, CouncilPreset, CouncillorConfig };
+import type { CtxDiagConfig } from '../context/diag-log';
+export type { CtxDiagConfig };
 
 /** 用户配置中单个代理的覆盖项 */
 export interface AgentOverride {
@@ -23,6 +25,8 @@ export interface CoHubConfig {
   context?: Partial<ContextConfig>;  // 用户可覆盖部分字段
   /** 质量回送配置（P0-1 负反馈闭环，默认开启） */
   quality?: Partial<QualityConfig>;
+  /** 诊断日志配置（默认全部关闭：ctx-diag opt-in；新增字段，旧配置缺省即安全） */
+  diag?: CtxDiagConfig;
 }
 
 /** 配置文件路径 */
@@ -50,6 +54,9 @@ export function loadCoHubConfig(projectDir?: string): CoHubConfig {
   }
   if (project.quality) {
     merged.quality = { ...base.quality, ...project.quality };
+  }
+  if (project.diag) {
+    merged.diag = { ...base.diag, ...project.diag };
   }
   return merged;
 }

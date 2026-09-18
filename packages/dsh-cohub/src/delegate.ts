@@ -18,7 +18,7 @@
 // > DEFAULT_ENV_CONTRACT（探针式）；use="off" 不读不写；读写失败静默降级，行为不劣化。
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
-import { EnvSignatureLearner, envFingerprint, normalizeErrorSignature, pickEnvContractText, readEnvSignatures, writeEnvSignatures, type EnvSignaturesConfig } from "./env-signatures.ts";
+import { EnvSignatureLearner, envFingerprint, normalizeErrorSignature, pickEnvContractText, readEnvSignatures, writeEnvSignatures, type EnvFingerprint, type EnvSignaturesConfig } from "./env-signatures.ts";
 import { contentText } from "./text-utils.ts";
 import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 
@@ -375,14 +375,18 @@ async function resolveProviderFallbackModel(provider: string, ctx: any): Promise
  * 解析执行器环境契约文本。
  * 优先级：manualText > manual contract > 命中缓存（指纹一致 + TTL 内）> DEFAULT_ENV_CONTRACT。
  * envContract.enabled 为 false 时返回空字符串。
+ *
+ * fpOverride：调用方已算好的指纹（避免同一流程内重复探测）。
+ * 省略时现场计算——envFingerprint 自身已进程内记忆化，重复调用不再是 I/O 成本。
  */
 export function resolveContractText(
   envContract: { enabled: boolean; text?: string },
   envSig: EnvSignaturesConfig,
   ctx: any,
+  fpOverride?: EnvFingerprint,
 ): { text: string; source: string } {
   if (!envContract.enabled) return { text: "", source: "disabled" };
-  const fp = envFingerprint();
+  const fp = fpOverride ?? envFingerprint();
   const cached = envSig.use !== "off" ? readEnvSignatures(envSig.cachePath) : null;
   const picked = pickEnvContractText({
     manualText: envContract.text,
@@ -509,15 +513,15 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       // ④ 构造 agentOptions（共享函数；provider 未配 model 时解析该 provider 的默认模型）
       const agentOptions = await buildAgentOptions(route, ctx);
 
-      // ⑤ 执行器环境契约注入（共享函数）
+      // ⑤ 执行器环境契约注入（共享函数）：指纹只算一次，契约解析与随后的学习者共用
+      const fp = envFingerprint();
       const contractResult = resolveContractText(
         { enabled: envContract.enabled, text: envContract.text },
         envSig,
         ctx,
+        fp,
       );
       const contractText = contractResult.text;
-      // 计算指纹，供学习者使用（resolveContractText 内部已计算一次，但此处需要独立引用）
-      const fp = envFingerprint();
 
       // ⑥ 中止/失败重试循环（P1-2）+ N2 停滞检测（P3-1）：
       //    默认 maxRetries=0 → 单次尝试，失败即抛错（带结构化 cause）；

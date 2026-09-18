@@ -105,15 +105,49 @@ function detectLocale(): string {
 }
 
 /**
+ * 探测本进程的指纹基值（昂贵路径：2 次同步 require + Intl 探测）。
+ * 仅在首次调用时执行一次，结果由 envFingerprint 记忆化复用。
+ */
+function probeEnvFingerprintBase(): EnvFingerprint {
+  return {
+    dsh: probePackageVersion("@deepseek-ai/dsh-subagent/package.json"),
+    codeRuntime: probePackageVersion("@deepseek-ai/dsh-code-runtime/package.json"),
+    host: process.platform,
+    locale: detectLocale(),
+  };
+}
+
+/**
+ * 进程内指纹基值记忆化缓存。
+ *
+ * 为什么 memoize 安全（逐字段论证）：
+ *   - dsh / codeRuntime：来自 createRequire 同步 require 的 package.json。Node 的模块缓存
+ *     本身就使同一 specifier 在进程内只求值一次——第二次 require 拿到的**必然**是同一版本；
+ *     记忆化与 require 语义逐字一致，不会让「本应变化」的值保持陈旧。
+ *   - host：process.platform，进程内常量。
+ *   - locale：Intl.DateTimeFormat().resolvedOptions().locale 由进程启动时的 ICU 默认区域决定，
+ *     Node 未提供任何运行期修改默认 locale 的公开 API → 进程内常量。
+ * 因此探测值与进程同生命周期；环境真变化（升级/换机）必然伴随进程重启，指纹随之重算。
+ * 注意：这不影响缓存有效性判定——readEnvSignatures 每次仍实时读磁盘，
+ * 其他进程写入的缓存（含新指纹）照常参与比对，TTL 语义不变。
+ */
+let envFingerprintBase: EnvFingerprint | null = null;
+
+/**
  * 计算当前环境指纹。deps 可覆盖（测试）；运行时尽力从已安装包读取版本，
  * 拿不到记 "unknown"——指纹因此退化为 host+locale，仍能区分跨环境差异。
+ *
+ * 探测部分在进程内记忆化（见 envFingerprintBase）；每次仍返回**全新对象**，
+ * 调用方修改返回值不会污染缓存或其他调用方（与记忆化前语义一致）。
  */
 export function envFingerprint(deps?: Partial<EnvFingerprint>): EnvFingerprint {
+  if (envFingerprintBase === null) envFingerprintBase = probeEnvFingerprintBase();
+  const base = envFingerprintBase;
   return {
-    dsh: deps?.dsh ?? probePackageVersion("@deepseek-ai/dsh-subagent/package.json"),
-    codeRuntime: deps?.codeRuntime ?? probePackageVersion("@deepseek-ai/dsh-code-runtime/package.json"),
-    host: deps?.host ?? process.platform,
-    locale: deps?.locale ?? detectLocale(),
+    dsh: deps?.dsh ?? base.dsh,
+    codeRuntime: deps?.codeRuntime ?? base.codeRuntime,
+    host: deps?.host ?? base.host,
+    locale: deps?.locale ?? base.locale,
   };
 }
 
