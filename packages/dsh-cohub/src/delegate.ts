@@ -20,6 +20,7 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
 import { EnvSignatureLearner, envFingerprint, normalizeErrorSignature, pickEnvContractText, readEnvSignatures, writeEnvSignatures, type EnvSignaturesConfig } from "./env-signatures.ts";
 import { contentText } from "./text-utils.ts";
+import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 
 /** 单个 skill 的路由配置（来自组合层 cordis.patch.yml 或 DSH settings 的 cohub.skills） */
 export interface SkillRouteConfig {
@@ -494,7 +495,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       const { retry, stall, schedule } = resolveRuntimeConfig();
       const RETRYABLE = new Set(retry.retryableReasons);
       ctx.logger?.info?.("[cohub schedule] 生效调度参数：batch=" + (schedule?.maxParallelBatch ?? 3)
-        + " wallMs=" + (schedule?.wallClockBudgetMs ?? 600_000));
+        + " wallMs=" + (schedule?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS));
 
       // ① 按 skill 名精确匹配技能 + 查找路由配置（共享函数）
       const { skill, route } = resolveSkillAndRoute(args.skill, getRoutes, ctx);

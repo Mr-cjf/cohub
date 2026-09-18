@@ -19,6 +19,7 @@ import {
 } from "./delegate.ts";
 import type { CoHubSkill } from "./skills.ts";
 import { contentText } from "./text-utils.ts";
+import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 
 /** 单个批量委派任务 */
 export interface DelegateBatchTask {
@@ -65,7 +66,7 @@ export function createDelegateBatchTool(
     // 保留 MAX_BATCH_SIZE 作为绝对安全上限（防止配置错误导致超量并行）。
     const rawMaxParallel = Math.max(1, scheduleCfg?.maxParallelBatch ?? 3);
     return {
-      wallClockBudgetMs: Math.max(0, scheduleCfg?.wallClockBudgetMs ?? 600_000),
+      wallClockBudgetMs: Math.max(0, scheduleCfg?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS),
       maxParallelBatch: Math.min(rawMaxParallel, MAX_BATCH_SIZE),
     };
   }

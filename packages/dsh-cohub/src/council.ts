@@ -5,6 +5,7 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { contentText } from "./text-utils.ts";
 import { DEFAULT_SPAWN_TRANSPORT } from "./delegate.ts";
 import { shortModelLabel } from "./shared/model.ts";
+import { COUNCIL_TIMEOUT_MS } from "./shared/constants.ts";
 import {
   type CouncillorResult,
   formatCouncillorPrompt,
@@ -66,7 +67,7 @@ export function createCouncilTool(config: CouncilRuntimeConfig, ctx: any) {
         throw new Error("council_session: no councillors configured (set councillors on the cohub row in $DSH_HOME/cordis.patch.yml)");
       }
       const provider = config.councilProvider ?? DEFAULT_SPAWN_TRANSPORT;
-      const timeoutMs = config.councilTimeoutMs ?? 180_000;
+      const timeoutMs = config.councilTimeoutMs ?? COUNCIL_TIMEOUT_MS;
 
       // 并行启动所有 councillor
       const starts = await Promise.allSettled(councillors.map(c =>

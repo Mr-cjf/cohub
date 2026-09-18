@@ -17,6 +17,7 @@ import { COHUB_SKILLS } from "./skills";
 import { createCouncilTool } from "./council";
 import { createDelegateTool } from "./delegate";
 import { createDelegateBatchTool } from "./delegate_batch.ts";
+import { COUNCIL_TIMEOUT_MS, WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 
 import { DEFAULT_ERROR_CATEGORIES } from "./env-signatures";
 import { installSettingsSection, settingsNamespace } from "@deepseek-ai/dsh-settings";
@@ -107,8 +108,8 @@ const EnvSignatures = z.object({
 const ScheduleConfig = z.object({
   /** 单批并行委派上限；缺省 3（本环境观测值，部署可调） */
   maxParallelBatch: z.number().default(3),
-  /** 单次执行单元墙钟预算（毫秒）；600_000 仅为本环境观测值，部署可调 */
-  wallClockBudgetMs: z.number().default(600_000),
+  /** 单次执行单元墙钟预算（毫秒）；缺省取自共享常量 WALL_CLOCK_BUDGET_MS（本环境观测值，部署可调） */
+  wallClockBudgetMs: z.number().default(WALL_CLOCK_BUDGET_MS),
 }).default({});
 
 export const name = "cohub";
@@ -118,7 +119,7 @@ export const Config = z.object({
   /** 多模型共识 councillors（M4：非空时注册 council_session 工具） */
   councillors: z.array(Councillor).default([]),
   /** 单 councillor 超时（毫秒） */
-  councilTimeoutMs: z.number().default(180_000),
+  councilTimeoutMs: z.number().default(COUNCIL_TIMEOUT_MS),
   /** 子代理 provider（spawn 为内置进程内后端） */
   councilProvider: z.string().default("spawn"),
   /** skill 路由表（delegate 工具）：按 skill 名覆盖 provider/model/maxTokens，缺省继承父模型 */
@@ -270,7 +271,7 @@ export function apply(ctx, config) {
     ctx.tools.register(createCouncilTool(
       {
         councillors: config.councillors,
-        councilTimeoutMs: config.councilTimeoutMs ?? 180_000,
+        councilTimeoutMs: config.councilTimeoutMs ?? COUNCIL_TIMEOUT_MS,
         councilProvider: config.councilProvider ?? "spawn",
       },
       ctx,
