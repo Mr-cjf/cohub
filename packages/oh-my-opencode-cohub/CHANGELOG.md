@@ -1,4 +1,20 @@
 # CHANGELOG
+## [Unreleased]
+
+### 变更（⚠️ 行为变更）
+- **上下文注入诊断日志改为 opt-in，默认关闭**。此前每次委派都会向 `os.tmpdir()/opencode/ctx-diag.log` 同步写盘（`statSync` + `appendFileSync`），阻塞 opencode 主进程事件循环（实测 ~0.65ms/次委派）。
+- 开启方式（二选一，环境变量优先）：
+  - 环境变量 `COHUB_CTX_DIAG=1`（`=0` 强制关闭）
+  - 配置 `~/.config/opencode/oh-my-opencode-cohub.json` → `{ "diag": { "enabled": true } }`（项目级 `.opencode/oh-my-opencode-cohub.json` 同样支持）
+- 需继续排查上下文注入问题的用户请显式开启；开启后日志**路径与字段不变**，排查习惯不受影响。
+
+### 修复
+- 修复诊断日志的「读全文 + 重写」循环：旧逻辑「超 50KB → 读全文 → 重写末 30 行 → 立即又追加」，导致反复全量读+全量写；改为「异步追加 + 累计写入超 256KB 时压缩一次，且只读 64KB 尾部窗口」，文件体积有硬上界且不再全量读写。
+- 诊断日志写入改为异步串行队列（`fs/promises`），不再阻塞事件循环；文件创建时使用 mode `0o600` 收紧权限。
+
+### 新增
+- 新增 `src/context/diag-log.ts`：诊断日志开关解析（env > 配置 > 缺省关闭）与异步有界写入实现；`CoHubConfig` 新增可选字段 `diag`（缺省即安全，旧配置文件无需改动）。
+
 ## [1.17.0] - 2026-09-16
 
 ### 新增

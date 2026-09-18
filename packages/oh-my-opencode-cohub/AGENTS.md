@@ -19,13 +19,14 @@ OpenCode 中文智能体编排插件。TypeScript ESM，通过 `@opencode-ai/plu
 | `co-rule-app` | `.opencode/rules/*.md` 分析 |
 | `co-planner` | 方案制定——综合需求+信息+规范输出任务分解 |
 
-## dsh-cohub（DeepSeek Harness 版插件，独立仓库）
+## dsh-cohub（DeepSeek Harness 版插件，同仓库兄弟包）
 
-DSH 移植版已拆分为独立仓库：`packages/dsh-cohub`（GitHub 待建：`Mr-cjf/dsh-cohub`）。12 个 co-* 代理以 runtime skills 注册 + 中文指令 section + council 共识工具 + co-orchestrator preset。
+DSH 移植版现在是本 monorepo 内的兄弟包 `packages/dsh-cohub`（remote 只有 `git@github.com:Mr-cjf/cohub.git`，三个原独立仓库已归档）。13 个 co-* skill（12 专职代理 + `co-cordis`）以 runtime skills 注册 + 中文指令 section + council 共识工具 + co-orchestrator preset。
 
 - 构建：`cd packages/dsh-cohub && npm run build`（prepublishOnly 自动构建）
 - 单测（无需 LLM）：`node test/unit.ts`
-- 本机 DSH Desktop 已安装（junction `%APPDATA%\dsh-desktop\harness\profiles\node_modules\dsh-cohub` → 独立仓库）
+- ⚠️ `lib/` 与生成的 `src/skills.ts` 都在 `.gitignore` 中，干净 clone 后必须先 build 才能跑测试
+- 本机 DSH Desktop 已安装（junction `%APPDATA%\dsh-desktop\harness\profiles\node_modules\dsh-cohub` → 本仓库 `packages/dsh-cohub`）
 - 分发：npm publish 后用户 `dsh plugin --profile web add dsh-cohub`
 
 ## 构建
@@ -54,10 +55,12 @@ npm run build
 | 12 个代理提示词源文件（人工编辑） | `src/prompts/*.md` |
 | 提示词自动生成文件（勿手动编辑） | `src/prompts/*.ts` |
 | 提示词生成脚本 | `scripts/generate-prompts.ts` |
-| 上下文共享系统 | `src/context/`（types / strategy / extractor / formatter / engine / extractor.test.ts） |
-| 多模型共识工具 | `src/tools/council.ts` |
+| 上下文共享系统 | `src/context/`（types / strategy / extractor / formatter / engine / diag-log） |
+| 编排引擎（契约 / 调度 / 重试） | `src/orchestration/`（index.ts / contract.ts / engine.ts / retry.ts / scheduler.ts / types.ts） |
+| 跨包共享层（⚠️ 生成物，勿直接编辑） | `src/shared/`（由 `bun cohub-shared/sync.ts` 从 `cohub-shared/src/` 同步，见 `cohub-shared/README.md`） |
+| 多模型共识工具 | `src/tools/`（council.ts / model-stats.ts / adaptive-params.ts / job-control.ts） |
 | CLI 安装/卸载 | `src/cli/`（index.ts / config-io.ts） |
-| Background Job Board 追踪器 | `src/task-manager/`（types.ts / tracker.ts） |
+| Background Job Board 追踪器 | `src/task-manager/`（types.ts / tracker.ts / quality.ts / stats.ts） |
 | 用户配置文件加载 | `src/config/loader.ts` |
 | 中文指令文本 | `src/instructions/chinese.ts` |
 
@@ -99,7 +102,16 @@ bun test
 # 等效命令：npm run test
 ```
 
-目前仅有 `src/context/extractor.test.ts` 一个测试文件。
+测试覆盖 `src/**/*.test.ts`，共 **13 个**测试文件：
+
+| 目录 | 测试文件 |
+|------|----------|
+| `src/context/` | `engine` / `extractor` / `truncate` |
+| `src/orchestration/` | `contract` / `engine` / `retry` / `scheduler` |
+| `src/task-manager/` | `quality` / `stats` / `tracker` |
+| `src/tools/` | `adaptive-params` / `council` / `model-stats` |
+
+（`package.json` 的 `test` 脚本等价于 `bun test ./src`。）
 
 ### 发版
 

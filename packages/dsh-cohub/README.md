@@ -1,13 +1,13 @@
 # dsh-cohub
 
 DeepSeek Harness 版 [oh-my-opencode-cohub](https://github.com/Mr-cjf/oh-my-opencode-cohub)：中文智能体编排插件。
-把「纯调度模式 + 12 专职代理 + 多模型共识 + 运行期调度韧性」移植到 DSH 原生能力之上。
+把「纯调度模式 + 13 个 co-* 技能（12 专职代理 + `co-cordis` 创造模式）+ 多模型共识 + 运行期调度韧性」移植到 DSH 原生能力之上。
 
 ## 与 OpenCode 版的机制映射
 
 | OpenCode 版（oh-my-opencode-cohub） | DSH 版（本包） |
 |---|---|
-| 12 个 agent 注册（双重注册 + config hook） | 12 个 runtime skills（本插件 apply 时注册） |
+| 12 个 agent 注册（双重注册 + config hook） | 13 个 runtime skills（本插件 apply 时注册） |
 | 中文注入 experimental.chat.system.transform | ctx.systemPrompt.section |
 | task 工具 + 并行派发 | DSH 原生 subagent 工具（后台/续聊） |
 | todowrite | DSH 原生 todo_write |
@@ -21,12 +21,16 @@ DeepSeek Harness 版 [oh-my-opencode-cohub](https://github.com/Mr-cjf/oh-my-open
 
 > 注：`dsh plugin add` 不是 CLI 独立子命令，而是把参数转发给 profile 目录内的 `pnpm`（`dsh plugin --profile <name> add <pkg>` ≡ 在该 profile 执行 `pnpm add <pkg>`），安装后自动把声明 `dsh.bundle` 的依赖加入 `dsh.profile.bundles`。
 
-## 技能清单（12 个）
+## 技能清单（13 个）
 
 co-orchestrator（调度）/ co-planner（方案）/ co-oracle（审查）/
 co-explorer（搜索）/ co-librarian（研究）/ co-observer（视觉）/
 co-fixer（执行）/ co-designer（UI）/ co-council（共识）/
-co-rule-user / co-rule-project / co-rule-app（规范分析）
+co-rule-user / co-rule-project / co-rule-app（规范分析）/
+co-cordis（Cordis 插件与 preset 组合创造 —— 第 13 个，需读写+Bash 权限）
+
+> 前 12 个是「专职代理」，`co-cordis` 是 v0.4.7 起新增的创造模式角色（修插件 / 改 harness 组合 / 写 preset）。
+> `test/unit.ts` 断言的正是这 13 个名字，改动技能清单需同步 `scripts/generate-skills.ts` 与测试。
 
 ## 构建
 
@@ -36,12 +40,15 @@ co-rule-user / co-rule-project / co-rule-app（规范分析）
 cd dsh-cohub
 npm run build
 # 等价于：
-#   bun run scripts/generate-skills.ts   # 生成 src/skills.ts
+#   bun run scripts/generate-skills.ts   # ① 生成 src/skills.ts（.md → 技能定义，必须先跑）
+#   bun run scripts/guard-schema.ts      # ② 校验 Config / ScheduleConfig schema 与 cordis.patch.yml 一致
 #   bun build src/index.ts --outdir lib --target node --format esm \
 #     --external @deepseek-ai/cordis --external @deepseek-ai/schemastery \
 #     --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-system-prompt \
 #     --external @deepseek-ai/dsh-skill --external @deepseek-ai/dsh-home-paths \
 #     --external @deepseek-ai/dsh-settings
+#   bun build src/co-cordis-plugin.ts --outdir lib --target node --format esm \
+#     --external @deepseek-ai/dsh-tools   # co-cordis 专用插件（第 13 个技能）
 #   bun run scripts/build-client.js       # src/client/index.js → lib/client.js
 ```
 
@@ -121,11 +128,10 @@ dsh plugin --profile web add <monorepo>/packages/dsh-cohub
       ttlMs: 604800000           # 7 天
       confirmCount: 2
     # P3-3 N3 调度参数：通过 systemPrompt.section 注入实际生效值（cohub:schedule），子代理可见。
+    # ⚠️ useJobTracking 与 adaptiveBatch 已于 2026-09-03 移除（声明了但代码不读的死参数），不要再配。
     schedule:
       maxParallelBatch: 3
       wallClockBudgetMs: 600000
-      useJobTracking: auto       # auto / on / off
-      adaptiveBatch: auto        # auto / off
 ```
 
 完整字段含义与缺省见 [`cordis.patch.yml`](cordis.patch.yml) 顶部注释块。
@@ -140,8 +146,8 @@ dsh plugin --profile web add <monorepo>/packages/dsh-cohub
 
 `npm run build` 后重启 DSH，打开设置 → **插件** 标签，可看到「CoHub 代理模型」卡片：
 
-- **12 个 skill 行**（每个独立配置 provider / model）
-- **调度参数（可选）**：批大小 / 墙钟预算 / Job 跟踪 / 批间自适应
+- **13 个 skill 行**（每个独立配置 provider / model）
+- **调度参数（可选）**：批大小 / 墙钟预算（`useJobTracking`、`adaptiveBatch` 两个控件已随死参数一并从 GUI 删除）
 - **委派重试 / 重试间隔**：maxRetries / retryDelayMs / 可重试原因（逗号分隔）
 - **停滞检测（可选）**：启用复选框 + 5 个阈值 + 可重试复选框（未启用时数字输入框 disabled）
 - **环境契约持久化（可选）**：契约模式（auto/off/manual）/ 缓存 TTL / 确认次数
@@ -210,7 +216,7 @@ cp presets/co-orchestrator/* ~/.dsh/.agent-presets/co-orchestrator/
 **v0.4.6 修正（修复「留空 model」的秒失败）**：`cohub.skills` 中只配 `provider`、不配 `model` 时，旧版 `buildAgentOptions()` 只把 `provider` 交给子代理，模型则回落到**父会话的模型名**。当该模型名不属于这个 provider（例：`provider: tokenproto` 而父会话是 `deepseek-official/deepseek-flash`），DSH 的 pi-ai 适配器在网络 I/O 前就以 `UNKNOWN_MODEL` 拒绝，`delegate` 只返回 `subagent stopped with reason "error" after 0 retry(ies); partial:`，子代理会话里没有任何模型消息。v0.4.6 起：model 缺失时用 `ctx.llm.listModels(provider)` 取该 provider 目录的首个模型作为回退（适配器偏好顺序的第一项），查询失败或空目录则降级为旧行为。同时 settings 卡片的模型下拉框新增 `value=""` 占位项——旧版在 `value=""` 时会被浏览器渲染成列表**第一项**，让「留空」看起来像已经选好了模型。
 
 **v0.4.7 修正（工具批处理 + 委派细分 + 创造模式）**：
-- **A｜执行器环境契约新增「工具批处理」通用原则**（`src/env-contract.ts`）：一条消息里可发多个无依赖调用、无依赖只读调用应打包同批、`pwsh`/`bash` 按批执行是逐条串行所以能用一条命令表达的不要拆成多次 shell 调用；同时明确**批处理只省往返、不等于并行加速**（实测同批调用多被串行执行），并列出必须串行留白的场景（后续参数取决于前序结果 / 同文件写 / 破坏性 shell）。契约由 `delegate` 注入所有子代理，一处生效覆盖 12 个技能。
+- **A｜执行器环境契约新增「工具批处理」通用原则**（`src/env-contract.ts`）：一条消息里可发多个无依赖调用、无依赖只读调用应打包同批、`pwsh`/`bash` 按批执行是逐条串行所以能用一条命令表达的不要拆成多次 shell 调用；同时明确**批处理只省往返、不等于并行加速**（实测同批调用多被串行执行），并列出必须串行留白的场景（后续参数取决于前序结果 / 同文件写 / 破坏性 shell）。契约由 `delegate` 注入所有子代理，一处生效覆盖 13 个技能。
 - **C｜orchestrator 增加「信息收集的细分原则」**（`skills/orchestrator.md`）：先列独立事实清单 → 每个事实维度一个子任务 → ≥2 时用**一次 `delegate_batch`** 并行发出（实测 agent loop 对同批 tool_use 极少真并发，而 `delegate_batch` 内部 `Promise.allSettled` 是真并行）。
 - **D｜新增 cohub-cordis preset（创造模式）**：见上节。
 
@@ -284,7 +290,7 @@ cp presets/co-orchestrator/* ~/.dsh/.agent-presets/co-orchestrator/
 | **cohub-cordis** | **标准模式 + 中文身份 + 组合创作技能** | ✅ delegate | ✗（用官方创造模式） | 直接动手 + 委派混合、插件开发日常 |
 | 官方 **创造模式**（`cordis`） | 标准 + **Cordis 自指工具面** | ✅ delegate（host plane，同样可用） | ✅ | 自改 harness / preset 创作 / 插件实验 |
 
-**cohub 能力从哪来**：12 个 co-* 技能与 `delegate` / `delegate_batch` 工具由 dsh-cohub bundle 在 **host plane 全局注册**，与 preset 解耦——所以本 preset 不需要（也没有）额外的委派工具行。已实测确认：`delegate` 与 `delegate_batch` 都出现在会话工具表中，任何 preset 的会话（含创造模式）都能直接用，只要 dsh-cohub 挂在该 profile 上。
+**cohub 能力从哪来**：13 个 co-* 技能与 `delegate` / `delegate_batch` 工具由 dsh-cohub bundle 在 **host plane 全局注册**，与 preset 解耦——所以本 preset 不需要（也没有）额外的委派工具行。已实测确认：`delegate` 与 `delegate_batch` 都出现在会话工具表中，任何 preset 的会话（含创造模式）都能直接用，只要 dsh-cohub 挂在该 profile 上。
 
 **使用方式**：agent preset 在会话**首次 turn 之后即锁定**（`agent-preset/locked: session has already started; its agent preset is fixed`），所以创造模式只能**新建会话**时选择，不能中途切换。
 
@@ -295,14 +301,14 @@ cp presets/co-orchestrator/* ~/.dsh/.agent-presets/co-orchestrator/
 ## 测试
 
 ```bash
-node test/unit.ts          # 基础集成（12 技能 + 内容 + brief + delegate 注入 + M4 council）
+node test/unit.ts          # 基础集成（13 技能 + 内容 + brief + delegate 注入 + M4 council）
 node test/delegate-p1.ts   # P1：环境契约注入 + 重试
 node test/stall-p3.ts      # P3-1 N2 停滞检测（35 用例）
 node test/schedule-p3.ts   # P3-3 N3 调度参数（24 用例）
 node test/env-sig-p3.ts    # P3-2 N1 环境契约持久化（50 用例）
 ```
 
-基线说明：`unit` 20 + `delegate-p1` 41 + `stall-p3` 35 + `schedule-p3` 24 + `env-sig-p3` 50 + `preset-copy` 13 + `preset-install` 35 + `preset-schema` 26。除 `schedule-p3` 的 5 个既有失败（`cohub:schedule` 注入段断言，与委派链路无关）外全部 PASS（node >= 24）。无需 LLM，单测纯本地模拟。
+基线说明（2026-09-03 实测，`node` 直跑）：`unit` 全 PASS + `delegate-p1` 41 + `stall-p3` 35 + `schedule-p3` 24 + `env-sig-p3` 50 + `preset-copy` 13 + `preset-install` 35 + `preset-schema` 28 —— **8/8 全绿，全部 PASS**（node >= 24）。无需 LLM，单测纯本地模拟。
 
 ## 目录
 
@@ -320,7 +326,7 @@ src/
   env-contract.ts       注入子代理的执行器环境契约文本（含「工具批处理」通用原则）
   env-signatures.ts     P3-2 环境契约持久化（EnvSignatureLearner + 缓存）
   skills.ts             generate-skills.ts 生成物（禁止手编）
-  client/index.js       settings 卡片（i18n + 12 个 P3 控件）
+  client/index.js       settings 卡片（i18n + 13 个 P3 控件）
 presets/co-orchestrator/  内置 agent preset（Phase 2，纯调度模式 + 委派工具面补全 + compaction）
 presets/cohub-cordis/     内置 agent preset（Phase 5，创造模式 + 中文身份 + 自包含组合创作技能，v0.4.7 新增）
 test/
@@ -331,6 +337,7 @@ test/
   env-sig-p3.ts         P3-2 N1 环境契约持久化
   preset-copy.ts        preset 递归复制（含真实 preset 结构断言）
   preset-install.ts     preset 安装/升级台账（用户改动保护 + 孤儿清理 + 降级）
+  preset-schema.ts      preset YAML schema 断言（persona.prefix / 无 text: / 不挂 tool-cordis / 无 tab 缩进）
 cordis.patch.yml        bundle patch（含 P1/P3 全部 profile 字段示例）
 ```
 

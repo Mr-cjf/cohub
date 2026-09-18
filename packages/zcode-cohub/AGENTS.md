@@ -28,13 +28,14 @@ zcode-cohub/
 ├── .zcode-plugin/plugin.json    # ZCode 插件清单
 ├── skills/                       # 12 个 ZCode skills（提示词唯一源文件）
 ├── agents-template/             # 11 个角色 agent 模板（生成物，install 铺设到 ~/.zcode/agents/）
-├── hooks/hooks.json             # Hook 注册：SessionStart、UserPromptSubmit、PreToolUse；PostToolUse 两个 matcher（Agent|Task → agent-tracker；Grep → grep-counter）
+├── hooks/hooks.json             # Hook 注册：SessionStart、UserPromptSubmit、PreToolUse（Agent|Task）；PostToolUse 两个 matcher（Agent|Task → agent-tracker；Grep → grep-counter）；PostToolUseFailure（Agent|Task → agent-tracker）
 ├── src/                         # MCP Server 源码
 │   ├── index.ts                 # MCP Server 入口
-│   ├── tools/                   # delegate / council / job-control
+│   ├── tools/                   # delegate / council / job-control / scan
 │   ├── context/                 # 上下文共享引擎
 │   ├── hooks/                   # Hook 脚本（chinese-inject / job-board / orchestrate-remind / agent-tracker / grep-counter）
-│   └── utils/                   # 工具函数
+│   ├── shared/                  # 包内共享层（consensus / constants / fs-atomic / fs-json / model）
+│   └── utils/                   # 工具函数（paths / fs-atomic / fs-json）
 └── scripts/                     # generate-skills（技能生成）/ generate-agents（角色 agent 模板生成）/ install（ZCode 注册 + 角色 agent 铺设）
 ```
 
@@ -72,7 +73,9 @@ npm run test        # 运行测试（bun test ./src，项目首个测试文件�
 
 无独立 lint/typecheck 脚本，类型检查由 build 末尾的 `tsc --emitDeclarationOnly` 承担。
 
-`bun scripts/generate-agents.ts --check` 做漂移检测：比对 `agents-template/` 与 `skills/*/SKILL.md`，不一致（缺模板 / 内容漂移 / 多余模板）时退出码为 1。
+`bun scripts/generate-agents.ts --check` 做漂移检测，两项都查，任一不一致退出码为 1：
+1. 比对 `agents-template/` 与 `skills/*/SKILL.md`（缺模板 / 内容漂移 / 多余模板）；
+2. 交叉校验「并行工具纪律（强制）」文本：`skills/*/SKILL.md`（11 份互比 + 取一份为基准）↔ `src/tools/delegate.ts` 的 `PARALLEL_DISCIPLINE` 常量，逐字比对并指出首处不同的行。也可单独运行 `npm run check:sync`。
 
 > **生效条件**：修改 `skills/*/SKILL.md` 或 `src/hooks/*.ts` 后，需重新运行 `bun scripts/install.ts` 并**新开会话**，ZCode 才会重新加载插件缓存中的 skills 与 hooks。仅在开发目录执行构建而不安装，改动不会生效。
 
@@ -108,8 +111,9 @@ bun scripts/install.ts   # 开发模式加 --dev
 | 扫描工具 | `src/tools/scan.ts`（批量符号引用统计，一次调用替代 N 次搜索）；`src/tools/scan.test.ts` 是项目首个单元测试文件 |
 | 上下文引擎 | `src/context/`（engine / extractor / formatter / strategy / types） |
 | 任务追踪 | `src/tracker.ts`（状态文件读写，由 hook 驱动） |
-| 工具函数 | `src/utils/log.ts` |
-| Hook 脚本 | `src/hooks/`（chinese-inject / job-board / orchestrate-remind / agent-tracker / grep-counter），经 `hooks/hooks.json`（SessionStart / UserPromptSubmit / PreToolUse / PostToolUse 两个 matcher）注册 |
+| 工具函数 | `src/utils/`（`paths.ts` 状态路径解析 / `fs-atomic.ts` 原子写 / `fs-json.ts` 安全 JSON 读；后两者是对 `src/shared/` 的重导出垫片） |
+| 共享层 | `src/shared/`（`consensus.ts` 共识向量 / `constants.ts` / `fs-atomic.ts` / `fs-json.ts` / `model.ts`） |
+| Hook 脚本 | `src/hooks/`（chinese-inject / job-board / orchestrate-remind / agent-tracker / grep-counter），经 `hooks/hooks.json` 注册（SessionStart / UserPromptSubmit / PreToolUse / PostToolUse 两个 matcher / PostToolUseFailure） |
 | Agent 追踪 hook | `src/hooks/agent-tracker.ts`——`PreToolUse` 拦截 Agent spawn 时自动登记任务（status=running），`PostToolUse` 在子代理结束时标记 completed；确保 job-board 面板不遗漏 |
 | Grep 计数器 hook | `src/hooks/grep-counter.ts`——`PostToolUse`（matcher: Grep）监听每次 Grep 调用，按会话统计滚动 10 分钟窗口内调用次数；达 30 次且距上次提醒超 15 分钟时通过 `additionalContext` 注入 co_scan 提醒。状态存于插件数据目录 `grep-counter-state.json`（原子写，自动清理 2 小时无活动的会话条目）。定位为平台层保险丝：穷举扫描协议（提示词层防线）漏判时兜底 |
 

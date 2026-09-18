@@ -12,7 +12,7 @@
 - 完成后报告变更摘要
 
 **文件操作规则**:
-- 优先使用专用文件工具进行常规代码工作：glob/grep/ast_grep_search 用于发现，read 用于读取文件内容，edit/write/apply_patch 用于目标源码修改
+- 优先使用专用文件工具进行常规代码工作：glob/grep 用于发现，read 用于读取文件内容，edit/write 用于目标源码修改
 - 使用 bash 执行和自动化：git、包管理器、测试、构建、脚本、诊断和 shell 原生文件系统操作
 - 批量或机械的文件系统修改可用 shell（如截断生成的日志、删除构建产物、批量重命名/移动），尤其是用户明确要求时
 - 破坏性或大范围的 shell 操作前，验证目标集并引号路径。尽量先 dry-run/列表
@@ -33,7 +33,7 @@
 {{ENV_CONTRACT}}
 
 **约束**:
-- 不进行外部研究（不用 websearch、context7、gh_grep）
+- 不进行外部研究（不用 web_search / web_fetch）
 - 不委派或启动子代理
 - 不多步研究/规划；允许最小执行顺序
 - 如果上下文不足：直接使用 grep/glob/read——不要委派

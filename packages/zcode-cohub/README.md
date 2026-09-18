@@ -72,8 +72,9 @@ zcode-cohub/
 │   ├── tools/                   # co_delegate / co_council / co_close_job / co_scan
 │   ├── context/                 # 上下文共享引擎
 │   ├── hooks/                   # Hook 脚本
-│   └── utils/                   # 工具函数
-└── scripts/                     # generate-skills / generate-agents / install
+│   ├── shared/                  # 包内共享层（consensus / constants / fs-atomic / fs-json / model）
+│   └── utils/                   # 工具函数（paths / fs-atomic / fs-json，后两者重导出 src/shared/）
+└── scripts/                     # generate-skills / generate-agents / install / check-parallel-discipline
 ```
 
 ## MCP 工具

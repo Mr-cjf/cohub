@@ -109,6 +109,7 @@ cohub:
 - 错误结构化：`error.cause.stall = { signals: [...], diagnostics: "..." }`；重试 prompt 自动追加停滞诊断。
 
 ### 11.3 P3-3 N3 调度参数（src/index.ts ScheduleConfig + systemPrompt 段）
+> ⚠️ **2026-09-03 现状更新**：下列两条中的 `useJobTracking` 与 `adaptiveBatch` **已删除**（声明了但代码不读的死参数），`ScheduleConfig` 现只剩 `maxParallelBatch` 与 `wallClockBudgetMs`，GUI 对应控件同步移除；引用它们的 skill 正文也已改写。下方保留当时的决策原文以存史。
 - 决策：把调度参数（批大小 / 墙钟预算 / job 跟踪 / 自适应批）从 skill 文档字面量提升为可配置事实，并通过 `ctx.systemPrompt.section({ name: "cohub:schedule", order: 96 })` 注入实际生效值。
 - **text 是函数**——每次 prompt 装配时动态读取当前 settings（`currentSettings().schedule`），改卡片立即生效，无需重启。
 - 缺省值仅作"本环境观测值"：缺省 `maxParallelBatch=3` / `wallClockBudgetMs=600000` 是当前部署观测值，部署可调；不写死任何环境事实（与 P1 环境契约决策一致）。
