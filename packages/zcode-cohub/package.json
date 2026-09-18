@@ -13,6 +13,7 @@
   "scripts": {
     "build": "bun run scripts/generate-skills.ts && bun run scripts/generate-agents.ts && bun build src/index.ts --outdir dist/src --target node --format esm && tsc --emitDeclarationOnly && npm run build:hooks",
     "build:hooks": "bun build src/hooks/chinese-inject.ts src/hooks/job-board.ts src/hooks/orchestrate-remind.ts src/hooks/agent-tracker.ts src/hooks/grep-counter.ts --outdir dist/hooks --target node --format esm",
+    "check:sync": "bun run scripts/check-parallel-discipline.ts",
     "test": "bun test ./src",
     "prepublishOnly": "npm run build"
   },

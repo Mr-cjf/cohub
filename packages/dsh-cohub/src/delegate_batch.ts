@@ -117,6 +117,10 @@ export function createDelegateBatchTool(
       // 并行启动所有子代理
       const starts = await Promise.allSettled(
         tasks.map(async (task, index) => {
+          // spawn 起算时刻：单个 task 的超时预算从这里开始计（见下方 Promise.race），
+          // 而不是从「逐个收集结果」的 await 时刻开始计——后者会让第 i 个 task 拿到
+          // 从第 i-1 个 settle 起算的完整预算，整批最坏退化为 N × wallClockBudgetMs。
+          const startedAt = Date.now();
           const taskId = task.id ?? `task-${index}`;
           const { skill, route } = resolveSkillAndRoute(task.skill, getRoutes, ctx, ctx.logger);
           const promptText = buildDelegatePrompt({
@@ -148,20 +152,20 @@ export function createDelegateBatchTool(
               ...(agentOptions ? { agentOptions } : {}),
               signal: ac.signal,
             });
-            return { taskId, task, run, ac, onExecAbort, startError: undefined };
+            return { taskId, task, run, ac, onExecAbort, startedAt, startError: undefined };
           } catch (startError) {
             // start 失败：清理 onExecAbort 监听器，返回带错误标记的对象
             if (onExecAbort && exec.signal) {
               try { exec.signal.removeEventListener("abort", onExecAbort); } catch { /* 可能已释放 */ }
             }
-            return { taskId, task, run: undefined, ac, onExecAbort: null, startError };
+            return { taskId, task, run: undefined, ac, onExecAbort: null, startedAt, startError };
           }
         }),
       );
 
       // 收集结果（最外层 try-finally 确保所有 runs 被清理）
       const results: DelegateBatchResult[] = [];
-      const runs: Array<{ run: any; ac: AbortController; onExecAbort: (() => void) | null; taskId: string; task: DelegateBatchTask }> = [];
+      const runs: Array<{ run: any; ac: AbortController; onExecAbort: (() => void) | null; taskId: string; task: DelegateBatchTask; startedAt: number }> = [];
 
       try {
         for (const s of starts) {
@@ -180,17 +184,22 @@ export function createDelegateBatchTool(
             });
             continue;
           }
-          const { run, taskId, task, ac, onExecAbort } = val;
-          runs.push({ run, taskId, task, ac, onExecAbort });
+          const { run, taskId, task, ac, onExecAbort, startedAt } = val;
+          runs.push({ run, taskId, task, ac, onExecAbort, startedAt });
 
           // 防 unhandledRejection
           run.result.catch(() => {});
         }
 
         // 逐个 await run.result（带独立超时和独立 AbortController）
-        for (const { run, taskId, task, ac, onExecAbort } of runs) {
+        for (const { run, taskId, task, ac, onExecAbort, startedAt } of runs) {
           let outcome: any;
           let timer: ReturnType<typeof setTimeout> | null = null;
+
+          // 超时预算以 spawn 时刻为起点：扣除该 task 已耗时（含 start 前的 route/agentOptions 解析
+          // 与前面 task 的等待）。若已耗尽则立即走超时分支（delay=0）。
+          // 错误文本保持原样（仍是完整预算值），避免改变调用方可见语义。
+          const remainingMs = Math.max(0, wallClockBudgetMs - (Date.now() - startedAt));
 
           try {
             outcome = await Promise.race([
@@ -200,7 +209,7 @@ export function createDelegateBatchTool(
                   // 超时时主动 abort 子代理
                   if (!ac.signal.aborted) ac.abort();
                   reject(new Error(`超时：${wallClockBudgetMs}ms`));
-                }, wallClockBudgetMs);
+                }, remainingMs);
                 // 如果 exec.signal 先触发，清理 timer
                 if (exec.signal && !exec.signal.aborted) {
                   exec.signal.addEventListener("abort", () => { if (timer) clearTimeout(timer); }, { once: true });

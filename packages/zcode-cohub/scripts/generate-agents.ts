@@ -28,6 +28,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractFrontmatter } from "./shared/frontmatter.js";
+import { checkParallelDiscipline } from "./check-parallel-discipline.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -275,7 +276,11 @@ function main() {
 
   if (checkMode) {
     const inSync = checkTemplates(templates);
-    if (!inSync || !noForbiddenDir) {
+    // Cross-source check on top of the agents-template diff: this one compares
+    // skills/*/SKILL.md against src/tools/delegate.ts's PARALLEL_DISCIPLINE,
+    // which nothing else in the toolchain covers (see the script's header).
+    const discipline = checkParallelDiscipline();
+    if (!inSync || !discipline.ok || !noForbiddenDir) {
       process.exit(1);
     }
     return;
