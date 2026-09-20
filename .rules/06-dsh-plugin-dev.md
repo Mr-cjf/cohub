@@ -1,0 +1,183 @@
+# DSH 插件开发硬约束
+
+违反即出 bug。只列必须/禁止类条款，每条带证据路径（仓库相对路径或 DSH 官方技能文档路径）。
+
+## 一、插件两种形态
+
+### npm 包形式（本项目）
+
+- 源：`packages/dsh-cohub/src/*.ts`，产物：`packages/dsh-cohub/lib/`
+- 通过 `cordis.patch.yml` 的 `insert` 挂到 host 组合，或写进 agent preset 的 `agent.cordis.yml`
+
+### 动态插件
+
+- 工具链：`co_define` → `co_run` → `co_stop` / `co_remove`
+- 纯 JS 函数体，不编译，进程内生命周期，重启消失
+
+## 二、npm 包导出契约
+
+（`packages/dsh-cohub/src/index.ts:115-139`；L141-143 为测试用导出）
+
+| 导出项 | 本项目取值 |
+|--------|----------|
+| `name` | `"cohub"` |
+| `inject` | `["systemPrompt", "skills", "tools", "sessionProjections", "llm", "subagents"]`（6 个） |
+| `Config` | `z.object({ councillors, skills, delegateEnvContract, delegateRetry, envSignatures, schedule, installPresets, councilTimeoutMs, councilProvider })`（**9 个**顶层字段；证据：`src/index.ts:118-139`） |
+| `apply(ctx, config)` | 挂载入口 |
+
+## 三、inject 约束与错误
+
+`inject` 必须与实际使用的服务一致。不匹配时可能报**两条不同**错误之一：
+
+- 用 `ctx.x` 形式访问未声明服务 → `service "x" is not declared`
+- 直接属性访问（如 `ctx.timer`）未声明 → `cannot get property "timer" without inject`
+
+出处：DSH 官方技能 `cordis-plugin-development` SKILL.md
+
+## 四、双平面架构
+
+- **Host 组合**：进程级单例（注册表 / 沙箱 / 审批 / 模型路由 / 会话持久化）。本机文件：`C:\Users\14023\.dsh\profiles\desktop\cordis.yml`
+- **Agent Preset**：每会话挂载（工具 / persona / 提示词段 / compaction 策略）
+
+## 五、preset 文件结构
+
+### 目录组成
+
+- `agent.cordis.yml`（行列表）+ `preset.yml`（`name` / `description`；**仅 shipped preset 额外有 `order`**）
+- 可选 `skills/` 子目录
+
+### 路径区分
+
+- shipped preset 在**部署安装目录** `...\DSH Desktop\resources\app\node_modules\@deepseek-ai\dsh-agent-presets\presets\`
+- 用户自建 preset 在 `~/.dsh/.agent-presets/<id>/`
+
+> 不要写成"preset 统一在 ~/.dsh/.agent-presets/"。
+
+### agent.cordis.yml 行字段
+
+每行含：`id` / `name` / `disabled` / `group` / `isolate` / `config`
+
+- ⚠️ **无 `concurrency` 字段**（已证伪）
+- ⚠️ `persona` **不是行字段**——它是独立插件行 `@deepseek-ai/dsh-persona`，其 `config` 含 `prefix` / `suffix`
+- 组行 `cordis:group` 额外用 `config:` 数组存放子行
+
+## 六、Host 级硬约束
+
+### 6.1 禁止修改 shipped preset
+
+实际存在的四个 shipped preset：`standard` / `cordis` / `minimal` / `ptc`（均已核实）。
+
+- 文件在安装目录下，升级会被覆盖
+- 编辑 `cordis` 会直接禁用创造模式本身
+- 正确做法：`copy()` 后编辑副本
+
+### 6.2 Service 隔离域
+
+- preset 内发布 Service 的行**必须**包在 `cordis:group` 的 `isolate` realm 内
+- 所有消费该 Service 的行也**必须**在同一 group 内
+- 写法实例：`isolate: { planMode: true }`、`isolate: { compaction: true, toolResultPruner: true }`；`true` 表示 per-session 私有 realm
+- 否则报：
+  - `N row(s) did not activate: <id>: waiting for <service>`
+  - `row(s) published process-global service(s) [<name>]`
+
+### 6.3 tool-cordis 全进程唯一
+
+`tool-cordis` 全进程只能挂一次。重复挂载会导致 inspect provider 撞名：
+
+> `Host Cordis inspect provider "Service" is already registered`
+
+出处：`packages/dsh-cohub/cordis.patch.yml:55-77` 注释（记录 v0.4.9 实际故障）
+
+**禁止**在任何 bundle patch 或第二份 preset 里重复挂载。
+
+### 6.4 persona 配置字段
+
+必须用 `prefix`（required）/ `suffix`，**禁止**使用已废弃的 `text`。
+
+旧字段导致整行挂载失败：
+
+> `invalid config: - $.prefix missing required value`
+
+出处：`packages/dsh-cohub/README.md:231-238`
+
+### 6.5 standingKeyFor 挂载验证
+
+改完 composition **必须**用 `standingKeyFor(id)` 做挂载验证。这是真正的验证，**不要**依赖 roster 的 `broken` 字段或已运行会话。
+
+能检出四类失败：包不解析 / 配置无效 / 行未激活 / 服务泄漏到根 realm。
+
+## 七、动态插件硬约束
+
+- `code.host` / `code.client` 是**纯 JavaScript 函数体**：禁止 `import` / `require` / TypeScript 类型 / `as` / 装饰器 / JSX。Client 端 React 必须用 `React.createElement(...)`
+- **Package 不可变**：修正必须新建 Package，不得覆盖失败的那个
+- Client 端激活需用户审批：未授权时返回 `awaiting-approval`
+- 所有副作用（事件监听 / Tool 注册 / Slot 注册 / 定时器 / 主题覆盖）必须在 stop/update/remove 时被清理：`ctx.on()` / `ctx.effect()` / disposer
+- 可选 Service 用 `ctx.get(name)` + 判空；硬依赖才声明 `inject`
+- Client→Host `host.call(method, args)` 参数与返回值**必须 JSON 无损**，禁止传函数 / React 元素 / 运行时对象
+- **禁止**对内部实时数据对象（Service 实例 / Event 载荷 / Slot props / Conversation Snapshot）调 `JSON.stringify` 或 `structuredClone`，只提取所需叶子字段
+- **动代码前先查真实签名**：`co_inspect_list` → `co_inspect_query`，不得凭 Service 名 / Event 载荷 / Slot props / 示例推断 API
+
+### 七个运行时工具
+
+（`packages/dsh-cohub/src/co-cordis-plugin.ts:20-205`）
+
+| 工具 | 行号 | 作用 |
+|------|------|------|
+| `co_inspect_list` | L22 | 列出所有 Inspect Provider |
+| `co_inspect_query` | L33 | 查询 Provider 的具体方法定义 |
+| `co_inspect_self` | L51 | 查当前会话的自身动态插件 |
+| `co_define` | L103 | 定义不可变 Package |
+| `co_run` | L158 | 激活：`run`（首次/重启/回滚）或 `update`（切换同 Plugin 另一 Package） |
+| `co_stop` | L184 | 停止运行，保留定义/授权/版本指针 |
+| `co_remove` | L197 | 彻底删除，此后 pluginId / packageId 均失效 |
+
+## 八、defineTool Schema DSL 规则
+
+违反导致**启动时** `plugin tree failed to load`（可能伴随 `JsonSchemaError`），而 `bun build` **不报错**——最难查的一类坑。
+
+完整参考：`packages/dsh-cohub/.opencode/rules/defineTool-schema.md`（105 行）
+
+| # | 规则 | 说明 |
+|---|------|------|
+| 1 | 禁止 `required: false` | 默认可选 |
+| 2 | `items` 内部禁止 `required` 数组 | 改在 `description` 说明 + 运行时检查 |
+| 3 | `type: "object"` 必须显式声明 `additionalProperties` | 取值 `true` 或 `false` |
+| 4 | 顶层参数**支持**逐属性 `required: true` | 合法，勿误判为禁止 |
+| 5 | `type: "array"` 必须配套 `items` | |
+
+## 九、陷阱速查表
+
+| 陷阱 | 表现 |
+|------|------|
+| `inject` 不匹配 | `service "x" is not declared` 或 `cannot get property "x" without inject` |
+| defineTool DSL 违规 | 启动时 `plugin tree failed to load`，`bun build` 不报错 |
+| `subagents` 直接访问 | `ctx.subagents` 在 `cordis:include` 等 loader 下抛框架错误；必须用 `ctx.reflect.get('subagents', false)`（`src/index.ts:233-242`） |
+| preset 中途切换 | 会话首次 turn 后即锁定，不能切换 preset（`README.md:295`），需新建会话 |
+| 含 `skills/` 的 preset 复制 | `cp presets/<name>/*` 不包含子目录，必须用 `scripts/deploy-preset.ps1` |
+| 用户改过的 preset 升级 | 被台账跳过、不自动更新（`README.md:271`） |
+| `skills` 路由只配 `provider` 不配 `model` | 子代理回退到父代理模型名，若该模型不属于此 provider 则 `UNKNOWN_MODEL` 秒失败：`delegate` 返回 `subagent stopped with reason "error" after 0 retry(ies)`（`README.md:216`；v0.4.6 修复：改用 `ctx.llm.listModels(provider)` 取首个模型回退） |
+
+## 十、构建与产物
+
+### 构建五步
+
+`bun run build` 等价于以下五步（`packages/dsh-cohub/package.json:40`），必须按此顺序：
+
+1. `bun run scripts/generate-skills.ts` → 生成 `src/skills.ts`（源：`skills/*.md` + 脚本元数据）
+2. `bun run scripts/guard-schema.ts` → 校验 Config schema 与 `cordis.patch.yml` 一致
+3. `bun build src/index.ts --outdir lib ...` → 产物 `lib/index.js`
+4. `bun build src/co-cordis-plugin.ts --outdir lib ...` → 产物 `lib/co-cordis-plugin.js`
+5. `bun run scripts/build-client.js` → 产物 `lib/client.js`
+
+### 生成物禁忌
+
+`src/skills.ts` 与 `lib/` 均被 `.gitignore` 排除，**禁止手改**。修改技能内容必须编辑 `skills/*.md` 后重建。
+
+## 十一、参考
+
+- 官方技能文档：
+  - `C:\Users\14023\.dsh\.agent-presets\cohub-cordis\skills\cordis-plugin-development\SKILL.md`
+  - `C:\Users\14023\.dsh\.agent-presets\cohub-cordis\skills\editing-cordis-compositions\SKILL.md`
+- DSL 完整参考：`packages/dsh-cohub/.opencode/rules/defineTool-schema.md`
+- 包源码与构建：`packages/dsh-cohub/src/`、`packages/dsh-cohub/README.md`
+- **版本敏感**：本项目 `peerDependencies` 锁定 13 个 `@deepseek-ai/dsh-*` 为 `^0.1.0-rc.6`（外加 `@deepseek-ai/cordis` / `@deepseek-ai/schemastery` / `react`）。DSH 处于 rc 阶段，SDK 接口可能变更。`rc.6` 是 **SDK 层独立版本线**，**不可**与 DSH Desktop 外壳版本号（2.0.11）直接对标。升级依赖后需重新校对本规范。
