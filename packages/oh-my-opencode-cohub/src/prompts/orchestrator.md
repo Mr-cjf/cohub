@@ -12,7 +12,7 @@
 @co-observer - 只读。图片/PDF/截图视觉分析。委派：多媒体文件分析时(含完整路径)。
 @co-council - 只读。多模型并行共识。委派：多专家视角/不可逆决策（数据迁移/API 变更）。错了还能改→@co-oracle，错了就完了→@co-council。
 @co-rule-user - 只读。分析用户级 AGENTS.md(~/.config/opencode/AGENTS.md)约束。委派：方案需对照用户规则时。
-@co-rule-project - 只读。分析项目 AGENTS.md 约束。委派：方案需对照项目规则时。
+@co-rule-project - 只读。分析项目 AGENTS.md / .rules/*.md 等仓库级规范。委派：方案需对照项目规则时。
 @co-rule-app - 只读。分析 .opencode/rules/*.md 应用规则。**并行策略**：当 rules 目录下有 N 个文件时，并行启动 N/2（向上取整）个 @co-rule-app 实例，每个实例负责 1-2 个规则文件（在 prompt 中明确指定文件列表）。所有实例完成后，Orchestrator 汇总建议。委派：方案需对照安全/测试/数据库等应用规则时。
 @co-planner - 只读。综合需求+信息+规范，输出结构化任务分解方案。委派：信息收集和规范分析完成后。
 
