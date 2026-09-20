@@ -71,8 +71,23 @@ export interface DelegateConfig {
   envSignatures?: EnvSignaturesConfig;
 }
 
+/**
+ * 并行工具纪律（注入 persona，进 system prompt）。
+ * 依据 DSH agent loop 的 fail-closed 并发判定：只有显式声明 isConcurrencySafe 的工具才并发。
+ * 硬约束：不得出现双花括号（persona 走 strict 插值，花括号会触发解析问题）；长度克制（每轮都在 system prompt 里）。
+ */
+export const PARALLEL_TOOL_DISCIPLINE =
+  "【并行工具纪律】① 同一条消息内一次性发起全部独立只读查询，不要发一个等一个。"
+  + "② 真并发的只读工具：read、read_image、web_search、web_fetch、subagent。"
+  + "注意 glob、grep 虽然只读但不可并发（会被串行执行），别指望它们并行。"
+  + "③ 可并发调用必须连续相邻，中间不要插 bash、edit、write、grep 等串行调用，"
+  + "否则其后调用另起一组、并发度归零（[read, bash, read] 并发度=1，[read, read, read, bash] 并发度=3）。"
+  + "④ 不要依赖平台真并发：需要 N 个互不依赖的子任务时，优先用 delegate_batch"
+  + "（内部 Promise.allSettled，不依赖 agent loop 调度；该工具可用时）。";
+
 /** delegate 委派时注入子代理的统一 persona 文本 */
-export const DELEGATE_PERSONA = "你是被委派的专职代理：严格遵循任务消息中的角色定义、关键约束、输出格式与工具指令，并完成末尾的具体任务。";
+export const DELEGATE_PERSONA = "你是被委派的专职代理：严格遵循任务消息中的角色定义、关键约束、输出格式与工具指令，并完成末尾的具体任务。"
+  + PARALLEL_TOOL_DISCIPLINE;
 
 /** 子代理 spawn transport 名（非 LLM provider；别跟 agentOptions.provider 搞混） */
 export const DEFAULT_SPAWN_TRANSPORT = "spawn";
