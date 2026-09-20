@@ -15,7 +15,7 @@ OpenCode 中文智能体编排插件。TypeScript ESM，通过 `@opencode-ai/plu
 | `co-observer` | 图片 / PDF / 截图视觉分析（只读） |
 | `co-council` | 多模型并行共识（不可逆决策用） |
 | `co-rule-user` | 用户级 `~/.config/opencode/AGENTS.md` 分析 |
-| `co-rule-project` | 项目 `AGENTS.md` 分析 |
+| `co-rule-project` | 项目 `AGENTS.md` + 仓库根 `.rules/*.md` 规范分析 |
 | `co-rule-app` | `.opencode/rules/*.md` 分析 |
 | `co-planner` | 方案制定——综合需求+信息+规范输出任务分解 |
 
