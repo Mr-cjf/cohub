@@ -10,9 +10,9 @@ description:
   en: >
       User config loader
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:57:09.892Z"
-fingerprint: 08c3cdc9fe6a20467b49a14b3d78e15de686619b199a015ad86d7acba390ebf2
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.342Z"
+fingerprint: 4fd006d6c81f9479717d06dc2dd4a2aa62ce37d6e96d2e887f7e34228c0bc047
 source:
   - path: "packages/oh-my-opencode-cohub/src/config/loader.ts"
     line: 1

@@ -10,9 +10,9 @@ description:
   en: >
       Job Board tracker, quality assessment, type contracts
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:52:23.364Z"
-fingerprint: 2ac000ff898427d67ba07bc9b1249b930717141cdac32dee246050b2ab8e0fea
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.358Z"
+fingerprint: caaa65f30eb1d0068c43181f5b903d1370537dd831c9d683d5495aa981e56983
 source:
   - path: "packages/oh-my-opencode-cohub/src/task-manager/tracker.ts"
   - path: "packages/oh-my-opencode-cohub/src/task-manager/quality.ts"

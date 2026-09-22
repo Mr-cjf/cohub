@@ -10,8 +10,8 @@ description:
   en: >
       Four write tools: co_define (define immutable package), co_run (activate/switch), co_stop (stop but keep definition), co_remove (delete completely). Client-side activation may require user approval.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:22.108Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.326Z"
 fingerprint: 9b4fcefadc0e73ec4a51ea06c368544e5efe03da8088a465503c0cde859e52d8
 source:
   - path: "packages/dsh-cohub/src/co-cordis-plugin.ts"

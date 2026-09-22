@@ -10,9 +10,9 @@ description:
   en: >
       OpenCode config file read/write operations
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:54:08.900Z"
-fingerprint: 97d491df32737f63f78fa79e8b25426c064391d27ad87a0599136a5af0d66f2a
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.341Z"
+fingerprint: cd5d83298bfc105a77c2d9cfcc6f8c8e2080116c4f1217365f402345ea45879b
 source:
   - path: "packages/oh-my-opencode-cohub/src/cli/config-io.ts"
     line: 1

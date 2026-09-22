@@ -10,8 +10,8 @@ description:
   en: >
       Manage agent execution retry policy and budget
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:52:23.363Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.352Z"
 fingerprint: 0d78082e5e31344103893be7fb685a2acec453464af3bd8189d1d751d85f44be
 source:
   - path: "packages/oh-my-opencode-cohub/src/orchestration/retry.ts"

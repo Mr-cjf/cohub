@@ -10,9 +10,9 @@ description:
   en: >
       co-rule-user (user-level AGENTS.md), co-rule-project (project AGENTS.md), co-rule-app (app-level rules) — three rules analysis skills.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:22.112Z"
-fingerprint: 1e66086d32634eb3415c4482fdffb96e02cfe3603c676f65089b8d4dd7e9178b
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.338Z"
+fingerprint: 09b39d9e658a2610717d3c8737c6a4970d80b63f42296fa573c7672a0e633e38
 source:
   - path: "packages/dsh-cohub/skills/rule-user.md"
   - path: "packages/dsh-cohub/skills/rule-project.md"

@@ -10,8 +10,8 @@ description:
   en: >
       Extracts the trailing model name from a "provider/model" string for short labels in council results and UI. The smallest pure helper in the shared layer, referenced by all three platform packages.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:14.096Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.368Z"
 fingerprint: ab461238c23eae6e86fd791aef2a1cca2d99891ce412f6353a66aa11c8a5c266
 source:
   - path: "cohub-shared/src/model.ts"

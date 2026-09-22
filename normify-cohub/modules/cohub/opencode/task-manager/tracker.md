@@ -10,9 +10,9 @@ description:
   en: >
       Background Job Board task tracking and statistics
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:57:09.892Z"
-fingerprint: 5fbc7edd7bcc03a35c32392458fa8f89897ae1ca2ed84b125f09e704b3ed294a
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.359Z"
+fingerprint: 1b16da4dfe3dd9fc38cbee7dd081bb8384ee87c86eb449e052760e148f08a61c
 source:
   - path: "packages/oh-my-opencode-cohub/src/task-manager/tracker.ts"
     line: 1

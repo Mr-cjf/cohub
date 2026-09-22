@@ -10,8 +10,8 @@ description:
   en: >
       Mandatory Chinese-language system-prompt text injected into all three platform agents. All agents must use Chinese for thinking, reasoning, and replies; code and technical terms may stay in English.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:14.096Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.364Z"
 fingerprint: b703822af9d78421d86e97bb95744ea1a34ace0d7b565b1668ec445bc9c69e93
 source:
   - path: "cohub-shared/src/chinese.ts"

@@ -10,9 +10,9 @@ description:
   en: >
       M4 council_session: parallel ctx.subagents.start(), each councillor routed via agentOptions, results aggregated as structured text for co-council synthesis.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:56:37.318Z"
-fingerprint: c1d7c75f2709a2bfbfc2cc9884ae056187ff5260d615a9356cb7cb24b010103b
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.326Z"
+fingerprint: d7352cc1a4ff360a3213164785f14a8f8b615f4a4b71f369c223fac7c3ff532e
 source:
   - path: "packages/dsh-cohub/src/council.ts"
     line: 87

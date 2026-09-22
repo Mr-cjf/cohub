@@ -9,17 +9,17 @@
         "repository": "https://github.com/Mr-cjf/cohub.git"
       }
     ],
-    "compiled_at": "2026-09-17T01:59:41.184Z",
+    "compiled_at": "2026-09-22T02:26:01.903Z",
     "stats": {
       "tree_count": 1,
-      "module_count": 109,
-      "leaf_count": 88,
-      "api_count": 168,
-      "dep_count": 71,
+      "module_count": 74,
+      "leaf_count": 59,
+      "api_count": 119,
+      "dep_count": 46,
       "cross_tree_dep_count": 0,
       "max_depth": 4,
-      "layout_count": 21,
-      "planned_count": 1,
+      "layout_count": 15,
+      "planned_count": 0,
       "deprecated_count": 0,
       "policy_rule_count": 2,
       "change_count": 0,
@@ -47,9 +47,9 @@
       "fingerprint": "pending",
       "repository": "https://github.com/Mr-cjf/cohub.git",
       "aggregate": {
-        "descendant_count": 108,
+        "descendant_count": 73,
         "own_api_count": 0,
-        "inherited_api_count": 168,
+        "inherited_api_count": 119,
         "dep_out": 0,
         "dep_in": 0
       }
@@ -89,9 +89,9 @@
           "path": "packages/dsh-cohub/package.json"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T09:08:13Z",
-      "fingerprint": "6208744fad4826a7ae82ff6a88f2a737badc7e395e7e4ba3ca8ebdcaca3d2b24",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.332Z",
+      "fingerprint": "91866074554ec6bfcbc0143086c76f8ceeae5045efb09143c1535559c065e2e5",
       "aggregate": {
         "descendant_count": 19,
         "own_api_count": 0,
@@ -121,9 +121,9 @@
           "end_line": 923
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:22.108Z",
-      "fingerprint": "663df4dd8cb56963462c6e4822f86ffa1515a399952c5609597798a430d65f9f",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.324Z",
+      "fingerprint": "614fc7d1e1193b7ded38d77086ee634a83e3e0f477f3d0063a8f1d583c4e1bf7",
       "apis": [
         {
           "protocol": "rpc",
@@ -164,8 +164,8 @@
           "end_line": 206
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.103Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.325Z",
       "fingerprint": "9b4fcefadc0e73ec4a51ea06c368544e5efe03da8088a465503c0cde859e52d8",
       "aggregate": {
         "descendant_count": 2,
@@ -196,8 +196,8 @@
           "end_line": 100
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:22.108Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.325Z",
       "fingerprint": "9b4fcefadc0e73ec4a51ea06c368544e5efe03da8088a465503c0cde859e52d8",
       "apis": [
         {
@@ -257,8 +257,8 @@
           "end_line": 206
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:22.108Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.326Z",
       "fingerprint": "9b4fcefadc0e73ec4a51ea06c368544e5efe03da8088a465503c0cde859e52d8",
       "apis": [
         {
@@ -327,9 +327,9 @@
           "end_line": 170
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:56:37.318Z",
-      "fingerprint": "c1d7c75f2709a2bfbfc2cc9884ae056187ff5260d615a9356cb7cb24b010103b",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.326Z",
+      "fingerprint": "d7352cc1a4ff360a3213164785f14a8f8b615f4a4b71f369c223fac7c3ff532e",
       "apis": [
         {
           "protocol": "rpc",
@@ -382,9 +382,9 @@
           "end_line": 656
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.100Z",
-      "fingerprint": "0f001b39082147b7f631f5d876c5408a2c045ebba80c02043bcbd2275c8ac17a",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.327Z",
+      "fingerprint": "aa3f39fcf47e9dc7769232a67a4e3e75baafe7e5391cf58e23959c07ee4b408b",
       "aggregate": {
         "descendant_count": 2,
         "own_api_count": 0,
@@ -414,9 +414,9 @@
           "end_line": 272
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:56:37.318Z",
-      "fingerprint": "5f747ef0c8ce0bd0f45a94acbd21d00190a70585b4c6c9968ecbacede7d27b1c",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.326Z",
+      "fingerprint": "aeb8ea61f0ccbb79cd7b19a4d7c89d54e413da3cbfeed1af8091d4ab6b9f8e67",
       "apis": [
         {
           "protocol": "rpc",
@@ -474,9 +474,9 @@
           "end_line": 288
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.101Z",
-      "fingerprint": "0f001b39082147b7f631f5d876c5408a2c045ebba80c02043bcbd2275c8ac17a",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.327Z",
+      "fingerprint": "aa3f39fcf47e9dc7769232a67a4e3e75baafe7e5391cf58e23959c07ee4b408b",
       "apis": [
         {
           "protocol": "rpc",
@@ -517,9 +517,9 @@
           "end_line": 656
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:56:37.318Z",
-      "fingerprint": "0f001b39082147b7f631f5d876c5408a2c045ebba80c02043bcbd2275c8ac17a",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.328Z",
+      "fingerprint": "aa3f39fcf47e9dc7769232a67a4e3e75baafe7e5391cf58e23959c07ee4b408b",
       "apis": [
         {
           "protocol": "rpc",
@@ -572,9 +572,9 @@
           "end_line": 306
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:56:37.318Z",
-      "fingerprint": "c230a56e3021e8ea3206c085c781c63b9688f66f98db6e3ec59daa8eeb76bb6e",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.329Z",
+      "fingerprint": "888c741bb798c129fee28d23fd6ea0c596b3395641bef142a03598bd669946a5",
       "apis": [
         {
           "protocol": "rpc",
@@ -670,9 +670,9 @@
           "end_line": 368
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.102Z",
-      "fingerprint": "62efb74beec81ffce4d66f25982948bf67b0402497cf0046d61ab206685794aa",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.329Z",
+      "fingerprint": "6216f329fcff0179a2543f756496919c3d2bae1ca31600356f82208e9eb6054b",
       "apis": [
         {
           "protocol": "rpc",
@@ -722,9 +722,9 @@
           "end_line": 353
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.103Z",
-      "fingerprint": "a38ceced324d51179559a7c73f83b6d960342641548aa01727c652b8da46f466",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.332Z",
+      "fingerprint": "0f4ca3e56748fa799380ccf57b37b3eecd0a50dc4a3f8fce6f81c53b32bea6e3",
       "apis": [
         {
           "protocol": "rpc",
@@ -788,8 +788,8 @@
           "end_line": 288
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:22.113Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.333Z",
       "fingerprint": "52fe10ea3382f67642bba61f76a579d31d5e64f1576c3420fef6eb3965232472",
       "apis": [
         {
@@ -838,9 +838,9 @@
           "path": "packages/dsh-cohub/skills/orchestrator.md"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:22.109Z",
-      "fingerprint": "390e3780fe29dd8f51cf86b7b279632e7e943ff824cbc9af3d6d89a90d74a74c",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.336Z",
+      "fingerprint": "cf98ae22cc3dfed017454a60d2da0a87ae4b030aaf343653690d37fc9e603d3a",
       "aggregate": {
         "descendant_count": 5,
         "own_api_count": 0,
@@ -874,9 +874,9 @@
           "path": "packages/dsh-cohub/skills/council.md"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:22.110Z",
-      "fingerprint": "e023ad9464f9c0632f39a19155091c6e2bd0ede72f16ddfe7ede1c097858d483",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.334Z",
+      "fingerprint": "3eaf8964f776efca12a903451cc58343ea212229c96acdec71794844b246de4e",
       "apis": [
         {
           "protocol": "file",
@@ -933,8 +933,8 @@
           "path": "packages/dsh-cohub/skills/cordis.md"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:22.113Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.334Z",
       "fingerprint": "5ef0d75c2b9efb51567ca806feb1daae00c642f6737ba1be12ef94de6faa4821",
       "apis": [
         {
@@ -986,9 +986,9 @@
           "path": "packages/dsh-cohub/skills/observer.md"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:22.112Z",
-      "fingerprint": "44913c848ceb32f8140c4eabefc193cea920424b9031af1e5ca32e850825e1d0",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.335Z",
+      "fingerprint": "8b862bc8b82288d611e3293928e63b48a22ead3ab9351c4d17961e2b1479bddb",
       "apis": [
         {
           "protocol": "file",
@@ -1063,9 +1063,9 @@
           "path": "packages/dsh-cohub/skills/orchestrator.md"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:22.109Z",
-      "fingerprint": "390e3780fe29dd8f51cf86b7b279632e7e943ff824cbc9af3d6d89a90d74a74c",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.337Z",
+      "fingerprint": "cf98ae22cc3dfed017454a60d2da0a87ae4b030aaf343653690d37fc9e603d3a",
       "apis": [
         {
           "protocol": "file",
@@ -1110,9 +1110,9 @@
           "path": "packages/dsh-cohub/skills/rule-app.md"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:22.112Z",
-      "fingerprint": "1e66086d32634eb3415c4482fdffb96e02cfe3603c676f65089b8d4dd7e9178b",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.338Z",
+      "fingerprint": "09b39d9e658a2610717d3c8737c6a4970d80b63f42296fa573c7672a0e633e38",
       "apis": [
         {
           "protocol": "file",
@@ -1185,9 +1185,9 @@
           "path": "packages/oh-my-opencode-cohub/package.json"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T09:08:13Z",
-      "fingerprint": "0117af8fcde58620112f11a647923c08bd7bf5c55c8f55f2a963187e1093bbd2",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.349Z",
+      "fingerprint": "1bbc80181e7277f9cd40651dcf75248e6571661eafa38dec15fdd7298de4d339",
       "aggregate": {
         "descendant_count": 40,
         "own_api_count": 0,
@@ -1217,9 +1217,9 @@
           "end_line": 256
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.351Z",
-      "fingerprint": "08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.340Z",
+      "fingerprint": "bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0",
       "aggregate": {
         "descendant_count": 4,
         "own_api_count": 0,
@@ -1249,9 +1249,9 @@
           "end_line": 256
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:36.946Z",
-      "fingerprint": "08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.339Z",
+      "fingerprint": "bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0",
       "apis": [
         {
           "protocol": "file",
@@ -1310,9 +1310,9 @@
           "end_line": 226
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:36.946Z",
-      "fingerprint": "08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.339Z",
+      "fingerprint": "bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0",
       "apis": [
         {
           "protocol": "file",
@@ -1389,9 +1389,9 @@
           "end_line": 199
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:36.946Z",
-      "fingerprint": "08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.340Z",
+      "fingerprint": "bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0",
       "apis": [
         {
           "protocol": "file",
@@ -1432,9 +1432,9 @@
           "end_line": 250
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:36.946Z",
-      "fingerprint": "08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.340Z",
+      "fingerprint": "bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0",
       "apis": [
         {
           "protocol": "file",
@@ -1495,8 +1495,8 @@
           "path": "packages/oh-my-opencode-cohub/src/cli/index.ts"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:08.900Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.341Z",
       "fingerprint": "e0fed8b0d59fedc7663d5f307eac2f896b8bf3ff089bc60ca708922b41b8a3b1",
       "aggregate": {
         "descendant_count": 2,
@@ -1527,9 +1527,9 @@
           "end_line": 525
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:08.900Z",
-      "fingerprint": "97d491df32737f63f78fa79e8b25426c064391d27ad87a0599136a5af0d66f2a",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.341Z",
+      "fingerprint": "cd5d83298bfc105a77c2d9cfcc6f8c8e2080116c4f1217365f402345ea45879b",
       "apis": [
         {
           "protocol": "rpc",
@@ -1575,8 +1575,8 @@
           "end_line": 217
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:08.900Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.342Z",
       "fingerprint": "e0fed8b0d59fedc7663d5f307eac2f896b8bf3ff089bc60ca708922b41b8a3b1",
       "apis": [
         {
@@ -1636,9 +1636,9 @@
           "end_line": 58
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:09.892Z",
-      "fingerprint": "08c3cdc9fe6a20467b49a14b3d78e15de686619b199a015ad86d7acba390ebf2",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.342Z",
+      "fingerprint": "4fd006d6c81f9479717d06dc2dd4a2aa62ce37d6e96d2e887f7e34228c0bc047",
       "apis": [
         {
           "protocol": "rpc",
@@ -1706,9 +1706,9 @@
           "path": "packages/oh-my-opencode-cohub/src/context/types.ts"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.359Z",
-      "fingerprint": "c50d78802e23d262cd11fa1457647b0120becb2a53ac4b072056ee3a0a22e33e",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.345Z",
+      "fingerprint": "43b7d669e4fc85d1c43fefdce73311a8d7468f1b2eb04c5d77850590fa34e360",
       "aggregate": {
         "descendant_count": 5,
         "own_api_count": 0,
@@ -1738,9 +1738,9 @@
           "end_line": 281
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:09.892Z",
-      "fingerprint": "bf0cf4a2f0b7c357cd494f2936ff5d400041d36505d134569f3950a246a1e022",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.342Z",
+      "fingerprint": "13d47a83e659a35cd9e67f02b4991f0d38d3a619b3958600881a3c956a0d1e11",
       "apis": [
         {
           "protocol": "rpc",
@@ -1793,8 +1793,8 @@
           "end_line": 208
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:09.891Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.343Z",
       "fingerprint": "4d440f44802cb3e45a102fef1761f9764e81d42ac8109b235debbe4a59aec1f6",
       "apis": [
         {
@@ -1861,8 +1861,8 @@
           "end_line": 64
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.359Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.343Z",
       "fingerprint": "7ad231e06d1ef8ffc78f8b8f79188584e57d5f4775aa0378381bea2825fc03e0",
       "apis": [
         {
@@ -1913,8 +1913,8 @@
           "end_line": 14
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.360Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.346Z",
       "fingerprint": "8e4c91416aa8f12fdb2793ea50e56f0f81bdb35e91f56ad65d235caefca0dac1",
       "apis": [
         {
@@ -1956,8 +1956,8 @@
           "end_line": 74
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.360Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.346Z",
       "fingerprint": "58f81a3a25365be7fb4aaf8aa308ee681bb0c17d27a69396366273d82c4c9757",
       "apis": [
         {
@@ -2008,9 +2008,9 @@
           "end_line": 821
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:09.891Z",
-      "fingerprint": "08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.347Z",
+      "fingerprint": "bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0",
       "apis": [
         {
           "protocol": "rpc",
@@ -2118,9 +2118,9 @@
           "end_line": 816
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:08.898Z",
-      "fingerprint": "08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.347Z",
+      "fingerprint": "bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0",
       "aggregate": {
         "descendant_count": 4,
         "own_api_count": 0,
@@ -2150,9 +2150,9 @@
           "end_line": 459
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:08.898Z",
-      "fingerprint": "08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.347Z",
+      "fingerprint": "bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0",
       "apis": [
         {
           "protocol": "file",
@@ -2202,9 +2202,9 @@
           "end_line": 799
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:08.899Z",
-      "fingerprint": "08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.348Z",
+      "fingerprint": "bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0",
       "apis": [
         {
           "protocol": "file",
@@ -2245,9 +2245,9 @@
           "end_line": 714
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:08.899Z",
-      "fingerprint": "08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.348Z",
+      "fingerprint": "bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0",
       "apis": [
         {
           "protocol": "file",
@@ -2306,9 +2306,9 @@
           "end_line": 611
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:08.899Z",
-      "fingerprint": "08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.348Z",
+      "fingerprint": "bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0",
       "apis": [
         {
           "protocol": "file",
@@ -2358,8 +2358,8 @@
           "end_line": 3
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:36.946Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.350Z",
       "fingerprint": "303e0d08849e215f6d65beea8ccdbfb41639317f40140dea12a4c202bb160cee",
       "apis": [
         {
@@ -2411,8 +2411,8 @@
           "path": "packages/oh-my-opencode-cohub/src/orchestration/types.ts"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.362Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.351Z",
       "fingerprint": "021d87292b3e60a03146b5f57bdc6594f9f197799c9e392e4a29506863ad4fb7",
       "aggregate": {
         "descendant_count": 5,
@@ -2443,8 +2443,8 @@
           "end_line": 93
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.362Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.350Z",
       "fingerprint": "9a60b8890d71ce2827f5bd9c60be52045e362d89c3a1a7344354cdd5c4c024be",
       "apis": [
         {
@@ -2495,8 +2495,8 @@
           "end_line": 136
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:09.892Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.350Z",
       "fingerprint": "670311138229fe9f1aa611349f27ad2e77a5c33174476e801bc267517fb7e3c5",
       "apis": [
         {
@@ -2560,8 +2560,8 @@
           "end_line": 52
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.363Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.352Z",
       "fingerprint": "0d78082e5e31344103893be7fb685a2acec453464af3bd8189d1d751d85f44be",
       "apis": [
         {
@@ -2603,8 +2603,8 @@
           "end_line": 28
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.363Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.352Z",
       "fingerprint": "a8e46e1c2b662873e47eff5d463920ccad7d4ac805be972050e75a481b625f75",
       "apis": [
         {
@@ -2646,8 +2646,8 @@
           "end_line": 112
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.363Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.353Z",
       "fingerprint": "143e83c4d7d106af78cbc347bfdd9c0f2d4303fc68963745dbe526031bee0d81",
       "apis": [
         {
@@ -2729,9 +2729,9 @@
           "path": "packages/oh-my-opencode-cohub/src/prompts/rule-app.md"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.356Z",
-      "fingerprint": "6e78eb0d2d06b5714272a4f9d907f4f376fd0d7b31b3c3845bb9492c53c37b1e",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.357Z",
+      "fingerprint": "d3a05b4ded6b5e6c3d3e490764369bb996240a87bec3f3666c7a5a8681fee34a",
       "apis": [
         {
           "protocol": "file",
@@ -2776,9 +2776,9 @@
           "path": "packages/oh-my-opencode-cohub/src/task-manager/types.ts"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.364Z",
-      "fingerprint": "2ac000ff898427d67ba07bc9b1249b930717141cdac32dee246050b2ab8e0fea",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.358Z",
+      "fingerprint": "caaa65f30eb1d0068c43181f5b903d1370537dd831c9d683d5495aa981e56983",
       "aggregate": {
         "descendant_count": 3,
         "own_api_count": 0,
@@ -2808,8 +2808,8 @@
           "end_line": 140
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.366Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.358Z",
       "fingerprint": "4d4b54b053c8b01f70ae43f95a5b20acf62f5c0c30e8fa44a42bbd48039eeeb0",
       "apis": [
         {
@@ -2860,9 +2860,9 @@
           "end_line": 441
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:09.892Z",
-      "fingerprint": "5fbc7edd7bcc03a35c32392458fa8f89897ae1ca2ed84b125f09e704b3ed294a",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.359Z",
+      "fingerprint": "1b16da4dfe3dd9fc38cbee7dd081bb8384ee87c86eb449e052760e148f08a61c",
       "apis": [
         {
           "protocol": "rpc",
@@ -2919,8 +2919,8 @@
           "end_line": 32
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.366Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.359Z",
       "fingerprint": "431a873f50b8b71ee23cd91458219acc75b7c4ba14052cc700cb43ea46ef217b",
       "apis": [
         {
@@ -2978,9 +2978,9 @@
           "path": "packages/oh-my-opencode-cohub/src/tools/model-stats.ts"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:08.896Z",
-      "fingerprint": "e61bf47c8c51d0365c3d68dd5b3600477201dcaec548f42d55387421e233277c",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.361Z",
+      "fingerprint": "acc26fed4fb5e92a4ca6b529d2913fe3ab1db3d8267783171cea71bc3e6072b0",
       "aggregate": {
         "descendant_count": 4,
         "own_api_count": 0,
@@ -3010,8 +3010,8 @@
           "end_line": 186
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:08.897Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.359Z",
       "fingerprint": "7a4e9703b5b286dea9f9540b071d0679219c8e86fc253080ed837698be7c4bfb",
       "apis": [
         {
@@ -3062,9 +3062,9 @@
           "end_line": 725
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:09.891Z",
-      "fingerprint": "caef08d982d79f193ff83a217bfb84f0b9c3840c962c68641ab8cbbd9757afb4",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.360Z",
+      "fingerprint": "c1bbfe8a0714b0366b9de592baf87548561b23483dbcc61a44e092acc492111f",
       "apis": [
         {
           "protocol": "rpc",
@@ -3146,8 +3146,8 @@
           "end_line": 80
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:09.892Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.362Z",
       "fingerprint": "85786b1ce57c32f036802dcdd440f0b884068520a8698dcdb4f33f253f91b1f7",
       "apis": [
         {
@@ -3201,8 +3201,8 @@
           "end_line": 143
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:54:08.898Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.362Z",
       "fingerprint": "1e8ff4f51a7e2642ffc803301f06bb29431cf1c37ded76ad42c7330b989cdb59",
       "apis": [
         {
@@ -3253,9 +3253,9 @@
           "end_line": 198
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.357Z",
-      "fingerprint": "53693017012b29a965e2810c642ddbaf10bda246046af513f6d219ed01bd6c91",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.363Z",
+      "fingerprint": "9ae4986e60c8eab5be39a2a07d36ac47c0744b574ce37f335f530fe51bbf99b2",
       "apis": [
         {
           "protocol": "rpc",
@@ -3296,9 +3296,9 @@
           "end_line": 82
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:52:23.357Z",
-      "fingerprint": "18b75e2a50c5cb8dc1aba7c28cfc20fe3191a1f0a3a3f142b9f66fa73c1fbccc",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.363Z",
+      "fingerprint": "1261c3f288ab20f1cd9adb5d05cdf1fc848a6d5f42d39e618ccae54b64e27abf",
       "apis": [
         {
           "protocol": "rpc",
@@ -3359,9 +3359,9 @@
           "path": "cohub-shared/sync.ts"
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T09:08:13Z",
-      "fingerprint": "a0332342f41d1f1ef7f1ed465151186607df877401d23929fb54e399197fe265",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.368Z",
+      "fingerprint": "6784da257daa66abaad24ab97e3daaf613ca661cfee4fc3d4400927c0160f9e8",
       "aggregate": {
         "descendant_count": 11,
         "own_api_count": 0,
@@ -3391,8 +3391,8 @@
           "end_line": 8
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.096Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.364Z",
       "fingerprint": "b703822af9d78421d86e97bb95744ea1a34ace0d7b565b1668ec445bc9c69e93",
       "apis": [
         {
@@ -3434,9 +3434,9 @@
           "end_line": 403
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.097Z",
-      "fingerprint": "40398a367dcb5197862e31b78d6b0e55a7777131ca1ede0b4994060f81f35b91",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.365Z",
+      "fingerprint": "16ec1b797750760deb69e2b63a377c124816c2788946e74f61907b1898214e2b",
       "aggregate": {
         "descendant_count": 4,
         "own_api_count": 0,
@@ -3471,9 +3471,9 @@
           "end_line": 269
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.097Z",
-      "fingerprint": "40398a367dcb5197862e31b78d6b0e55a7777131ca1ede0b4994060f81f35b91",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.364Z",
+      "fingerprint": "16ec1b797750760deb69e2b63a377c124816c2788946e74f61907b1898214e2b",
       "apis": [
         {
           "protocol": "rpc",
@@ -3561,9 +3561,9 @@
           "end_line": 403
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:56:37.318Z",
-      "fingerprint": "40398a367dcb5197862e31b78d6b0e55a7777131ca1ede0b4994060f81f35b91",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.364Z",
+      "fingerprint": "16ec1b797750760deb69e2b63a377c124816c2788946e74f61907b1898214e2b",
       "apis": [
         {
           "protocol": "rpc",
@@ -3676,9 +3676,9 @@
           "end_line": 300
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.098Z",
-      "fingerprint": "40398a367dcb5197862e31b78d6b0e55a7777131ca1ede0b4994060f81f35b91",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.365Z",
+      "fingerprint": "16ec1b797750760deb69e2b63a377c124816c2788946e74f61907b1898214e2b",
       "apis": [
         {
           "protocol": "rpc",
@@ -3755,9 +3755,9 @@
           "end_line": 228
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.098Z",
-      "fingerprint": "40398a367dcb5197862e31b78d6b0e55a7777131ca1ede0b4994060f81f35b91",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.365Z",
+      "fingerprint": "16ec1b797750760deb69e2b63a377c124816c2788946e74f61907b1898214e2b",
       "apis": [
         {
           "protocol": "rpc",
@@ -3798,8 +3798,8 @@
           "end_line": 32
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.097Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.365Z",
       "fingerprint": "7558bb4142063614ea8bcc1b88e7042bbd865dc41de5b79e7b42388a633e86fa",
       "apis": [
         {
@@ -3826,7 +3826,7 @@
         "own_api_count": 2,
         "inherited_api_count": 0,
         "dep_out": 0,
-        "dep_in": 2
+        "dep_in": 0
       }
     },
     "cohub.shared.fs-json": {
@@ -3850,8 +3850,8 @@
           "end_line": 39
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.096Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.366Z",
       "fingerprint": "dba19bfcb625af2c65e2924fa123e98ce52294454580c9b5acf5c87fd971392a",
       "apis": [
         {
@@ -3869,7 +3869,7 @@
         "own_api_count": 1,
         "inherited_api_count": 0,
         "dep_out": 0,
-        "dep_in": 3
+        "dep_in": 0
       }
     },
     "cohub.shared.model": {
@@ -3893,8 +3893,8 @@
           "end_line": 8
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.096Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.368Z",
       "fingerprint": "ab461238c23eae6e86fd791aef2a1cca2d99891ce412f6353a66aa11c8a5c266",
       "apis": [
         {
@@ -3936,9 +3936,9 @@
           "end_line": 165
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.099Z",
-      "fingerprint": "b6cf6a642194840d4d190901a963755c6b64157820048ab35e2130000a455163",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.369Z",
+      "fingerprint": "2afe7dbde381c798e18c25472423d9c66c5f06460d65c8eddfe2f41d00cdc4f2",
       "apis": [
         {
           "protocol": "rpc",
@@ -3979,8 +3979,8 @@
           "end_line": 64
         }
       ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:26:14.097Z",
+      "revision": "64bca9899ac80ea2f7f66aabcfa2206a0f32388b",
+      "updated_at": "2026-09-22T02:25:52.369Z",
       "fingerprint": "6adf85dc543f1e45c12751277942db84410d7b377b63b3338b4677de19526558",
       "apis": [
         {
@@ -4018,1949 +4018,10 @@
         "dep_out": 0,
         "dep_in": 1
       }
-    },
-    "cohub.zcode": {
-      "uid": "bc806c2d",
-      "id": "cohub.zcode",
-      "parent": "cohub",
-      "tree": "cohub",
-      "depth": 2,
-      "tags": [
-        "platform",
-        "mcp"
-      ],
-      "name": {
-        "zh": "ZCode 平台版",
-        "en": "ZCode Platform Edition"
-      },
-      "description": {
-        "zh": "ZCode 版 CoHub：MCP stdio Server + hooks 形态，含 12 个技能、委派/共识/扫描工具与任务追踪器。\n",
-        "en": "CoHub for ZCode: an MCP stdio server plus hooks, with 12 skills, delegation/council/scan tools, and a task tracker.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/index.ts"
-        },
-        {
-          "path": "packages/zcode-cohub/src/tools/scan.ts"
-        },
-        {
-          "path": "packages/zcode-cohub/src/tools/delegate.ts"
-        },
-        {
-          "path": "packages/zcode-cohub/src/tracker.ts"
-        },
-        {
-          "path": "packages/zcode-cohub/.zcode-plugin/plugin.json"
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T09:08:13Z",
-      "fingerprint": "830917abafd06ce3ca41c14ea3a331b4f3ccdd477ec60a3c5ffdcaf5c1ef36a7",
-      "aggregate": {
-        "descendant_count": 34,
-        "own_api_count": 0,
-        "inherited_api_count": 49,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.agents-template": {
-      "uid": "2b00001b",
-      "id": "cohub.zcode.agents-template",
-      "parent": "cohub.zcode",
-      "tree": "cohub",
-      "depth": 3,
-      "state": "planned",
-      "tags": [
-        "agents",
-        "templates"
-      ],
-      "name": {
-        "zh": "角色模板",
-        "en": "Agent Templates"
-      },
-      "description": {
-        "zh": "11 个角色 agent 模板（生成物）：install 时铺设到 ~/.zcode/agents/，用户可在设置界面逐个指定模型。\n",
-        "en": "Eleven role agent templates (generated): deployed to ~/.zcode/agents/ during install, with per-role model selection in settings.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/agents-template"
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2025-07-14T12:00:00Z",
-      "fingerprint": "pending",
-      "apis": [
-        {
-          "protocol": "file",
-          "path": "11 个角色 agent 模板",
-          "description": {
-            "zh": "安装到 ~/.zcode/agents/ 的 11 个角色模板\n",
-            "en": "Eleven role templates deployed to ~/.zcode/agents/\n"
-          },
-          "key": "file:11 个角色 agent 模板"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.context": {
-      "uid": "2b00000f",
-      "id": "cohub.zcode.context",
-      "parent": "cohub.zcode",
-      "tree": "cohub",
-      "depth": 3,
-      "tags": [
-        "context",
-        "engine"
-      ],
-      "name": {
-        "zh": "上下文引擎",
-        "en": "Context Engine"
-      },
-      "description": {
-        "zh": "上下文共享引擎：从任务状态中提取关键文件/决策/错误，按策略格式化后注入委派提示词。\n",
-        "en": "Shared context engine: extracts key files, decisions, and errors from task state, formats them per strategy, and injects into delegation prompts.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/context/engine.ts",
-          "line": 1,
-          "end_line": 107
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:58:27.993Z",
-      "fingerprint": "dad052a9a1b15ffdee45e573e6a23d7d0d13a717f00a691f913185c465ed7351",
-      "aggregate": {
-        "descendant_count": 5,
-        "own_api_count": 0,
-        "inherited_api_count": 9,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.context.engine": {
-      "uid": "2b000010",
-      "id": "cohub.zcode.context.engine",
-      "parent": "cohub.zcode.context",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "context",
-        "engine"
-      ],
-      "name": {
-        "zh": "上下文引擎核心",
-        "en": "Context Engine Core"
-      },
-      "description": {
-        "zh": "上下文引擎主逻辑：接收任务上下文结构，驱动提取→格式化→注入流程。\n",
-        "en": "Core context engine: accepts task context structs and drives the extract → format → inject pipeline.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/context/engine.ts",
-          "line": 1,
-          "end_line": 107
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:16.552Z",
-      "fingerprint": "dad052a9a1b15ffdee45e573e6a23d7d0d13a717f00a691f913185c465ed7351",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "zcode.ContextEngine",
-          "description": {
-            "zh": "驱动提取→格式化→注入流程\n",
-            "en": "Drives the extract → format → inject pipeline\n"
-          },
-          "key": "rpc:zcode.ContextEngine"
-        }
-      ],
-      "deps": [
-        {
-          "kind": "call",
-          "to": "cohub.zcode.context.extractor",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.context.formatter",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.context.types",
-          "cross_tree": false
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 3,
-        "dep_in": 2
-      }
-    },
-    "cohub.zcode.context.extractor": {
-      "uid": "2b000011",
-      "id": "cohub.zcode.context.extractor",
-      "parent": "cohub.zcode.context",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "context",
-        "extract"
-      ],
-      "name": {
-        "zh": "上下文提取器",
-        "en": "Context Extractor"
-      },
-      "description": {
-        "zh": "从任务上下文中提取关键数据：相关文件列表、关键决策、错误信息、结构化摘要。\n",
-        "en": "Extracts key data from task context: relevant file lists, key decisions, errors, and structured summaries.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/context/extractor.ts",
-          "line": 1,
-          "end_line": 148
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:44:07.026Z",
-      "fingerprint": "33c2d54fadcb62feae04f2987e6c2de370ca5051aa7bb2b86e551afa8f291c53",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "zcode.extractRelevantFiles",
-          "description": {
-            "zh": "提取相关文件列表\n",
-            "en": "Extract relevant file list\n"
-          },
-          "key": "rpc:zcode.extractRelevantFiles"
-        },
-        {
-          "protocol": "rpc",
-          "path": "zcode.extractKeyDecisions",
-          "description": {
-            "zh": "提取关键决策\n",
-            "en": "Extract key decisions\n"
-          },
-          "key": "rpc:zcode.extractKeyDecisions"
-        },
-        {
-          "protocol": "rpc",
-          "path": "zcode.extractErrors",
-          "description": {
-            "zh": "提取错误信息\n",
-            "en": "Extract error information\n"
-          },
-          "key": "rpc:zcode.extractErrors"
-        },
-        {
-          "protocol": "rpc",
-          "path": "zcode.buildSummary",
-          "description": {
-            "zh": "构建结构化摘要\n",
-            "en": "Build structured summary\n"
-          },
-          "key": "rpc:zcode.buildSummary"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 4,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 1
-      }
-    },
-    "cohub.zcode.context.formatter": {
-      "uid": "2b000012",
-      "id": "cohub.zcode.context.formatter",
-      "parent": "cohub.zcode.context",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "context",
-        "format"
-      ],
-      "name": {
-        "zh": "上下文格式化器",
-        "en": "Context Formatter"
-      },
-      "description": {
-        "zh": "将提取结构化数据按选定格式渲染为可注入的文本块。\n",
-        "en": "Renders extracted structured data into injectable text blocks per the selected format.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/context/formatter.ts",
-          "line": 1,
-          "end_line": 75
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:41:48.160Z",
-      "fingerprint": "39a4fa7e07a547734731b400781197b12ff388b0997aac80415fb3d5012aa995",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "formatContextDetails",
-          "description": {
-            "zh": "将提取数据渲染为注入文本\n",
-            "en": "Render extracted data into injectable text\n"
-          },
-          "key": "rpc:formatContextDetails"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 1
-      }
-    },
-    "cohub.zcode.context.strategy": {
-      "uid": "2b000013",
-      "id": "cohub.zcode.context.strategy",
-      "parent": "cohub.zcode.context",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "context",
-        "strategy"
-      ],
-      "name": {
-        "zh": "上下文策略",
-        "en": "Context Strategy"
-      },
-      "description": {
-        "zh": "根据任务类型（delegate/council/scan）解析对应的上下文注入策略。\n",
-        "en": "Resolves the context injection strategy based on task type (delegate, council, or scan).\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/context/strategy.ts",
-          "line": 1,
-          "end_line": 35
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:44:22.003Z",
-      "fingerprint": "43e68ca4b215e43408edbb121c2c199852563b74d44024118ded5c0e7a2b220b",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "zcode.resolveStrategy",
-          "description": {
-            "zh": "按任务类型解析上下文策略\n",
-            "en": "Resolve context strategy by task type\n"
-          },
-          "key": "rpc:zcode.resolveStrategy"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 1
-      }
-    },
-    "cohub.zcode.context.types": {
-      "uid": "2b000014",
-      "id": "cohub.zcode.context.types",
-      "parent": "cohub.zcode.context",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "context",
-        "types"
-      ],
-      "name": {
-        "zh": "上下文类型定义",
-        "en": "Context Types"
-      },
-      "description": {
-        "zh": "上下文引擎的类型定义：TaskContext 结构体、ContextStrategy 配置接口。\n",
-        "en": "Type definitions for the context engine: TaskContext struct and ContextStrategy configuration interface.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/context/types.ts",
-          "line": 1,
-          "end_line": 31
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:44:40.477Z",
-      "fingerprint": "febf0ec8b8d825e0400bef06a42b1a3249b7b42e650fffbe20d21b52d1476bce",
-      "apis": [
-        {
-          "protocol": "file",
-          "path": "zcode.TaskContext",
-          "description": {
-            "zh": "任务上下文结构体类型\n",
-            "en": "Task context struct type\n"
-          },
-          "key": "file:zcode.TaskContext"
-        },
-        {
-          "protocol": "file",
-          "path": "zcode.ContextStrategy",
-          "description": {
-            "zh": "上下文策略配置接口\n",
-            "en": "Context strategy configuration interface\n"
-          },
-          "key": "file:zcode.ContextStrategy"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 2,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 1
-      }
-    },
-    "cohub.zcode.entry": {
-      "uid": "2b000001",
-      "id": "cohub.zcode.entry",
-      "parent": "cohub.zcode",
-      "tree": "cohub",
-      "depth": 3,
-      "tags": [
-        "mcp",
-        "entry",
-        "tools"
-      ],
-      "name": {
-        "zh": "MCP 入口",
-        "en": "MCP Entry"
-      },
-      "description": {
-        "zh": "MCP 服务器入口：注册 delegate / council / scan / close-job 四个工具，启动 stdio transport。\n",
-        "en": "MCP server entry point: registers four tools (delegate, council, scan, close-job) and starts the stdio transport.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/index.ts",
-          "line": 1,
-          "end_line": 133
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:16.551Z",
-      "fingerprint": "d41c3a0d077cf8d7463c0bc413cbf6dbec5c331168977f20b83065fa47418228",
-      "apis": [
-        {
-          "protocol": "file",
-          "path": "MCP stdio Server",
-          "description": {
-            "zh": "注册 4 个 MCP 工具并启动 stdio transport\n",
-            "en": "Registers 4 MCP tools and starts the stdio transport\n"
-          },
-          "key": "file:MCP stdio Server"
-        }
-      ],
-      "deps": [
-        {
-          "kind": "call",
-          "to": "cohub.zcode.tools.delegate",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.tools.council",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.tools.job-control",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.tools.scan",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.tracker",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.context.engine",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.context.strategy",
-          "cross_tree": false
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 7,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.hooks": {
-      "uid": "2b000008",
-      "id": "cohub.zcode.hooks",
-      "parent": "cohub.zcode",
-      "tree": "cohub",
-      "depth": 3,
-      "tags": [
-        "hooks",
-        "lifecycle"
-      ],
-      "name": {
-        "zh": "Hook 扩展层",
-        "en": "Hook Extensions"
-      },
-      "description": {
-        "zh": "ZCode 会话生命周期钩子：SessionStart（中文注入）、UserPromptSubmit（job-board / orchestrate-remind）、PreToolUse + PostToolUse（agent-tracker / grep-counter）。\n",
-        "en": "ZCode session lifecycle hooks: SessionStart (Chinese injection), UserPromptSubmit (job-board / orchestrate-remind), PreToolUse + PostToolUse (agent-tracker / grep-counter).\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/hooks/agent-tracker.ts",
-          "line": 1,
-          "end_line": 264
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:58:27.993Z",
-      "fingerprint": "523cea820af6589df4790cf302a1d1961bf37bdb468b842a69248e769e6e0f3d",
-      "aggregate": {
-        "descendant_count": 6,
-        "own_api_count": 0,
-        "inherited_api_count": 8,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.hooks.agent-tracker": {
-      "uid": "2b00000c",
-      "id": "cohub.zcode.hooks.agent-tracker",
-      "parent": "cohub.zcode.hooks",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "hooks",
-        "tracker",
-        "agent"
-      ],
-      "name": {
-        "zh": "代理追踪",
-        "en": "Agent Tracker"
-      },
-      "description": {
-        "zh": "PreToolUse/PostToolUse hook：拦截 Agent spawn 自动登记任务（running），子代理结束时标记 completed，确保 job-board 不遗漏。\n",
-        "en": "PreToolUse/PostToolUse hooks: intercept Agent spawns to auto-register tasks (running) and mark completed when child agents finish, ensuring job-board completeness.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/hooks/agent-tracker.ts",
-          "line": 1,
-          "end_line": 105
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:16.552Z",
-      "fingerprint": "523cea820af6589df4790cf302a1d1961bf37bdb468b842a69248e769e6e0f3d",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "PreToolUse",
-          "description": {
-            "zh": "Agent spawn 时自动登记任务\n",
-            "en": "Auto-register task on Agent spawn\n"
-          },
-          "key": "rpc:PreToolUse"
-        },
-        {
-          "protocol": "rpc",
-          "path": "PostToolUse",
-          "description": {
-            "zh": "子代理结束时标记任务完成\n",
-            "en": "Mark task completed when child agent finishes\n"
-          },
-          "key": "rpc:PostToolUse"
-        },
-        {
-          "protocol": "rpc",
-          "path": "PostToolUseFailure",
-          "description": {
-            "zh": "子代理失败时标记任务失败\n",
-            "en": "Mark task failed on child agent failure\n"
-          },
-          "key": "rpc:PostToolUseFailure"
-        }
-      ],
-      "deps": [
-        {
-          "kind": "call",
-          "to": "cohub.zcode.tracker",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.hooks.stdin",
-          "cross_tree": false
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 3,
-        "inherited_api_count": 0,
-        "dep_out": 2,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.hooks.chinese-inject": {
-      "uid": "2b000009",
-      "id": "cohub.zcode.hooks.chinese-inject",
-      "parent": "cohub.zcode.hooks",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "hooks",
-        "chinese"
-      ],
-      "name": {
-        "zh": "中文注入",
-        "en": "Chinese Inject"
-      },
-      "description": {
-        "zh": "SessionStart hook：在会话启动时注入中文语言要求到系统提示，确保所有回复使用中文。\n",
-        "en": "SessionStart hook: injects a Chinese language requirement into the system prompt at session start.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/hooks/chinese-inject.ts",
-          "line": 1,
-          "end_line": 29
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:41:48.158Z",
-      "fingerprint": "fc4ce81ba8ccc7f134ad950f74c77dfa936b8ff0d843203d97ce3518f295fc0a",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "SessionStart",
-          "description": {
-            "zh": "会话启动时注入中文语言要求\n",
-            "en": "Inject Chinese language requirement at session start\n"
-          },
-          "key": "rpc:SessionStart"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.hooks.grep-counter": {
-      "uid": "2b00000d",
-      "id": "cohub.zcode.hooks.grep-counter",
-      "parent": "cohub.zcode.hooks",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "hooks",
-        "grep",
-        "co_scan"
-      ],
-      "name": {
-        "zh": "Grep 计数器",
-        "en": "Grep Counter"
-      },
-      "description": {
-        "zh": "PostToolUse(Grep) hook：监听每次 Grep 调用，按会话统计滚动 10 分钟窗口内调用次数；超阈值时注入 co_scan 提醒。\n",
-        "en": "PostToolUse(Grep) hook: monitors each Grep call, counts per-session calls in a rolling 10-minute window, and injects a co_scan reminder when the threshold is exceeded.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/hooks/grep-counter.ts",
-          "line": 1,
-          "end_line": 318
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:16.552Z",
-      "fingerprint": "0bb5d256777653f189f3cf3c0bdd13cc40ce0025b22daed143eab161d9d12824",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "PostToolUse(Grep)",
-          "description": {
-            "zh": "监听 Grep 调用次数，超阈值时注入 co_scan 提醒\n",
-            "en": "Monitor Grep call count; inject co_scan reminder when threshold exceeded\n"
-          },
-          "key": "rpc:PostToolUse(Grep)"
-        }
-      ],
-      "deps": [
-        {
-          "kind": "call",
-          "to": "cohub.zcode.utils.paths",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.hooks.stdin",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.shared.fs-json",
-          "cross_tree": false
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 3,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.hooks.job-board": {
-      "uid": "2b00000a",
-      "id": "cohub.zcode.hooks.job-board",
-      "parent": "cohub.zcode.hooks",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "hooks",
-        "job-board"
-      ],
-      "name": {
-        "zh": "作业看板",
-        "en": "Job Board"
-      },
-      "description": {
-        "zh": "UserPromptSubmit hook：每次用户输入前刷新作业看板，展示运行中/已完成/失败的任务状态。\n",
-        "en": "UserPromptSubmit hook: refreshes the job board before each user prompt, showing running/completed/failed task statuses.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/hooks/job-board.ts",
-          "line": 1,
-          "end_line": 99
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:16.552Z",
-      "fingerprint": "87f4cb1e7675d81faf5266ab368f811ecaedf8c61cb0993b5998d74bed771bec",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "zcode.UserPromptSubmit.jobboard",
-          "description": {
-            "zh": "用户输入前刷新作业看板面板\n",
-            "en": "Refresh the job board panel before user input\n"
-          },
-          "key": "rpc:zcode.UserPromptSubmit.jobboard"
-        }
-      ],
-      "deps": [
-        {
-          "kind": "call",
-          "to": "cohub.zcode.utils.paths",
-          "cross_tree": false
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 1,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.hooks.orchestrate-remind": {
-      "uid": "2b00000b",
-      "id": "cohub.zcode.hooks.orchestrate-remind",
-      "parent": "cohub.zcode.hooks",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "hooks",
-        "orchestrator"
-      ],
-      "name": {
-        "zh": "调度提醒",
-        "en": "Orchestrate Remind"
-      },
-      "description": {
-        "zh": "UserPromptSubmit hook：提示主代理遵循 orchestrator 调度纪律——先分析需求再委派而非直接执行。\n",
-        "en": "UserPromptSubmit hook: reminds the primary agent to follow orchestrator discipline — analyze first, then delegate.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/hooks/orchestrate-remind.ts",
-          "line": 1,
-          "end_line": 12
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:45:29.052Z",
-      "fingerprint": "b98465e1713d068893cff0bcbdd1d3a08aa45b955de150b3f9b2df2cbad8d7b2",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "zcode.UserPromptSubmit.remind",
-          "description": {
-            "zh": "提醒主代理遵循 orchestrator 调度纪律\n",
-            "en": "Remind the primary agent of orchestrator discipline\n"
-          },
-          "key": "rpc:zcode.UserPromptSubmit.remind"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.hooks.stdin": {
-      "uid": "2b00000e",
-      "id": "cohub.zcode.hooks.stdin",
-      "parent": "cohub.zcode.hooks",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "hooks",
-        "stdin",
-        "shared"
-      ],
-      "name": {
-        "zh": "标准输入读取",
-        "en": "Stdin Reader"
-      },
-      "description": {
-        "zh": "Hook 间共享的同步 stdin 读取工具：带超时的 readStdinSync 供 agent-tracker 和 grep-counter 共用。\n",
-        "en": "Shared synchronous stdin reader for hooks: readStdinSync with timeout, shared by agent-tracker and grep-counter.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/hooks/shared/stdin.ts",
-          "line": 1,
-          "end_line": 63
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:41:48.159Z",
-      "fingerprint": "e09b5228adf00c9bcd600a051a308844b1bafaffd0d26968ab9d14b3615a4022",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "readStdinSync",
-          "description": {
-            "zh": "带超时的同步 stdin 读取\n",
-            "en": "Synchronous stdin read with timeout\n"
-          },
-          "key": "rpc:readStdinSync"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 2
-      }
-    },
-    "cohub.zcode.install": {
-      "uid": "2b000002",
-      "id": "cohub.zcode.install",
-      "parent": "cohub.zcode",
-      "tree": "cohub",
-      "depth": 3,
-      "tags": [
-        "install",
-        "cli"
-      ],
-      "name": {
-        "zh": "安装器",
-        "en": "Installer"
-      },
-      "description": {
-        "zh": "一键安装脚本：注册 ZCode 插件、铺设 11 个角色 agent 到 ~/.zcode/agents/、复制 skills 与 hooks。\n",
-        "en": "One-shot install script: registers the ZCode plugin, deploys 11 role agents to ~/.zcode/agents/, copies skills and hooks.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/scripts/install.ts",
-          "line": 1,
-          "end_line": 889
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:41:48.156Z",
-      "fingerprint": "97b60c2c7c346344d4261371eefdd3d4c1e67e18c15209759758a5c47ab8ca8c",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "install",
-          "description": {
-            "zh": "一键安装：插件注册 + 角色 agent 铺设 + 文件复制\n",
-            "en": "One-shot install: plugin registration, role agent deployment, and file copy\n"
-          },
-          "key": "rpc:install"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.skills": {
-      "uid": "2b000016",
-      "id": "cohub.zcode.skills",
-      "parent": "cohub.zcode",
-      "tree": "cohub",
-      "depth": 3,
-      "tags": [
-        "skills",
-        "agents"
-      ],
-      "name": {
-        "zh": "技能资产",
-        "en": "Skill Assets"
-      },
-      "description": {
-        "zh": "12 个 ZCode skill 源文件：orchestrator（主代理）加 11 个可 spawn 角色，每个子目录含 SKILL.md。\n",
-        "en": "Twelve ZCode skill source files: orchestrator (primary agent) plus 11 spawnable roles, each subdirectory containing SKILL.md.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/skills/orchestrator/SKILL.md",
-          "line": 1,
-          "end_line": 151
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:58:27.993Z",
-      "fingerprint": "05f963671febf403b0018596294fc5118b5f62280c208de1863440acece229fe",
-      "aggregate": {
-        "descendant_count": 4,
-        "own_api_count": 0,
-        "inherited_api_count": 12,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.skills-briefs": {
-      "uid": "2b00001c",
-      "id": "cohub.zcode.skills-briefs",
-      "parent": "cohub.zcode",
-      "tree": "cohub",
-      "depth": 3,
-      "tags": [
-        "skills",
-        "generated"
-      ],
-      "name": {
-        "zh": "技能简报",
-        "en": "Skills Briefs"
-      },
-      "description": {
-        "zh": "技能简报字典（生成物）：从 skills/*/SKILL.md 的 frontmatter 提取 name/description 生成。\n",
-        "en": "Skills brief dictionary (generated): extracted from skills/*/SKILL.md frontmatter name/description.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/skills-briefs.ts",
-          "line": 1,
-          "end_line": 69
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:41:48.166Z",
-      "fingerprint": "dbb97350314c7635a476d32e9602bde8f3fcbce284e1f1b343474c283d6b7e39",
-      "apis": [
-        {
-          "protocol": "file",
-          "path": "SKILL_BRIEFS",
-          "description": {
-            "zh": "技能简报字典（生成物）\n",
-            "en": "Skills brief dictionary (generated)\n"
-          },
-          "key": "file:SKILL_BRIEFS"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 1
-      }
-    },
-    "cohub.zcode.skills.analysis": {
-      "uid": "2b000018",
-      "id": "cohub.zcode.skills.analysis",
-      "parent": "cohub.zcode.skills",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "skills",
-        "analysis"
-      ],
-      "name": {
-        "zh": "分析技能",
-        "en": "Analysis Skills"
-      },
-      "description": {
-        "zh": "三个分析角色：co-oracle（架构/代码审查）、co-planner（方案制定）、co-council（多模型共识）。\n",
-        "en": "Three analysis roles: co-oracle (architecture/code review), co-planner (planning), co-council (multi-model consensus).\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/skills/oracle/SKILL.md"
-        },
-        {
-          "path": "packages/zcode-cohub/skills/planner/SKILL.md"
-        },
-        {
-          "path": "packages/zcode-cohub/skills/council/SKILL.md"
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:43:16.521Z",
-      "fingerprint": "1fce78bc60dda6349a25773b87520d12d9b2b3b1a138148b60949cc342a744d1",
-      "apis": [
-        {
-          "protocol": "file",
-          "path": "zcode.co-oracle",
-          "description": {
-            "zh": "架构/代码审查代理\n",
-            "en": "Architecture/code review agent\n"
-          },
-          "key": "file:zcode.co-oracle"
-        },
-        {
-          "protocol": "file",
-          "path": "zcode.co-planner",
-          "description": {
-            "zh": "方案制定代理\n",
-            "en": "Planning agent\n"
-          },
-          "key": "file:zcode.co-planner"
-        },
-        {
-          "protocol": "file",
-          "path": "zcode.co-council",
-          "description": {
-            "zh": "多模型共识代理\n",
-            "en": "Multi-model council agent\n"
-          },
-          "key": "file:zcode.co-council"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 3,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.skills.execution": {
-      "uid": "2b000019",
-      "id": "cohub.zcode.skills.execution",
-      "parent": "cohub.zcode.skills",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "skills",
-        "execution"
-      ],
-      "name": {
-        "zh": "执行技能",
-        "en": "Execution Skills"
-      },
-      "description": {
-        "zh": "五个执行角色：co-fixer（代码修改/构建/测试）、co-designer（UI/UX）、co-explorer（代码搜索）、co-librarian（文档研究）、co-observer（视觉分析）。\n",
-        "en": "Five execution roles: co-fixer (code/build/test), co-designer (UI/UX), co-explorer (code search), co-librarian (docs research), co-observer (visual analysis).\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/skills/fixer/SKILL.md"
-        },
-        {
-          "path": "packages/zcode-cohub/skills/designer/SKILL.md"
-        },
-        {
-          "path": "packages/zcode-cohub/skills/explorer/SKILL.md"
-        },
-        {
-          "path": "packages/zcode-cohub/skills/librarian/SKILL.md"
-        },
-        {
-          "path": "packages/zcode-cohub/skills/observer/SKILL.md"
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:43:26.481Z",
-      "fingerprint": "6e01f622398a9115e92cb2fd126673f6b6b7a9eeedb0aa7510a9ede8421d9e8f",
-      "apis": [
-        {
-          "protocol": "file",
-          "path": "zcode.co-fixer",
-          "description": {
-            "zh": "代码修改/构建/测试代理\n",
-            "en": "Code fix, build, and test agent\n"
-          },
-          "key": "file:zcode.co-fixer"
-        },
-        {
-          "protocol": "file",
-          "path": "zcode.co-designer",
-          "description": {
-            "zh": "UI/UX 设计实现代理\n",
-            "en": "UI/UX design agent\n"
-          },
-          "key": "file:zcode.co-designer"
-        },
-        {
-          "protocol": "file",
-          "path": "zcode.co-explorer",
-          "description": {
-            "zh": "代码搜索定位代理\n",
-            "en": "Code search agent\n"
-          },
-          "key": "file:zcode.co-explorer"
-        },
-        {
-          "protocol": "file",
-          "path": "zcode.co-librarian",
-          "description": {
-            "zh": "文档/API 研究代理\n",
-            "en": "Documentation/API research agent\n"
-          },
-          "key": "file:zcode.co-librarian"
-        },
-        {
-          "protocol": "file",
-          "path": "zcode.co-observer",
-          "description": {
-            "zh": "图片/视觉分析代理\n",
-            "en": "Image/visual analysis agent\n"
-          },
-          "key": "file:zcode.co-observer"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 5,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.skills.orchestration": {
-      "uid": "2b000017",
-      "id": "cohub.zcode.skills.orchestration",
-      "parent": "cohub.zcode.skills",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "skills",
-        "orchestrator"
-      ],
-      "name": {
-        "zh": "调度技能",
-        "en": "Orchestration Skill"
-      },
-      "description": {
-        "zh": "co-orchestrator 技能：纯调度代理，分析需求 → 委派 → 审核，不直接执行文件操作。\n",
-        "en": "co-orchestrator skill: pure orchestration agent that analyzes requirements, delegates, and reviews without direct file operations.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/skills/orchestrator/SKILL.md"
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:42:53.725Z",
-      "fingerprint": "05f963671febf403b0018596294fc5118b5f62280c208de1863440acece229fe",
-      "apis": [
-        {
-          "protocol": "file",
-          "path": "zcode.co-orchestrator",
-          "description": {
-            "zh": "纯调度代理技能定义\n",
-            "en": "Pure orchestration agent skill definition\n"
-          },
-          "key": "file:zcode.co-orchestrator"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.skills.rules": {
-      "uid": "2b00001a",
-      "id": "cohub.zcode.skills.rules",
-      "parent": "cohub.zcode.skills",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "skills",
-        "rules"
-      ],
-      "name": {
-        "zh": "规则技能",
-        "en": "Rules Skills"
-      },
-      "description": {
-        "zh": "三个规则分析角色：co-rule-user（用户级 AGENTS.md）、co-rule-project（项目级 AGENTS.md）、co-rule-app（应用级 .zcode/rules/*.md）。\n",
-        "en": "Three rule-analysis roles: co-rule-user (user-level AGENTS.md), co-rule-project (project-level AGENTS.md), co-rule-app (app-level .zcode/rules/*.md).\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/skills/rule-user/SKILL.md"
-        },
-        {
-          "path": "packages/zcode-cohub/skills/rule-project/SKILL.md"
-        },
-        {
-          "path": "packages/zcode-cohub/skills/rule-app/SKILL.md"
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:43:33.707Z",
-      "fingerprint": "b6fa91afc3c9214eecf485ad298910676106bc6b664bc3f81e0f868e30e9b006",
-      "apis": [
-        {
-          "protocol": "file",
-          "path": "zcode.co-rule-user",
-          "description": {
-            "zh": "用户级 AGENTS.md 分析\n",
-            "en": "User-level AGENTS.md analysis\n"
-          },
-          "key": "file:zcode.co-rule-user"
-        },
-        {
-          "protocol": "file",
-          "path": "zcode.co-rule-project",
-          "description": {
-            "zh": "项目级 AGENTS.md 分析\n",
-            "en": "Project-level AGENTS.md analysis\n"
-          },
-          "key": "file:zcode.co-rule-project"
-        },
-        {
-          "protocol": "file",
-          "path": "zcode.co-rule-app",
-          "description": {
-            "zh": "应用级规则分析\n",
-            "en": "App-level rules analysis\n"
-          },
-          "key": "file:zcode.co-rule-app"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 3,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.tools": {
-      "uid": "2b000003",
-      "id": "cohub.zcode.tools",
-      "parent": "cohub.zcode",
-      "tree": "cohub",
-      "depth": 3,
-      "tags": [
-        "mcp",
-        "tools"
-      ],
-      "name": {
-        "zh": "MCP 工具层",
-        "en": "MCP Tools"
-      },
-      "description": {
-        "zh": "四个 MCP 工具：委派装配、多模型共识、批量扫描、作业终止。\n",
-        "en": "Four MCP tools: delegation assembly, multi-model council, batch scanning, and job termination.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/tools/delegate.ts",
-          "line": 1,
-          "end_line": 210
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:58:27.993Z",
-      "fingerprint": "76c0c2f9dfa58a622afdf04493003d3e952724565f8a249486e00c42ae596c5b",
-      "aggregate": {
-        "descendant_count": 4,
-        "own_api_count": 0,
-        "inherited_api_count": 4,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.tools.council": {
-      "uid": "2b000005",
-      "id": "cohub.zcode.tools.council",
-      "parent": "cohub.zcode.tools",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "mcp",
-        "council",
-        "consensus"
-      ],
-      "name": {
-        "zh": "多模型共识",
-        "en": "Multi-Model Council"
-      },
-      "description": {
-        "zh": "多模型并行共识：并行查询多个模型 → 收集结论 → 按语义相似度合成共识裁决。\n",
-        "en": "Multi-model parallel council: queries multiple models in parallel, collects conclusions, and synthesizes a consensus verdict by semantic similarity.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/tools/council.ts",
-          "line": 1,
-          "end_line": 255
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:16.552Z",
-      "fingerprint": "9e59d3f57ccc831a1c8d06d0882cbaa04a941cdbd1058bf4d1239a4e9da55054",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "co_council",
-          "description": {
-            "zh": "并行查询多模型，按语义相似度合成共识裁决\n",
-            "en": "Parallel multi-model query with consensus synthesis by semantic similarity\n"
-          },
-          "key": "rpc:co_council"
-        }
-      ],
-      "deps": [
-        {
-          "kind": "call",
-          "to": "cohub.zcode.tracker",
-          "cross_tree": false
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 1,
-        "dep_in": 1
-      }
-    },
-    "cohub.zcode.tools.delegate": {
-      "uid": "2b000004",
-      "id": "cohub.zcode.tools.delegate",
-      "parent": "cohub.zcode.tools",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "mcp",
-        "delegate"
-      ],
-      "name": {
-        "zh": "委派装配",
-        "en": "Delegate Assembly"
-      },
-      "description": {
-        "zh": "提示词装配器：匹配 skill → 注入上下文/纪律 → 返回 subagent_type / agent_prompt / inline_prompt，不 spawn。\n",
-        "en": "Prompt assembler: matches skill, injects context/discipline, and returns subagent_type/agent_prompt/inline_prompt without spawning.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/tools/delegate.ts",
-          "line": 1,
-          "end_line": 229
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:16.552Z",
-      "fingerprint": "76c0c2f9dfa58a622afdf04493003d3e952724565f8a249486e00c42ae596c5b",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "co_delegate",
-          "description": {
-            "zh": "提示词装配：skill 匹配 → 上下文注入 → 返回装配结果\n",
-            "en": "Prompt assembly: skill matching → context injection → returns assembly result\n"
-          },
-          "key": "rpc:co_delegate"
-        }
-      ],
-      "deps": [
-        {
-          "kind": "call",
-          "to": "cohub.zcode.tracker",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.context.engine",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.skills-briefs",
-          "cross_tree": false
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 3,
-        "dep_in": 1
-      }
-    },
-    "cohub.zcode.tools.job-control": {
-      "uid": "2b000006",
-      "id": "cohub.zcode.tools.job-control",
-      "parent": "cohub.zcode.tools",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "mcp",
-        "job"
-      ],
-      "name": {
-        "zh": "作业控制",
-        "en": "Job Control"
-      },
-      "description": {
-        "zh": "取消运行中的作业：根据 task_id 查找并中止对应子会话。\n",
-        "en": "Cancels a running job: looks up the task_id and aborts the corresponding child session.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/tools/job-control.ts",
-          "line": 1,
-          "end_line": 78
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:41:48.157Z",
-      "fingerprint": "df85163e351daae52299517955115c058f460bf2ac1f939e6d0322de6dab083c",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "co_close_job",
-          "description": {
-            "zh": "根据 task_id 查找并中止对应子会话\n",
-            "en": "Look up task_id and abort the corresponding child session\n"
-          },
-          "key": "rpc:co_close_job"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 1
-      }
-    },
-    "cohub.zcode.tools.scan": {
-      "uid": "2b000007",
-      "id": "cohub.zcode.tools.scan",
-      "parent": "cohub.zcode.tools",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "mcp",
-        "scan",
-        "symbols"
-      ],
-      "name": {
-        "zh": "批量扫描",
-        "en": "Batch Scan"
-      },
-      "description": {
-        "zh": "批量符号引用统计：单遍扫描文件 + 联合正则分批匹配，一次调用替代 N 次搜索。返回引用计数与零引用符号列表。\n",
-        "en": "Batch symbol reference scanner: single-pass file scan with batched regex matching, replacing N individual searches. Returns reference counts and zero-reference symbol lists.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/tools/scan.ts",
-          "line": 1,
-          "end_line": 709
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:41:48.157Z",
-      "fingerprint": "4403ca2042c501431901dc94741133b03dfe418ceca17f2daf2c91b35640353a",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "co_scan",
-          "description": {
-            "zh": "单遍扫描 + 联合正则分批匹配，返回引用计数与零引用符号\n",
-            "en": "Single-pass scan with batched regex matching; returns reference counts and zero-reference symbols\n"
-          },
-          "key": "rpc:co_scan"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 1
-      }
-    },
-    "cohub.zcode.tracker": {
-      "uid": "2b000015",
-      "id": "cohub.zcode.tracker",
-      "parent": "cohub.zcode",
-      "tree": "cohub",
-      "depth": 3,
-      "tags": [
-        "tracker",
-        "state"
-      ],
-      "name": {
-        "zh": "任务追踪器",
-        "en": "Task Tracker"
-      },
-      "description": {
-        "zh": "任务状态文件（JSON）读写：登记/更新/完成/失败任务，由 hook 驱动的事件循环维护。\n",
-        "en": "Task state file (JSON) read/write: register, update, complete, and fail tasks, maintained by a hook-driven event loop.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/tracker.ts",
-          "line": 1,
-          "end_line": 548
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:16.551Z",
-      "fingerprint": "c1517e991dde5265c49b700a9317848b506fc60c4f3bb7c4b6d8e5b3b6ed4a44",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "zcode.TaskTracker",
-          "description": {
-            "zh": "任务追踪主类\n",
-            "en": "Main task tracker class\n"
-          },
-          "key": "rpc:zcode.TaskTracker"
-        },
-        {
-          "protocol": "rpc",
-          "path": "zcode.readTrackerState",
-          "description": {
-            "zh": "读取任务追踪状态\n",
-            "en": "Read tracker state\n"
-          },
-          "key": "rpc:zcode.readTrackerState"
-        },
-        {
-          "protocol": "rpc",
-          "path": "zcode.registerExternalJob",
-          "description": {
-            "zh": "登记外部作业\n",
-            "en": "Register external job\n"
-          },
-          "key": "rpc:zcode.registerExternalJob"
-        },
-        {
-          "protocol": "rpc",
-          "path": "zcode.completeOldestBySkill",
-          "description": {
-            "zh": "按 skill 完成最旧任务\n",
-            "en": "Complete oldest task by skill\n"
-          },
-          "key": "rpc:zcode.completeOldestBySkill"
-        },
-        {
-          "protocol": "rpc",
-          "path": "zcode.failTaskBySkill",
-          "description": {
-            "zh": "按 skill 标记任务失败\n",
-            "en": "Fail task by skill\n"
-          },
-          "key": "rpc:zcode.failTaskBySkill"
-        }
-      ],
-      "deps": [
-        {
-          "kind": "call",
-          "to": "cohub.shared.fs-json",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.shared.fs-atomic",
-          "cross_tree": false
-        },
-        {
-          "kind": "call",
-          "to": "cohub.zcode.utils.paths",
-          "cross_tree": false
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 5,
-        "inherited_api_count": 0,
-        "dep_out": 3,
-        "dep_in": 4
-      }
-    },
-    "cohub.zcode.utils": {
-      "uid": "2b00001d",
-      "id": "cohub.zcode.utils",
-      "parent": "cohub.zcode",
-      "tree": "cohub",
-      "depth": 3,
-      "tags": [
-        "utils",
-        "constants"
-      ],
-      "name": {
-        "zh": "工具与常量",
-        "en": "Utils & Constants"
-      },
-      "description": {
-        "zh": "工具函数与共享常量：路径解析、原子文件写、JSON 安全读、诊断日志、包内常量。\n",
-        "en": "Utility functions and shared constants: path resolution, atomic file writes, safe JSON reads, diagnostic logging, and package constants.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/utils/paths.ts",
-          "line": 1,
-          "end_line": 19
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:58:27.994Z",
-      "fingerprint": "187030745366a64ba02fe2ef5e6d1fd97bd850ce79fffb07f57dc62b19497207",
-      "aggregate": {
-        "descendant_count": 5,
-        "own_api_count": 0,
-        "inherited_api_count": 7,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.utils.constants": {
-      "uid": "2b000022",
-      "id": "cohub.zcode.utils.constants",
-      "parent": "cohub.zcode.utils",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "constants",
-        "shared"
-      ],
-      "name": {
-        "zh": "包内常量",
-        "en": "Package Constants"
-      },
-      "description": {
-        "zh": "zcode 自有共享常量：STALE_TASK_MS（30 分钟过期阈值）、STDIN_TIMEOUT_MS（3 秒超时）。\n",
-        "en": "ZCode-owned shared constants: STALE_TASK_MS (30 min stale threshold) and STDIN_TIMEOUT_MS (3 sec timeout).\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/shared/constants.ts",
-          "line": 1,
-          "end_line": 16
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:41:48.167Z",
-      "fingerprint": "ff3a7cd452c30fd32a784b966f3d484c13f83e74df28b5c33c10918b138c6be3",
-      "apis": [
-        {
-          "protocol": "file",
-          "path": "STALE_TASK_MS",
-          "description": {
-            "zh": "非终态任务过期阈值：30 分钟\n",
-            "en": "Non-terminal task stale threshold: 30 minutes\n"
-          },
-          "key": "file:STALE_TASK_MS"
-        },
-        {
-          "protocol": "file",
-          "path": "STDIN_TIMEOUT_MS",
-          "description": {
-            "zh": "stdin 同步读取超时：3 秒\n",
-            "en": "Synchronous stdin read timeout: 3 seconds\n"
-          },
-          "key": "file:STDIN_TIMEOUT_MS"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 2,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.utils.fs-atomic": {
-      "uid": "2b00001f",
-      "id": "cohub.zcode.utils.fs-atomic",
-      "parent": "cohub.zcode.utils",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "utils",
-        "fs"
-      ],
-      "name": {
-        "zh": "原子文件写",
-        "en": "Atomic File Write"
-      },
-      "description": {
-        "zh": "仅重导出自共享层 cohub.shared 的 writeFileAtomic 函数。\n",
-        "en": "Re-exports writeFileAtomic from the shared cohub.shared layer only.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/utils/fs-atomic.ts",
-          "line": 1,
-          "end_line": 3
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:16.551Z",
-      "fingerprint": "0ada4a2d4db6b810cd961d3e1150fcb25c07d4a5d15a27ff3017516d752c9dcd",
-      "apis": [
-        {
-          "protocol": "file",
-          "path": "重导出 writeFileAtomic",
-          "description": {
-            "zh": "原子文件写入（重导出共享层）\n",
-            "en": "Atomic file write (re-exported from shared layer)\n"
-          },
-          "key": "file:重导出 writeFileAtomic"
-        }
-      ],
-      "deps": [
-        {
-          "kind": "call",
-          "to": "cohub.shared.fs-atomic",
-          "cross_tree": false
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 1,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.utils.fs-json": {
-      "uid": "2b000020",
-      "id": "cohub.zcode.utils.fs-json",
-      "parent": "cohub.zcode.utils",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "utils",
-        "fs",
-        "json"
-      ],
-      "name": {
-        "zh": "JSON 安全读",
-        "en": "JSON Safe Read"
-      },
-      "description": {
-        "zh": "仅重导出自共享层 cohub.shared 的 readJsonFileSafe 函数。\n",
-        "en": "Re-exports readJsonFileSafe from the shared cohub.shared layer only.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/utils/fs-json.ts",
-          "line": 1,
-          "end_line": 3
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:57:16.551Z",
-      "fingerprint": "80761d0b4626c3e614ee8bc53d46742ca85ca69430c7f3736a4462940995c9a9",
-      "apis": [
-        {
-          "protocol": "file",
-          "path": "重导出 readJsonFileSafe",
-          "description": {
-            "zh": "JSON 安全读取（重导出共享层）\n",
-            "en": "Safe JSON read (re-exported from shared layer)\n"
-          },
-          "key": "file:重导出 readJsonFileSafe"
-        }
-      ],
-      "deps": [
-        {
-          "kind": "call",
-          "to": "cohub.shared.fs-json",
-          "cross_tree": false
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 1,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.utils.log": {
-      "uid": "2b000021",
-      "id": "cohub.zcode.utils.log",
-      "parent": "cohub.zcode.utils",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "utils",
-        "log"
-      ],
-      "name": {
-        "zh": "诊断日志",
-        "en": "Diagnostic Log"
-      },
-      "description": {
-        "zh": "最佳尽力追加式诊断日志：写入 $TMPDIR/zcode-cohub.log，失败静默。\n",
-        "en": "Best-effort append-only diagnostic logger: writes to $TMPDIR/zcode-cohub.log, fails silently.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/utils/log.ts",
-          "line": 1,
-          "end_line": 26
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:45:12.688Z",
-      "fingerprint": "adc8c3594e149dc20c35aaa160d9d466a25cc95424103b430bae8fd7dd3a982e",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "zcode.appendLog",
-          "description": {
-            "zh": "追加式诊断日志写入\n",
-            "en": "Append-only diagnostic log write\n"
-          },
-          "key": "rpc:zcode.appendLog"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 1,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 0
-      }
-    },
-    "cohub.zcode.utils.paths": {
-      "uid": "2b00001e",
-      "id": "cohub.zcode.utils.paths",
-      "parent": "cohub.zcode.utils",
-      "tree": "cohub",
-      "depth": 4,
-      "tags": [
-        "utils",
-        "paths"
-      ],
-      "name": {
-        "zh": "路径工具",
-        "en": "Path Utils"
-      },
-      "description": {
-        "zh": "状态目录与追踪文件路径解析：getStateDir 返回插件数据目录，getTrackerFilePath 返回任务状态文件全路径。\n",
-        "en": "State directory and tracker file path resolution: getStateDir returns the plugin data directory, getTrackerFilePath returns the task state file path.\n"
-      },
-      "source": [
-        {
-          "path": "packages/zcode-cohub/src/utils/paths.ts",
-          "line": 1,
-          "end_line": 22
-        }
-      ],
-      "revision": "e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f",
-      "updated_at": "2026-09-17T01:41:48.166Z",
-      "fingerprint": "187030745366a64ba02fe2ef5e6d1fd97bd850ce79fffb07f57dc62b19497207",
-      "apis": [
-        {
-          "protocol": "rpc",
-          "path": "getStateDir",
-          "description": {
-            "zh": "返回插件数据目录\n",
-            "en": "Return the plugin data directory\n"
-          },
-          "key": "rpc:getStateDir"
-        },
-        {
-          "protocol": "rpc",
-          "path": "getTrackerFilePath",
-          "description": {
-            "zh": "返回任务状态文件全路径\n",
-            "en": "Return the full tracker file path\n"
-          },
-          "key": "rpc:getTrackerFilePath"
-        }
-      ],
-      "aggregate": {
-        "descendant_count": 0,
-        "own_api_count": 2,
-        "inherited_api_count": 0,
-        "dep_out": 0,
-        "dep_in": 3
-      }
     }
   },
   "api_index": {
-    "file:11 个角色 agent 模板": "cohub.zcode.agents-template",
     "file:12 个 agent 提示词": "cohub.opencode.prompts",
-    "file:重导出 readJsonFileSafe": "cohub.zcode.utils.fs-json",
-    "file:重导出 writeFileAtomic": "cohub.zcode.utils.fs-atomic",
     "file:chat.messages.transform": "cohub.opencode.hooks.message-transform",
     "file:CHINESE_LANGUAGE_INSTRUCTION": "cohub.shared.chinese",
     "file:co-cordis": "cohub.dsh.skills.cordis",
@@ -5984,7 +4045,6 @@
     "file:DEFAULT_CONTEXT_CONFIG": "cohub.opencode.context.types",
     "file:dispose": "cohub.opencode.hooks.config",
     "file:JobRecord": "cohub.opencode.task-manager.types",
-    "file:MCP stdio Server": "cohub.zcode.entry",
     "file:opencode.CHINESE_LANGUAGE_INSTRUCTION": "cohub.opencode.instructions",
     "file:opencode.co-council": "cohub.opencode.agents.analysis",
     "file:opencode.co-designer": "cohub.opencode.agents.execution",
@@ -6003,26 +4063,9 @@
     "file:session.deleted": "cohub.opencode.hooks.session-events",
     "file:session.error": "cohub.opencode.hooks.session-events",
     "file:session.idle": "cohub.opencode.hooks.session-events",
-    "file:SKILL_BRIEFS": "cohub.zcode.skills-briefs",
-    "file:STALE_TASK_MS": "cohub.zcode.utils.constants",
-    "file:STDIN_TIMEOUT_MS": "cohub.zcode.utils.constants",
     "file:TaskStatus": "cohub.opencode.task-manager.types",
     "file:tool.execute.after": "cohub.opencode.hooks.tool-lifecycle",
     "file:tool.execute.before": "cohub.opencode.hooks.tool-lifecycle",
-    "file:zcode.co-council": "cohub.zcode.skills.analysis",
-    "file:zcode.co-designer": "cohub.zcode.skills.execution",
-    "file:zcode.co-explorer": "cohub.zcode.skills.execution",
-    "file:zcode.co-fixer": "cohub.zcode.skills.execution",
-    "file:zcode.co-librarian": "cohub.zcode.skills.execution",
-    "file:zcode.co-observer": "cohub.zcode.skills.execution",
-    "file:zcode.co-oracle": "cohub.zcode.skills.analysis",
-    "file:zcode.co-orchestrator": "cohub.zcode.skills.orchestration",
-    "file:zcode.co-planner": "cohub.zcode.skills.analysis",
-    "file:zcode.co-rule-app": "cohub.zcode.skills.rules",
-    "file:zcode.co-rule-project": "cohub.zcode.skills.rules",
-    "file:zcode.co-rule-user": "cohub.zcode.skills.rules",
-    "file:zcode.ContextStrategy": "cohub.zcode.context.types",
-    "file:zcode.TaskContext": "cohub.zcode.context.types",
     "rpc:配置读写": "cohub.opencode.cli.config-io",
     "rpc:adaptiveKey": "cohub.shared.consensus.format",
     "rpc:appendLog": "cohub.opencode.utils",
@@ -6031,16 +4074,12 @@
     "rpc:buildDeliberationPrompt": "cohub.shared.consensus.format",
     "rpc:classifyFailure": "cohub.shared.consensus.retry",
     "rpc:close_job": "cohub.opencode.tools.job-control",
-    "rpc:co_close_job": "cohub.zcode.tools.job-control",
-    "rpc:co_council": "cohub.zcode.tools.council",
     "rpc:co_define": "cohub.dsh.cordis.lifecycle",
-    "rpc:co_delegate": "cohub.zcode.tools.delegate",
     "rpc:co_inspect_list": "cohub.dsh.cordis.inspect",
     "rpc:co_inspect_query": "cohub.dsh.cordis.inspect",
     "rpc:co_inspect_self": "cohub.dsh.cordis.inspect",
     "rpc:co_remove": "cohub.dsh.cordis.lifecycle",
     "rpc:co_run": "cohub.dsh.cordis.lifecycle",
-    "rpc:co_scan": "cohub.zcode.tools.scan",
     "rpc:co_stop": "cohub.dsh.cordis.lifecycle",
     "rpc:cohub:language": "cohub.dsh.entry",
     "rpc:computeConsensus": "cohub.shared.consensus.algorithm",
@@ -6061,16 +4100,12 @@
     "rpc:extractDecisions": "cohub.opencode.context.extractor",
     "rpc:extractErrors": "cohub.opencode.context.extractor",
     "rpc:extractRelevantFiles": "cohub.opencode.context.extractor",
-    "rpc:formatContextDetails": "cohub.zcode.context.formatter",
     "rpc:formatCouncillorPrompt": "cohub.shared.consensus.format",
     "rpc:formatCouncillorResults": "cohub.shared.consensus.format",
     "rpc:formatModelComposition": "cohub.shared.consensus.format",
     "rpc:formatTaskContext": "cohub.opencode.context.formatter",
     "rpc:getAdaptiveParams": "cohub.opencode.tools.adaptive-params",
-    "rpc:getStateDir": "cohub.zcode.utils.paths",
-    "rpc:getTrackerFilePath": "cohub.zcode.utils.paths",
     "rpc:hashTree": "cohub.dsh.preset-install",
-    "rpc:install": "cohub.zcode.install",
     "rpc:installShippedPresets": "cohub.dsh.preset-install",
     "rpc:isQualityEnabled": "cohub.opencode.task-manager.quality",
     "rpc:jaccard": "cohub.shared.consensus.algorithm",
@@ -6085,12 +4120,7 @@
     "rpc:orderCouncillorsByFailure": "cohub.opencode.tools.model-stats",
     "rpc:pairwiseAgreement": "cohub.shared.consensus.algorithm",
     "rpc:parseModelReference": "cohub.shared.consensus.format",
-    "rpc:PostToolUse": "cohub.zcode.hooks.agent-tracker",
-    "rpc:PostToolUse(Grep)": "cohub.zcode.hooks.grep-counter",
-    "rpc:PostToolUseFailure": "cohub.zcode.hooks.agent-tracker",
-    "rpc:PreToolUse": "cohub.zcode.hooks.agent-tracker",
     "rpc:readJsonFileSafe": "cohub.shared.fs-json",
-    "rpc:readStdinSync": "cohub.zcode.hooks.stdin",
     "rpc:recordAdaptiveSample": "cohub.opencode.tools.adaptive-params",
     "rpc:recordModelResult": "cohub.opencode.tools.model-stats",
     "rpc:replaceMarkerWithContext": "cohub.opencode.context.formatter",
@@ -6098,7 +4128,6 @@
     "rpc:RetryBudget": "cohub.shared.consensus.retry",
     "rpc:RetryManager": "cohub.opencode.orchestration.retry",
     "rpc:Scheduler": "cohub.opencode.orchestration.scheduler",
-    "rpc:SessionStart": "cohub.zcode.hooks.chinese-inject",
     "rpc:settings.plugin.item": "cohub.dsh.client",
     "rpc:shortModelLabel": "cohub.shared.model",
     "rpc:skills.register": "cohub.dsh.entry",
@@ -6110,21 +4139,7 @@
     "rpc:truncateByTokens": "cohub.shared.token-estimator",
     "rpc:TuiPluginModule": "cohub.opencode.tui",
     "rpc:writeFileAtomic": "cohub.shared.fs-atomic",
-    "rpc:writeJsonFileAtomic": "cohub.shared.fs-atomic",
-    "rpc:zcode.appendLog": "cohub.zcode.utils.log",
-    "rpc:zcode.buildSummary": "cohub.zcode.context.extractor",
-    "rpc:zcode.completeOldestBySkill": "cohub.zcode.tracker",
-    "rpc:zcode.ContextEngine": "cohub.zcode.context.engine",
-    "rpc:zcode.extractErrors": "cohub.zcode.context.extractor",
-    "rpc:zcode.extractKeyDecisions": "cohub.zcode.context.extractor",
-    "rpc:zcode.extractRelevantFiles": "cohub.zcode.context.extractor",
-    "rpc:zcode.failTaskBySkill": "cohub.zcode.tracker",
-    "rpc:zcode.readTrackerState": "cohub.zcode.tracker",
-    "rpc:zcode.registerExternalJob": "cohub.zcode.tracker",
-    "rpc:zcode.resolveStrategy": "cohub.zcode.context.strategy",
-    "rpc:zcode.TaskTracker": "cohub.zcode.tracker",
-    "rpc:zcode.UserPromptSubmit.jobboard": "cohub.zcode.hooks.job-board",
-    "rpc:zcode.UserPromptSubmit.remind": "cohub.zcode.hooks.orchestrate-remind"
+    "rpc:writeJsonFileAtomic": "cohub.shared.fs-atomic"
   },
   "edges": [
     {
@@ -6402,156 +4417,6 @@
       "to": "cohub.shared.model",
       "kind": "call",
       "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.context.engine",
-      "to": "cohub.zcode.context.extractor",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.context.engine",
-      "to": "cohub.zcode.context.formatter",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.context.engine",
-      "to": "cohub.zcode.context.types",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.entry",
-      "to": "cohub.zcode.context.engine",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.entry",
-      "to": "cohub.zcode.context.strategy",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.entry",
-      "to": "cohub.zcode.tools.council",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.entry",
-      "to": "cohub.zcode.tools.delegate",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.entry",
-      "to": "cohub.zcode.tools.job-control",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.entry",
-      "to": "cohub.zcode.tools.scan",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.entry",
-      "to": "cohub.zcode.tracker",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.hooks.agent-tracker",
-      "to": "cohub.zcode.hooks.stdin",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.hooks.agent-tracker",
-      "to": "cohub.zcode.tracker",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.hooks.grep-counter",
-      "to": "cohub.shared.fs-json",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.hooks.grep-counter",
-      "to": "cohub.zcode.hooks.stdin",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.hooks.grep-counter",
-      "to": "cohub.zcode.utils.paths",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.hooks.job-board",
-      "to": "cohub.zcode.utils.paths",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.tools.council",
-      "to": "cohub.zcode.tracker",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.tools.delegate",
-      "to": "cohub.zcode.context.engine",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.tools.delegate",
-      "to": "cohub.zcode.skills-briefs",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.tools.delegate",
-      "to": "cohub.zcode.tracker",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.tracker",
-      "to": "cohub.shared.fs-atomic",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.tracker",
-      "to": "cohub.shared.fs-json",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.tracker",
-      "to": "cohub.zcode.utils.paths",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.utils.fs-atomic",
-      "to": "cohub.shared.fs-atomic",
-      "kind": "call",
-      "cross_tree": false
-    },
-    {
-      "from": "cohub.zcode.utils.fs-json",
-      "to": "cohub.shared.fs-json",
-      "kind": "call",
-      "cross_tree": false
     }
   ],
   "layouts": {
@@ -6562,8 +4427,8 @@
       "mode": "groups",
       "max_columns": 2,
       "reading": {
-        "zh": "共享层是单一真源；三个平台包各自独立构建、彼此零 import。",
-        "en": "The shared layer is the single source of truth; the three platform packages build independently with zero cross-imports."
+        "zh": "共享层是单一真源；两个平台包各自独立构建、彼此零 import。",
+        "en": "The shared layer is the single source of truth; the two platform packages build independently with zero cross-imports."
       },
       "groups": [
         {
@@ -6579,13 +4444,12 @@
         {
           "id": "platforms",
           "title": {
-            "zh": "三大平台包",
+            "zh": "两大平台包",
             "en": "Platform Packages"
           },
           "children": [
             "cohub.dsh",
-            "cohub.opencode",
-            "cohub.zcode"
+            "cohub.opencode"
           ]
         }
       ]
@@ -6964,188 +4828,6 @@
         "cohub.shared.consensus.summary",
         "cohub.shared.consensus.retry",
         "cohub.shared.consensus.format"
-      ]
-    },
-    "cohub.zcode": {
-      "schema_version": 1,
-      "id": "cohub.zcode",
-      "updated_at": "2026-09-17T01:40:08.595Z",
-      "mode": "groups",
-      "max_columns": 2,
-      "reading": {
-        "zh": "ZCode 版是 MCP stdio Server + hooks 形态：入口暴露 4 个工具，hook 在会话各阶段旁路介入。",
-        "en": "The ZCode edition is an MCP stdio server plus hooks: the entry exposes four tools while hooks intervene at various session stages."
-      },
-      "groups": [
-        {
-          "id": "entry",
-          "title": {
-            "zh": "入口与安装",
-            "en": "Entry & Install"
-          },
-          "children": [
-            "cohub.zcode.entry",
-            "cohub.zcode.install"
-          ]
-        },
-        {
-          "id": "runtime",
-          "title": {
-            "zh": "工具与追踪",
-            "en": "Tools & Tracking"
-          },
-          "children": [
-            "cohub.zcode.tools",
-            "cohub.zcode.tracker"
-          ]
-        },
-        {
-          "id": "ext",
-          "title": {
-            "zh": "扩展点",
-            "en": "Extension Points"
-          },
-          "children": [
-            "cohub.zcode.hooks",
-            "cohub.zcode.context"
-          ]
-        },
-        {
-          "id": "assets",
-          "title": {
-            "zh": "技能资产",
-            "en": "Skill Assets"
-          },
-          "children": [
-            "cohub.zcode.skills",
-            "cohub.zcode.agents-template",
-            "cohub.zcode.skills-briefs",
-            "cohub.zcode.utils"
-          ]
-        }
-      ]
-    },
-    "cohub.zcode.context": {
-      "schema_version": 1,
-      "id": "cohub.zcode.context",
-      "updated_at": "2026-09-17T01:40:28.859Z",
-      "mode": "layers",
-      "reading": {
-        "zh": "类型 → 策略 → 提取 → 格式化 → 引擎。",
-        "en": "Types, strategy, extraction, formatting, engine."
-      },
-      "order": [
-        "cohub.zcode.context.types",
-        "cohub.zcode.context.strategy",
-        "cohub.zcode.context.extractor",
-        "cohub.zcode.context.formatter",
-        "cohub.zcode.context.engine"
-      ]
-    },
-    "cohub.zcode.hooks": {
-      "schema_version": 1,
-      "id": "cohub.zcode.hooks",
-      "updated_at": "2026-09-17T01:40:22.471Z",
-      "mode": "layers",
-      "reading": {
-        "zh": "从共享的 stdin 读取，到各时机的 hook：会话启动 → 用户输入 → 工具调用前后。",
-        "en": "From the shared stdin reader to each hook timing: session start, user input, and tool call boundaries."
-      },
-      "order": [
-        "cohub.zcode.hooks.stdin",
-        "cohub.zcode.hooks.chinese-inject",
-        "cohub.zcode.hooks.job-board",
-        "cohub.zcode.hooks.orchestrate-remind",
-        "cohub.zcode.hooks.agent-tracker",
-        "cohub.zcode.hooks.grep-counter"
-      ]
-    },
-    "cohub.zcode.skills": {
-      "schema_version": 1,
-      "id": "cohub.zcode.skills",
-      "updated_at": "2026-09-17T01:40:36.581Z",
-      "mode": "groups",
-      "max_columns": 2,
-      "reading": {
-        "zh": "12 个技能分四类（orchestrator 作为主代理不可 spawn）。",
-        "en": "Twelve skills in four classes (orchestrator is the non-spawnable primary agent)."
-      },
-      "groups": [
-        {
-          "id": "orch",
-          "title": {
-            "zh": "调度",
-            "en": "Orchestration"
-          },
-          "children": [
-            "cohub.zcode.skills.orchestration"
-          ]
-        },
-        {
-          "id": "analysis",
-          "title": {
-            "zh": "分析与规划",
-            "en": "Analysis"
-          },
-          "children": [
-            "cohub.zcode.skills.analysis"
-          ]
-        },
-        {
-          "id": "exec",
-          "title": {
-            "zh": "执行",
-            "en": "Execution"
-          },
-          "children": [
-            "cohub.zcode.skills.execution"
-          ]
-        },
-        {
-          "id": "rules",
-          "title": {
-            "zh": "规则",
-            "en": "Rules"
-          },
-          "children": [
-            "cohub.zcode.skills.rules"
-          ]
-        }
-      ]
-    },
-    "cohub.zcode.tools": {
-      "schema_version": 1,
-      "id": "cohub.zcode.tools",
-      "updated_at": "2026-09-17T01:40:14.920Z",
-      "mode": "grid",
-      "max_columns": 2,
-      "reading": {
-        "zh": "四个 MCP 工具：委派、共识、扫描、终止。",
-        "en": "Four MCP tools: delegation, council, scanning, and job termination."
-      },
-      "order": [
-        "cohub.zcode.tools.delegate",
-        "cohub.zcode.tools.council",
-        "cohub.zcode.tools.scan",
-        "cohub.zcode.tools.job-control"
-      ]
-    },
-    "cohub.zcode.utils": {
-      "schema_version": 1,
-      "id": "cohub.zcode.utils",
-      "updated_at": "2026-09-17T01:40:43.071Z",
-      "mode": "grid",
-      "max_columns": 2,
-      "reading": {
-        "zh": "路径与常量在前，两个共享层重导出居中，日志收尾。",
-        "en": "Paths and constants first, the two shared-layer re-exports in the middle, and logging last."
-      },
-      "order": [
-        "cohub.zcode.utils.paths",
-        "cohub.zcode.utils.constants",
-        "cohub.zcode.utils.fs-json",
-        "cohub.zcode.utils.fs-atomic",
-        "cohub.zcode.utils.log"
       ]
     }
   },

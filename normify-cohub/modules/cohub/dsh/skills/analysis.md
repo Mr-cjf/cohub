@@ -10,9 +10,9 @@ description:
   en: >
       co-oracle (architecture/code review+YAGNI), co-planner (planning+task breakdown), co-council (multi-model parallel consensus) — three analysis & planning skill definitions.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:22.110Z"
-fingerprint: e023ad9464f9c0632f39a19155091c6e2bd0ede72f16ddfe7ede1c097858d483
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.334Z"
+fingerprint: 3eaf8964f776efca12a903451cc58343ea212229c96acdec71794844b246de4e
 source:
   - path: "packages/dsh-cohub/skills/oracle.md"
   - path: "packages/dsh-cohub/skills/planner.md"

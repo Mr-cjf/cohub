@@ -10,9 +10,9 @@ description:
   en: >
       config/dispose: dual registration and Chinese injection
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:54:08.898Z"
-fingerprint: 08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.347Z"
+fingerprint: bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0
 source:
   - path: "packages/oh-my-opencode-cohub/src/index.ts"
     line: 402

@@ -10,8 +10,8 @@ description:
   en: >
       JobRecord and TaskStatus type definitions
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:52:23.366Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.359Z"
 fingerprint: 431a873f50b8b71ee23cd91458219acc75b7c4ba14052cc700cb43ea46ef217b
 source:
   - path: "packages/oh-my-opencode-cohub/src/task-manager/types.ts"

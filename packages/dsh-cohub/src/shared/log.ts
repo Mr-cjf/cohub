@@ -4,7 +4,7 @@
  * 跨包共享诊断日志工具。
  *
  * 以 oh-my-opencode-cohub 版为基（功能超集），将平台差异参数化：
- * - 日志目录（opencode vs zcode vs 其它）
+ * - 日志目录（opencode vs dsh vs 其它）
  * - 文件前缀 / tag
  * - 是否按天轮转 + 保留天数
  * - 同步 / 异步写入
@@ -23,7 +23,7 @@ import * as path from "node:path";
 export interface LogConfig {
   /** 日志目录（必填） */
   logDir: string;
-  /** 日志文件前缀（必填，如 "oh-my-opencode-cohub" 或 "zcode-cohub"） */
+  /** 日志文件前缀（必填，如 "oh-my-opencode-cohub" 或 "dsh-cohub"） */
   prefix: string;
   /**
    * 标签前缀，写入行内 `[prefix]` 段（默认同 prefix）。

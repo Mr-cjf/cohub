@@ -10,9 +10,9 @@ description:
   en: >
       CoHub Client settings card (React): provider/model selectors per agent, plus schedule/retry/stall/contract config. Injected into settings.plugin.item slot.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:22.108Z"
-fingerprint: 663df4dd8cb56963462c6e4822f86ffa1515a399952c5609597798a430d65f9f
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.324Z"
+fingerprint: 614fc7d1e1193b7ded38d77086ee634a83e3e0f477f3d0063a8f1d583c4e1bf7
 source:
   - path: "packages/dsh-cohub/src/client/index.js"
     line: 1

@@ -10,8 +10,8 @@ description:
   en: >
       CJK-aware token estimator: CJK chars = 1 token, others = 0.25 token/char. Exports estimateTokens, truncateByTokens, and enforcePromptBudget.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:14.097Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.369Z"
 fingerprint: 6adf85dc543f1e45c12751277942db84410d7b377b63b3338b4677de19526558
 source:
   - path: "cohub-shared/src/token-estimator.ts"

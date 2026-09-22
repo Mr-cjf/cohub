@@ -10,8 +10,8 @@ description:
   en: >
       Generic safe JSON file reader: returns a default value on missing file, parse failure, or type-guard rejection — never throws. Unifies duplicated try-catch patterns from tracker and grep-counter.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:14.096Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.366Z"
 fingerprint: dba19bfcb625af2c65e2924fa123e98ce52294454580c9b5acf5c87fd971392a
 source:
   - path: "cohub-shared/src/fs-json.ts"

@@ -10,8 +10,8 @@ description:
   en: >
       Council adaptive params and historical sampling
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:54:08.897Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.359Z"
 fingerprint: 7a4e9703b5b286dea9f9540b071d0679219c8e86fc253080ed837698be7c4bfb
 source:
   - path: "packages/oh-my-opencode-cohub/src/tools/adaptive-params.ts"

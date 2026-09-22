@@ -10,9 +10,9 @@ description:
   en: >
       12 agent prompt source files
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:52:23.356Z"
-fingerprint: 6e78eb0d2d06b5714272a4f9d907f4f376fd0d7b31b3c3845bb9492c53c37b1e
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.357Z"
+fingerprint: d3a05b4ded6b5e6c3d3e490764369bb996240a87bec3f3666c7a5a8681fee34a
 source:
   - path: "packages/oh-my-opencode-cohub/src/prompts/orchestrator.md"
   - path: "packages/oh-my-opencode-cohub/src/prompts/oracle.md"

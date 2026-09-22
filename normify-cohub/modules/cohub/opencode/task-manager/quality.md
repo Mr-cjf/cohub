@@ -10,8 +10,8 @@ description:
   en: >
       Task quality assessment and toggle control
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:52:23.366Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.358Z"
 fingerprint: 4d4b54b053c8b01f70ae43f95a5b20acf62f5c0c30e8fa44a42bbd48039eeeb0
 source:
   - path: "packages/oh-my-opencode-cohub/src/task-manager/quality.ts"

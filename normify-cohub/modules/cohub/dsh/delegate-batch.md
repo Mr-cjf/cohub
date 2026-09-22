@@ -10,9 +10,9 @@ description:
   en: >
       Tool for parallel spawning of multiple subagent tasks (max 20). Per-task AbortController timeout; skips N2 and P1-2 retry. Reuses shared functions from delegate.ts.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:56:37.318Z"
-fingerprint: 5f747ef0c8ce0bd0f45a94acbd21d00190a70585b4c6c9968ecbacede7d27b1c
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.326Z"
+fingerprint: aeb8ea61f0ccbb79cd7b19a4d7c89d54e413da3cbfeed1af8091d4ab6b9f8e67
 source:
   - path: "packages/dsh-cohub/src/delegate_batch.ts"
     line: 52

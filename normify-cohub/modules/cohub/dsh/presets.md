@@ -10,8 +10,8 @@ description:
   en: >
       Two shipped agent presets: co-orchestrator (scheduler-only: analyze→delegate→review, 13 skills+delegate tools) and cohub-cordis (creation mode: full tool surface including co_* Cordis runtime tools).
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:22.113Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.333Z"
 fingerprint: 52fe10ea3382f67642bba61f76a579d31d5e64f1576c3420fef6eb3965232472
 source:
   - path: "packages/dsh-cohub/presets/co-orchestrator/agent.cordis.yml"

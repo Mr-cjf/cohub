@@ -10,9 +10,9 @@ description:
   en: >
       Copies shared sources into three platform packages' shared/ dirs with auto-generated headers and SHA-256 drift detection. --check mode only detects drift (exit 1 = drift).
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:14.099Z"
-fingerprint: b6cf6a642194840d4d190901a963755c6b64157820048ab35e2130000a455163
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.369Z"
+fingerprint: 2afe7dbde381c798e18c25472423d9c66c5f06460d65c8eddfe2f41d00cdc4f2
 source:
   - path: "cohub-shared/sync.ts"
     line: 1

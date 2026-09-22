@@ -10,8 +10,8 @@ description:
   en: >
       co-cordis skill: create, modify, debug, or extend dynamic Cordis Plugins — Host Services/Events, Client Slot/theme UI, package-private Client-to-Host calls, dynamic tools, version updates.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:22.113Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.334Z"
 fingerprint: 5ef0d75c2b9efb51567ca806feb1daae00c642f6737ba1be12ef94de6faa4821
 source:
   - path: "packages/dsh-cohub/skills/cordis.md"

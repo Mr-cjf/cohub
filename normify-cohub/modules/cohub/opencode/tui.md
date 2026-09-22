@@ -10,9 +10,9 @@ description:
   en: >
       OpenTUI sidebar panel
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:52:23.357Z"
-fingerprint: 53693017012b29a965e2810c642ddbaf10bda246046af513f6d219ed01bd6c91
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.363Z"
+fingerprint: 9ae4986e60c8eab5be39a2a07d36ac47c0744b574ce37f335f530fe51bbf99b2
 source:
   - path: "packages/oh-my-opencode-cohub/src/tui.ts"
     line: 1

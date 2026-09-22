@@ -10,9 +10,9 @@ description:
   en: >
       co-fixer (code changes+build+test), co-designer (UI/UX design+visual polish), co-explorer (codebase search), co-librarian (docs/API research), co-observer (image/PDF analysis) — five execution skills.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:22.112Z"
-fingerprint: 44913c848ceb32f8140c4eabefc193cea920424b9031af1e5ca32e850825e1d0
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.335Z"
+fingerprint: 8b862bc8b82288d611e3293928e63b48a22ead3ab9351c4d17961e2b1479bddb
 source:
   - path: "packages/dsh-cohub/skills/fixer.md"
   - path: "packages/dsh-cohub/skills/designer.md"

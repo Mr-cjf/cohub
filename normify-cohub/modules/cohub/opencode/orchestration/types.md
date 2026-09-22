@@ -10,8 +10,8 @@ description:
   en: >
       Orchestration config and retry policy type definitions
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:52:23.363Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.353Z"
 fingerprint: 143e83c4d7d106af78cbc347bfdd9c0f2d4303fc68963745dbe526031bee0d81
 source:
   - path: "packages/oh-my-opencode-cohub/src/orchestration/types.ts"

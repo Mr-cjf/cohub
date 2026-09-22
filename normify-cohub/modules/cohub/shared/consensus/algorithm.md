@@ -10,9 +10,9 @@ description:
   en: >
       Class-A zero-dep tokenization (tokenize/jaccard) + class-B pairwise agreement and multi-model consensus detection (computeConsensus). 2n/3 rule: consensus when ≥ceil(2n/3) councillors reach threshold agreement.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:14.097Z"
-fingerprint: 40398a367dcb5197862e31b78d6b0e55a7777131ca1ede0b4994060f81f35b91
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.364Z"
+fingerprint: 16ec1b797750760deb69e2b63a377c124816c2788946e74f61907b1898214e2b
 source:
   - path: "cohub-shared/src/consensus.ts"
     line: 99

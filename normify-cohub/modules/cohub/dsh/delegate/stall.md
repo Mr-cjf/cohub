@@ -10,9 +10,9 @@ description:
   en: >
       N2 stall detector (P3-1): attaches to session/event bus, dispatches by run.id, estimates S1-S4 signals, pre-aborts and reuses P1 retry. Disabled by default.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:14.101Z"
-fingerprint: 0f001b39082147b7f631f5d876c5408a2c045ebba80c02043bcbd2275c8ac17a
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.327Z"
+fingerprint: aa3f39fcf47e9dc7769232a67a4e3e75baafe7e5391cf58e23959c07ee4b408b
 source:
   - path: "packages/dsh-cohub/src/delegate.ts"
     line: 36

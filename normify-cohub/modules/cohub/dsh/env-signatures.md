@@ -10,9 +10,9 @@ description:
   en: >
       P3-2 (N1) env-contract persistence: upgrade per-run probing to learn-once-reuse. Includes env fingerprint, cache read/write, contract text, error signature normalization, and EnvSignatureLearner.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:14.102Z"
-fingerprint: 62efb74beec81ffce4d66f25982948bf67b0402497cf0046d61ab206685794aa
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.329Z"
+fingerprint: 6216f329fcff0179a2543f756496919c3d2bae1ca31600356f82208e9eb6054b
 source:
   - path: "packages/dsh-cohub/src/env-signatures.ts"
     line: 1

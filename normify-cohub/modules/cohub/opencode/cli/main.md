@@ -11,8 +11,8 @@ description:
   en: >
       Entry point for plugin install, uninstall, and statistics commands
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:54:08.900Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.342Z"
 fingerprint: e0fed8b0d59fedc7663d5f307eac2f896b8bf3ff089bc60ca708922b41b8a3b1
 source:
   - path: "packages/oh-my-opencode-cohub/src/cli/index.ts"

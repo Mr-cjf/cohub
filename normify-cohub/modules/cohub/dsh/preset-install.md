@@ -10,9 +10,9 @@ description:
   en: >
       Installs, upgrades, and cleans built-in agent presets via per-file SHA-256 ledger: never miss fixes, never overwrite user changes, remove orphaned presets.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:14.103Z"
-fingerprint: a38ceced324d51179559a7c73f83b6d960342641548aa01727c652b8da46f466
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.332Z"
+fingerprint: 0f4ca3e56748fa799380ccf57b37b3eecd0a50dc4a3f8fce6f81c53b32bea6e3
 source:
   - path: "packages/dsh-cohub/src/preset-install.ts"
     line: 1

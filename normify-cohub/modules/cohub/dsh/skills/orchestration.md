@@ -10,9 +10,9 @@ description:
   en: >
       co-orchestrator skill definition: pure scheduler — analyze requirements, delegate, review. No direct file ops; dispatches work via delegate/delegate_batch to specialist agents.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:22.109Z"
-fingerprint: 390e3780fe29dd8f51cf86b7b279632e7e943ff824cbc9af3d6d89a90d74a74c
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.337Z"
+fingerprint: cf98ae22cc3dfed017454a60d2da0a87ae4b030aaf343653690d37fc9e603d3a
 source:
   - path: "packages/dsh-cohub/skills/orchestrator.md"
 apis:

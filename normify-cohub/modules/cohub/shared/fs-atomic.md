@@ -10,8 +10,8 @@ description:
   en: >
       Write to temp file then rename, preventing torn JSON reads. Re-throws on error with finally-cleanup. Provides text and JSON variants.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:26:14.097Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.365Z"
 fingerprint: 7558bb4142063614ea8bcc1b88e7042bbd865dc41de5b79e7b42388a633e86fa
 source:
   - path: "cohub-shared/src/fs-atomic.ts"

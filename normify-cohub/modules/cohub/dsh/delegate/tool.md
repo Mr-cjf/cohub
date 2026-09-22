@@ -10,9 +10,9 @@ description:
   en: >
       Core assembly: skill match→route provider/model→inject brief+contract→spawn. P1-1/P1-2/P3-3 all live here.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:56:37.318Z"
-fingerprint: 0f001b39082147b7f631f5d876c5408a2c045ebba80c02043bcbd2275c8ac17a
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.328Z"
+fingerprint: aa3f39fcf47e9dc7769232a67a4e3e75baafe7e5391cf58e23959c07ee4b408b
 source:
   - path: "packages/dsh-cohub/src/delegate.ts"
     line: 437

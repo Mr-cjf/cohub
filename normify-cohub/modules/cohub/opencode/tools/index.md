@@ -10,9 +10,9 @@ description:
   en: >
       Council, job control, adaptive params, model stats
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:54:08.896Z"
-fingerprint: e61bf47c8c51d0365c3d68dd5b3600477201dcaec548f42d55387421e233277c
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.361Z"
+fingerprint: acc26fed4fb5e92a4ca6b529d2913fe3ab1db3d8267783171cea71bc3e6072b0
 source:
   - path: "packages/oh-my-opencode-cohub/src/tools/council.ts"
   - path: "packages/oh-my-opencode-cohub/src/tools/job-control.ts"

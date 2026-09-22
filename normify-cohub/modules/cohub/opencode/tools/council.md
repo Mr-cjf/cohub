@@ -10,9 +10,9 @@ description:
   en: >
       Multi-model parallel consensus: council_session + CouncilManager
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:57:09.891Z"
-fingerprint: caef08d982d79f193ff83a217bfb84f0b9c3840c962c68641ab8cbbd9757afb4
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.360Z"
+fingerprint: c1bbfe8a0714b0366b9de592baf87548561b23483dbcc61a44e092acc492111f
 source:
   - path: "packages/oh-my-opencode-cohub/src/tools/council.ts"
     line: 1

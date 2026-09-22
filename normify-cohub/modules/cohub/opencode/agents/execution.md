@@ -10,9 +10,9 @@ description:
   en: >
       Code and visual execution: co-fixer, designer, explorer, librarian, observer
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:54:36.946Z"
-fingerprint: 08723fd31d2d61ce204a92350157f09bc335d08fe498b1845afa464720b4dd3d
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.339Z"
+fingerprint: bf54e7d2212e882e4408bdf0d150ff198314948e96854fc03ac319c738a796c0
 source:
   - path: "packages/oh-my-opencode-cohub/src/index.ts"
     line: 208
@@ -23,34 +23,44 @@ apis:
     description:
       zh: >
           co-fixer agent 定义
+          
       en: >
           co-fixer agent definition
+          
   - protocol: file
     path: "opencode.co-designer"
     description:
       zh: >
           co-designer agent 定义
+          
       en: >
           co-designer agent definition
+          
   - protocol: file
     path: "opencode.co-explorer"
     description:
       zh: >
           co-explorer agent 定义
+          
       en: >
           co-explorer agent definition
+          
   - protocol: file
     path: "opencode.co-librarian"
     description:
       zh: >
           co-librarian agent 定义
+          
       en: >
           co-librarian agent definition
+          
   - protocol: file
     path: "opencode.co-observer"
     description:
       zh: >
           co-observer agent 定义
+          
       en: >
           co-observer agent definition
+          
 ---

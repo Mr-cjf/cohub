@@ -10,8 +10,8 @@ description:
   en: >
       Extract files, decisions, errors from session history
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:57:09.891Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.343Z"
 fingerprint: 4d440f44802cb3e45a102fef1761f9764e81d42ac8109b235debbe4a59aec1f6
 source:
   - path: "packages/oh-my-opencode-cohub/src/context/extractor.ts"

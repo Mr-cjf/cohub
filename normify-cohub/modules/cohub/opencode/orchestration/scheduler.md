@@ -10,8 +10,8 @@ description:
   en: >
       Task scheduling and execution sequence management
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:52:23.363Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.352Z"
 fingerprint: a8e46e1c2b662873e47eff5d463920ccad7d4ac805be972050e75a481b625f75
 source:
   - path: "packages/oh-my-opencode-cohub/src/orchestration/scheduler.ts"

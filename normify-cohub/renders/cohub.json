@@ -5,8 +5,8 @@
   "mode": "groups",
   "max_columns": 2,
   "reading": {
-    "zh": "共享层是单一真源；三个平台包各自独立构建、彼此零 import。",
-    "en": "The shared layer is the single source of truth; the three platform packages build independently with zero cross-imports."
+    "zh": "共享层是单一真源；两个平台包各自独立构建、彼此零 import。",
+    "en": "The shared layer is the single source of truth; the two platform packages build independently with zero cross-imports."
   },
   "groups": [
     {
@@ -22,13 +22,12 @@
     {
       "id": "platforms",
       "title": {
-        "zh": "三大平台包",
+        "zh": "两大平台包",
         "en": "Platform Packages"
       },
       "children": [
         "cohub.dsh",
-        "cohub.opencode",
-        "cohub.zcode"
+        "cohub.opencode"
       ]
     }
   ]

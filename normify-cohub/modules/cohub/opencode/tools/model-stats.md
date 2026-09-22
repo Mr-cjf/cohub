@@ -10,8 +10,8 @@ description:
   en: >
       Record model results and sort councillors by failure
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:54:08.898Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.362Z"
 fingerprint: 1e8ff4f51a7e2642ffc803301f06bb29431cf1c37ded76ad42c7330b989cdb59
 source:
   - path: "packages/oh-my-opencode-cohub/src/tools/model-stats.ts"

@@ -10,8 +10,8 @@ description:
   en: >
       Create orchestration layer integrating contract, retry, scheduler
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:57:09.892Z"
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.350Z"
 fingerprint: 670311138229fe9f1aa611349f27ad2e77a5c33174476e801bc267517fb7e3c5
 source:
   - path: "packages/oh-my-opencode-cohub/src/orchestration/engine.ts"

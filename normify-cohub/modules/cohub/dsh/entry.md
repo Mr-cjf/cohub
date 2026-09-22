@@ -10,9 +10,9 @@ description:
   en: >
       CoHub DSH Cordis plugin entry: injects Chinese-language instruction into systemPrompt, registers 13 runtime skills, installs built-in agent presets, registers delegate/delegate_batch/council_session tools, and exposes the settings configuration schema.
       
-revision: e379ff6ddc6e3d0bf13e27c1edb3e98f2364f52f
-updated_at: "2026-09-17T01:56:37.318Z"
-fingerprint: c230a56e3021e8ea3206c085c781c63b9688f66f98db6e3ec59daa8eeb76bb6e
+revision: 64bca9899ac80ea2f7f66aabcfa2206a0f32388b
+updated_at: "2026-09-22T02:25:52.329Z"
+fingerprint: 888c741bb798c129fee28d23fd6ea0c596b3395641bef142a03598bd669946a5
 source:
   - path: "packages/dsh-cohub/src/index.ts"
     line: 1
