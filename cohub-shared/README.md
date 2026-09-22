@@ -1,6 +1,6 @@
 # cohub-shared
 
-跨包共享的单一真源目录。8 个零平台依赖的纯逻辑模块集中维护在此（`src/` 共 9 个文件，另一个是 barrel `index.ts`），通过同步脚本复制到三个平台包。
+跨包共享的单一真源目录。8 个零平台依赖的纯逻辑模块集中维护在此（`src/` 共 9 个文件，另一个是 barrel `index.ts`），通过同步脚本复制到两个平台包。
 
 ## 原则
 
@@ -34,9 +34,6 @@
 |--------|--------------|------|
 | `dsh-cohub` | `fs-atomic.ts`、`fs-json.ts`、`token-estimator.ts` | 包内无业务消费者，停同步 |
 | `oh-my-opencode-cohub` | `fs-json.ts` | 包内无业务消费者，停同步 |
-| `zcode-cohub` | `log.ts`、`chinese.ts`、`token-estimator.ts` | `log.ts` 为已删除的死模块；另两个包内无消费者 |
-
-反向情形同样存在：`zcode-cohub` 的 `constants.ts` 原先在保留名单中（包内自有副本），后已将内容（`STALE_TASK_MS` / `STDIN_TIMEOUT_MS`）并入共享源并**取消保留**，改为由 sync 生成。
 
 ## 同步
 

@@ -108,7 +108,7 @@ function readJSONLoose(filePath: string): Record<string, unknown> | null {
 
 /**
  * 读取「即将被写回」的配置。文件畸形时返回中止消息——
- * 绝不用 `{}` 顶替后写回（那会静默销毁用户原配置，参照 zcode-cohub install.ts 的「拒绝覆盖」策略）。
+ * 绝不用 `{}` 顶替后写回（那会静默销毁用户原配置）。
  */
 function loadConfigForWrite(
   filePath: string,

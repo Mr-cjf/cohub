@@ -1,6 +1,6 @@
 # npm 发布配置文档
 
-> 发布流水线：`.github/workflows/publish.yml`，用 Git tag 触发（`zcode-v*` / `opencode-v*` / `dsh-v*`）或手动 `workflow_dispatch`；认证靠 npm Trusted Publisher（OIDC），无需 NPM_TOKEN 或个人 access token。
+> 发布流水线：`.github/workflows/publish.yml`，用 Git tag 触发（`opencode-v*` / `dsh-v*`）或手动 `workflow_dispatch`；认证靠 npm Trusted Publisher（OIDC），无需 NPM_TOKEN 或个人 access token。
 
 ## 架构说明
 
@@ -8,11 +8,10 @@
 
 GitHub Actions **只加载仓库根目录** `.github/workflows/` 下的 workflow 文件。因此 `packages/oh-my-opencode-cohub/.github/workflows/publish.yml` 与 `packages/dsh-cohub/.github/workflows/publish.yml` 这两个子包工作流**不会被执行**——它们已在提交 `62e12b2` 中改写为说明性注释，提醒后来者去根级 workflow 找发布配置。
 
-根级 `publish.yml` 包含 3 个 job，按 tag 前缀分流：
+根级 `publish.yml` 包含 2 个 job，按 tag 前缀分流：
 
 | Job | Tag 前缀 | 包名 | 构建工具 |
 |-----|----------|------|----------|
-| `publish-zcode` | `zcode-v*` | `packages/zcode-cohub` | bun |
 | `publish-opencode` | `opencode-v*` | `packages/oh-my-opencode-cohub` | bun |
 | `publish-dsh` | `dsh-v*` | `packages/dsh-cohub` | bun |
 
@@ -32,17 +31,7 @@ GitHub Actions **只加载仓库根目录** `.github/workflows/` 下的 workflow
 |------|----------|------|
 | `oh-my-opencode-cohub` | `5145ea91-4860-4ccb-9a9f-58d0a3d79a76` | ✅ 已配置 |
 | `dsh-cohub` | `62f22721-8593-490f-b111-462c2b420083` | ✅ 已配置 |
-| `zcode-cohub` | — | ❌ 尚未配置（见下方说明） |
 
-### `zcode-cohub` 为何尚未配置
-
-npm Trusted Publisher 是**包级配置**，配置 CLI 会调用 npm API 验证目标包是否存在。**包必须已存在于 npm registry 才能配 TP**——`zcode-cohub` 尚未首次发布，连包页面都不存在，因此目前无法为其添加 Trusted Publisher。
-
-补配步骤（在 `zcode-cohub` 首次发布后执行）：
-
-```bash
-npm trust github zcode-cohub --repo Mr-cjf/cohub --file publish.yml --allow-publish -y
-```
 
 ### 每个包必须单独配一条 TP
 
