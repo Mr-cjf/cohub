@@ -324,3 +324,110 @@ describe('pruneTerminalJobs', () => {
     expect(getJobs(tracker).get(alias)).toBeUndefined();
   });
 });
+
+describe('getBoardText 父会话隔离', () => {
+  test('A/B 交错注册、B 最后更新全局后，getBoardText(A) 只含 A、getBoardText(B) 只含 B', () => {
+    const tracker = new TaskTracker();
+    // 交错注册：A → B → A → B，最后一次 registerBeforeTask 把全局父会话更新为 B
+    registerBg(tracker, { sessionId: 'ses_a1', parent: 'A' });
+    registerBg(tracker, { sessionId: 'ses_b1', parent: 'B' });
+    registerBg(tracker, { sessionId: 'ses_a2', parent: 'A' });
+    registerBg(tracker, { sessionId: 'ses_b2', parent: 'B' });
+
+    const textA = tracker.getBoardText('A');
+    expect(textA).toContain('ses_a1');
+    expect(textA).toContain('ses_a2');
+    expect(textA).not.toContain('ses_b1');
+    expect(textA).not.toContain('ses_b2');
+
+    const textB = tracker.getBoardText('B');
+    expect(textB).toContain('ses_b1');
+    expect(textB).toContain('ses_b2');
+    expect(textB).not.toContain('ses_a1');
+    expect(textB).not.toContain('ses_a2');
+  });
+
+  test('未知 parent 会话返回空字符串', () => {
+    const tracker = new TaskTracker();
+    registerBg(tracker, { sessionId: 'ses_a1', parent: 'A' });
+
+    expect(tracker.getBoardText('no-such-session')).toBe('');
+  });
+
+  test('嵌套 A 派 C、C 派 D：各直接父会话互不聚合', () => {
+    const tracker = new TaskTracker();
+    // A 的直接子任务（C 会话），C 派 D，D 再派任务
+    registerBg(tracker, { sessionId: 'ses_c', parent: 'A' });
+    registerBg(tracker, { sessionId: 'ses_d1', parent: 'C' });
+    registerBg(tracker, { sessionId: 'ses_d2', parent: 'D' });
+
+    const textA = tracker.getBoardText('A');
+    expect(textA).toContain('ses_c');
+    expect(textA).not.toContain('ses_d1');
+    expect(textA).not.toContain('ses_d2');
+
+    const textC = tracker.getBoardText('C');
+    expect(textC).toContain('ses_d1');
+    expect(textC).not.toContain('ses_c');
+    expect(textC).not.toContain('ses_d2');
+
+    const textD = tracker.getBoardText('D');
+    expect(textD).toContain('ses_d2');
+    expect(textD).not.toContain('ses_c');
+    expect(textD).not.toContain('ses_d1');
+  });
+});
+
+describe('getBoardText 空值/非法值不回退全局（缺陷回归）', () => {
+  // 目标行为：getBoardText 必须显式传父会话 ID；空值/非法值返回 ''，绝不回退
+  // 最近一次 hook 收到的全局父会话 _currentParentSessionId（旧实现会跨会话泄漏）。
+  // 无参/空字符串/null/0 在旧实现下会泄漏 B 的内容 → 预期失败（RED，缺陷回归）；
+  // truthy 非字符串（123）旧实现本就不匹配任何 job → 返回 ''。
+  // 修复（必传签名 + 空值/非法值返回 ''）后本组全部通过。
+  function setupAB(tracker: TaskTracker): void {
+    registerBg(tracker, { sessionId: 'ses_a1', parent: 'A' });
+    // 最后一次注册把全局父会话停在 B
+    registerBg(tracker, { sessionId: 'ses_b1', parent: 'B' });
+  }
+
+  test('无参调用不泄漏最近全局父会话（B），返回空', () => {
+    const tracker = new TaskTracker();
+    setupAB(tracker);
+    // 函数类型断言（this 参数绑定 tracker）+ 立即 call：保留 this（提取成无绑定调用会 TypeError），
+    // 且兼容后续签名改为必传（断言签名覆盖可选/必传两种情况）
+    const noArgCall = tracker.getBoardText as unknown as (
+      this: TaskTracker,
+      parentSessionId?: string
+    ) => string;
+
+    expect(noArgCall.call(tracker)).toBe('');
+  });
+
+  test('空字符串 parent 不泄漏最近全局父会话（B），返回空', () => {
+    const tracker = new TaskTracker();
+    setupAB(tracker);
+
+    expect(tracker.getBoardText('')).toBe('');
+  });
+
+  test('null parent 不泄漏最近全局父会话（B），返回空', () => {
+    const tracker = new TaskTracker();
+    setupAB(tracker);
+    // 保持 receiver 的方法调用 + 类型断言模拟运行时传入 null
+    expect(tracker.getBoardText(null as unknown as string)).toBe('');
+  });
+
+  test('falsy 非字符串 parent（0）不泄漏最近全局父会话（B），返回空', () => {
+    const tracker = new TaskTracker();
+    setupAB(tracker);
+    // 保持 receiver 的方法调用 + 类型断言模拟运行时传入 0
+    expect(tracker.getBoardText(0 as unknown as string)).toBe('');
+  });
+
+  test('truthy 非字符串 parent（123）不匹配任何会话，返回空', () => {
+    const tracker = new TaskTracker();
+    setupAB(tracker);
+    // 保持 receiver 的方法调用 + 类型断言模拟运行时传入 123
+    expect(tracker.getBoardText(123 as unknown as string)).toBe('');
+  });
+});

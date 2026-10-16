@@ -195,15 +195,18 @@ export class TaskTracker {
   }
 
   /**
-   * 生成 Background Job Board 文本
+   * 生成 Background Job Board 文本。
+   *
+   * 必须显式传入父会话 ID，按 job.parentSessionId 精确过滤，不做任何全局回退：
+   * 非 string（undefined / null / 数字等）或空串一律返回 ''。
    */
-  getBoardText(parentSessionId?: string): string {
-    const pid = parentSessionId || this._currentParentSessionId;
+  getBoardText(parentSessionId: string): string {
+    if (typeof parentSessionId !== 'string' || parentSessionId === '') return '';
     const activeJobs: JobRecord[] = [];
     const reusableJobs: JobRecord[] = [];
 
     for (const job of this.jobs.values()) {
-      if (job.parentSessionId !== pid) continue;
+      if (job.parentSessionId !== parentSessionId) continue;
       if (job.status === 'running') {
         activeJobs.push(job);
       } else if (job.background && job.status === 'completed' && !job.terminalReconciled) {

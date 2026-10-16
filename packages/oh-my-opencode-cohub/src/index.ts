@@ -768,14 +768,17 @@ const CoHubPlugin: Plugin = async (input, options) => {
             `⚠️ lastUserMsg parts无text类型，已推入占位text part (session=${sessionID?.slice(0,20) ?? '?'})`);
         }
 
-        // 1. 注入 Background Job Board
-        const board = tracker.getBoardText();
-        if (board) {
-          for (let j = lastUserMsg.parts.length - 1; j >= 0; j--) {
-            const part = lastUserMsg.parts[j];
-            if (part.type === 'text') {
-              part.text = (part.text || '') + '\n\n' + board;
-              break;
+        // 1. 注入 Background Job Board（仅当 sessionID 为有效非空字符串时注入，
+        //    否则跳过注入——避免 tracker 全局回退导致跨会话泄漏）
+        if (typeof sessionID === 'string' && sessionID.length > 0) {
+          const board = tracker.getBoardText(sessionID);
+          if (board) {
+            for (let j = lastUserMsg.parts.length - 1; j >= 0; j--) {
+              const part = lastUserMsg.parts[j];
+              if (part.type === 'text') {
+                part.text = (part.text || '') + '\n\n' + board;
+                break;
+              }
             }
           }
         }
