@@ -1,4 +1,16 @@
 # CHANGELOG
+## [1.18.1] - 2026-10-16
+
+### 修复
+- **修复 Background Job Board 跨会话泄漏**：`messages.transform` 注入时未向 tracker 传父会话 ID，tracker 回退到最近一次 tool hook 收到的全局父会话，导致 A 会话的 Board 注入 B 会话的任务
+  - `src/index.ts`：仅当 `sessionID` 为非空字符串时才注入 Board，并显式将当前 `sessionID` 传给 `getBoardText`，避免全局回退
+  - `src/task-manager/tracker.ts`：`getBoardText` 参数由可选改为必传 string，移除 `_currentParentSessionId` 全局回退；未知/无效 ID（无参、空串、null、非字符串等）一律返回空、不注入任务
+
+### 新增
+- 会话隔离回归测试 14 个：
+  - `tracker.test.ts` 新增 8 用例：父会话隔离 3（A/B 交错注册各自只看自己任务、未知会话返回空、嵌套 A→C→D 各直接父互不聚合孙任务）+ 空值/非法值 5（无参 / 空串 / null / 0 / 123 均不回退最近全局父会话）
+  - 新增 `index.test.ts` 真实插件入口回归 6 用例：每用例经隔离临时 HOME 子进程加载真实插件、调用真实 `tool.execute.before` 与 `experimental.chat.messages.transform` hooks，验证 A/B 交错不泄漏、无任务会话不注入 Board、sessionID 缺失/为空不泄漏、空 content 补占位后 Board 仍可注入、非 user 消息不改写、嵌套 A→C→D 保持直接父不聚合孙任务
+
 ## [1.18.0] - 2026-10-16
 
 ### 变更（⚠️ 行为变更）
