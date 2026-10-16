@@ -86,14 +86,19 @@ assert.ok(
 function makeStubClient() {
   const calls = { prompt: 0, message: 0, abort: 0, messagesRead: 0 };
   let messages: unknown[] = [];
-  let messagesGate: Promise<unknown[]> | undefined;
-  let releaseGate: ((m: unknown[]) => void) | undefined;
+  // 队列式门控：每次 session.messages 读取取下一个 gate（FIFO 创建序）；无 gate 直读当前 messages。
+  // gate→resolver 用 Map 按身份维护：gate 被读取（gated.shift 取走）后仍可被 releaseMessages
+  // 按指定 gate 身份释放——绝不因 shift 导致「释放错位」（旧的 indexOf+shift 在并发多 gate 下
+  // 会释放错 resolver，使 verify/capture 挂起、runner 无输出）。
+  const gated: Array<Promise<unknown[]>> = [];
+  const gateResolvers = new Map<Promise<unknown[]>, (m: unknown[]) => void>();
   const client = {
     session: {
       abort: async () => { calls.abort++; return { data: {}, error: undefined }; },
       messages: async () => {
         calls.messagesRead++;
-        const data = messagesGate ? await messagesGate : messages;
+        const gate = gated.shift();
+        const data = gate ? await gate : messages;
         return { data, error: undefined };
       },
       prompt: async () => { calls.prompt++; return { data: {}, error: undefined }; },
@@ -103,11 +108,31 @@ function makeStubClient() {
   return {
     client,
     calls,
-    setMessages: (m: unknown[]) => { messages = m; messagesGate = undefined; releaseGate = undefined; },
+    /** 尚未释放的 gate 数（测试末尾断言全部释放，避免挂起导致 runner 无输出）。
+     *  按 Map 身份计数而非队列长度：gate 被 gated.shift() 读取后仍留在 Map 中直至 release 删除，
+     *  用队列长度会把「已读取未释放」的 gate 误报为已释放，使挂起 Promise 被静默吞掉。 */
+    getPendingGateCount: () => gateResolvers.size,
+    setMessages: (m: unknown[]) => { messages = m; gated.length = 0; gateResolvers.clear(); },
+    // TDZ 最小修复：Promise 执行器同步运行，执行器内引用尚未初始化的 p 会抛 ReferenceError，
+    // 使返回的 Promise 立即拒绝 → 并发用例 verify/capture 拿不到消息（stats 无 completed、Board 空 records 假通过）。
+    // 执行器只捕获 resolver，Promise 构造完成后再 Map.set(p, resolver)。
     gateMessages: () => {
-      messagesGate = new Promise((res) => { releaseGate = res; });
+      let resolver: (m: unknown[]) => void = () => {};
+      const p = new Promise<unknown[]>((res) => { resolver = res; });
+      gateResolvers.set(p, resolver);
+      gated.push(p);
+      return p;
     },
-    releaseMessages: (m: unknown[]) => { if (releaseGate) { releaseGate(m); releaseGate = undefined; } },
+    // 无 gate 参数：释放最早创建的未释放 gate（既有用法兼容）；
+    // 带 gate 参数：按身份释放指定 gate（并发乱序回放，已被读取的 gate 同样可释放）。
+    releaseMessages: (m: unknown[], gate?: Promise<unknown[]>) => {
+      const target = gate ?? gateResolvers.keys().next().value;
+      const resolver = target ? gateResolvers.get(target) : undefined;
+      if (target && resolver) {
+        resolver(m);
+        gateResolvers.delete(target);
+      }
+    },
   };
 }
 
@@ -229,8 +254,15 @@ function errText(err: unknown): string {
   return err instanceof Error ? (err.stack ?? err.message) : String(err);
 }
 
+/** 在隔离 HOME 内写入用户配置（插件实例化前调用，覆盖默认 quality/reuseBudget 开关） */
+function writeUserConfig(cfg: Record<string, unknown>): void {
+  const dir = path.join(os.homedir(), '.config', 'opencode');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'oh-my-opencode-cohub.json'), JSON.stringify(cfg));
+}
+
 /** 每用例独立插件实例 + 独立临时 projectDir（均位于重定向后的临时 HOME 内），finally 必走 dispose 与清理 */
-async function runCase(name: string, fn: (hooks: any, ctx: any) => Promise<void>) {
+async function runCase(name: string, fn: (hooks: any, ctx: any) => Promise<void>, userConfig?: Record<string, unknown>) {
   const projectDir = fs.mkdtempSync(path.join(os.homedir(), 'cohub-proj-'));
   const stub = makeStubClient();
   const ctx = {
@@ -238,12 +270,14 @@ async function runCase(name: string, fn: (hooks: any, ctx: any) => Promise<void>
     setMessages: stub.setMessages,
     gateMessages: stub.gateMessages,
     releaseMessages: stub.releaseMessages,
+    getPendingGateCount: stub.getPendingGateCount,
   };
   let hooks: any;
   let bodyErr: unknown;
   let disposeErr: unknown;
   let cleanupErr: unknown;
   try {
+    if (userConfig) writeUserConfig(userConfig);
     hooks = await CoHubPlugin(makePluginInput(projectDir, stub.client));
     await fn(hooks, ctx);
   } catch (err) {
@@ -266,8 +300,8 @@ async function runCase(name: string, fn: (hooks: any, ctx: any) => Promise<void>
   return { name, ok: true };
 }
 
-// ===== 16 个回归用例（与主进程 CASES 名称一一对应） =====
-const runs: Array<{ name: string; fn: (hooks: any) => Promise<void> }> = [
+// ===== 回归用例（与主进程 CASES 名称一一对应；config 为可选的用户配置注入，测试开关组合） =====
+const runs: Array<{ name: string; fn: (hooks: any, ctx: any) => Promise<void>; config?: Record<string, unknown> }> = [
   {
     name: 'A/B 交错：A 只看到自己的任务，B 最后注册也不泄漏给 A',
     fn: async (hooks) => {
@@ -909,6 +943,298 @@ const runs: Array<{ name: string; fn: (hooks: any) => Promise<void> }> = [
       assert.ok(!text.includes('alias=cof-1'), 'cancelled 任务不应显示在 Board');
     },
   },
+  // ===== Wave7：复用可见性 / 采样新鲜度 / 开关独立 / 并发代次守卫 =====
+  {
+    name: '完整链路：idle 终态完成后 Board 展示可复用 session 与输入未知建议',
+    fn: async (hooks, ctx) => {
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_b1' });
+      // 新鲜终态证据（无 tokens）→ idle 完成收尾；capture 无采样
+      ctx.setMessages([terminalAssistantMsg('ses_b1')]);
+      await emitEvent(hooks, 'session.idle', 'ses_b1');
+      await sleepMs(150); // 等待 capture .then 异步写回
+      const text = joinedText((await transformFor(hooks, 'ses_A')).messages[0].parts);
+      // 真实 finalize 路径完成后 session 仍可复用（不再从 Board 消失），无采样 → 输入未知
+      assert.ok(text.includes('复用:'), '完成后应展示可复用 session');
+      assert.ok(text.includes('ses_b1(co-fix/输入未知)'), '应含 session 与输入未知建议');
+    },
+  },
+  {
+    name: '质量关闭+预算开启：复用采样写回且不写虚构分数（开关独立）',
+    config: { quality: { enabled: false } },
+    fn: async (hooks, ctx) => {
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_b1' });
+      // 终态消息带 tokens+cache：归一化 input = 100+40+60 = 200
+      ctx.setMessages([{
+        info: { role: 'assistant', sessionID: 'ses_b1', time: { created: Date.now(), completed: Date.now() }, finish: 'finish', tokens: { input: 100, output: 50, cache: { read: 40, write: 60 } } },
+        parts: [{ type: 'text', text: 'done' }],
+      }]);
+      await emitEvent(hooks, 'session.idle', 'ses_b1');
+      await sleepMs(150);
+      const text = joinedText((await transformFor(hooks, 'ses_A')).messages[0].parts);
+      assert.ok(text.includes('最近输入 200'), 'quality 关闭不应阻止预算采样写回');
+      const statsFile = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'stats.json');
+      if (fs.existsSync(statsFile)) {
+        const records = JSON.parse(fs.readFileSync(statsFile, 'utf-8')) as Array<Record<string, unknown>>;
+        const rec = records.find((r) => (r as { status?: string }).status === 'completed');
+        // 质量关闭：只写采样，不写虚构 tokens/score
+        assert.ok(rec && (rec as { tokens?: unknown }).tokens === undefined, '质量关闭不应写虚构 tokens');
+      }
+    },
+  },
+  {
+    name: '两者皆关闭：不回写质量/采样（capture 仍承载依赖传播）',
+    config: { quality: { enabled: false }, reuseBudget: { enabled: false } },
+    fn: async (hooks, ctx) => {
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_b1' });
+      ctx.setMessages([{
+        info: { role: 'assistant', sessionID: 'ses_b1', time: { created: Date.now(), completed: Date.now() }, finish: 'finish', tokens: { input: 300, output: 50, cache: { read: 10, write: 10 } } },
+        parts: [{ type: 'text', text: 'done' }],
+      }]);
+      await emitEvent(hooks, 'session.idle', 'ses_b1');
+      await sleepMs(150);
+      const text = joinedText((await transformFor(hooks, 'ses_A')).messages[0].parts);
+      // Board 仍展示可复用 session，但不带任何建议（reuse 参数关闭）
+      assert.ok(text.includes('复用:'), '应展示可复用 session');
+      assert.ok(!text.includes('最近输入'), '预算关闭不应显示用量');
+      assert.ok(!text.includes('输入未知'), '预算关闭不应显示建议');
+      const statsFile = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'stats.json');
+      if (fs.existsSync(statsFile)) {
+        const records = JSON.parse(fs.readFileSync(statsFile, 'utf-8')) as Array<Record<string, unknown>>;
+        const rec = records.find((r) => (r as { status?: string }).status === 'completed');
+        assert.ok(rec && (rec as { tokens?: unknown }).tokens === undefined, '两者关闭不应写虚构 tokens');
+      }
+    },
+  },
+  {
+    name: '并发 idle capture：新高用量不被旧 low 迟到覆盖（代次守卫）',
+    fn: async (hooks, ctx) => {
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_reuse' });
+      // 第一次 idle：verify 中间轮（无终态证据）→ 保持 running；capture1 挂起（读 g1）
+      const g0 = ctx.gateMessages();
+      const g1 = ctx.gateMessages();
+      const idle1 = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      ctx.releaseMessages([toolCallAssistantMsg('ses_reuse')], g0);
+      await idle1;
+      // 第二次 idle：新鲜终态证据 → 完成收尾；capture2 挂起（读 g3）
+      const g2 = ctx.gateMessages();
+      const g3 = ctx.gateMessages();
+      const idle2 = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      ctx.releaseMessages([terminalAssistantMsg('ses_reuse')], g2);
+      await idle2;
+      // 新结果先回（capture2：tokens 300）
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, tokens: { input: 300, output: 200, cache: { read: 10, write: 10 } } },
+        parts: [{ type: 'text', text: 'two' }],
+      }], g3);
+      await sleepMs(150);
+      // 旧结果迟到（capture1：tokens 100）——代次守卫应拦截，不覆盖新结果
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, tokens: { input: 100, output: 50, cache: { read: 5, write: 5 } } },
+        parts: [{ type: 'text', text: 'one' }],
+      }], g1);
+      await sleepMs(150);
+      assert.strictEqual(ctx.getPendingGateCount(), 0, '全部 gate 应释放（防 runner 挂起无输出）');
+      const statsFile = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'stats.json');
+      assert.ok(fs.existsSync(statsFile), 'stats 应持久化');
+      const records = JSON.parse(fs.readFileSync(statsFile, 'utf-8')) as Array<Record<string, unknown>>;
+      // 恰好一条 completed：capture2 写回一次，capture1 迟到被代次守卫拦截（不会产生第二条记录）
+      const completed = records.filter((r) => (r as { status?: string }).status === 'completed');
+      assert.strictEqual(completed.length, 1, '应恰好一条 completed 记录（代次守卫去重）');
+      const t300 = records.find((r) => (r as { tokens?: { input?: number } }).tokens?.input === 300);
+      const t100 = records.find((r) => (r as { tokens?: { input?: number } }).tokens?.input === 100);
+      assert.ok(t300, '新结果 300 应写回');
+      assert.ok(!t100, '旧结果 100 不应覆盖（代次守卫拦截）');
+    },
+  },
+  {
+    name: '并发 idle capture：新未知先回，旧有值迟到不覆盖未知（未知亦遵守）',
+    fn: async (hooks, ctx) => {
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_reuse' });
+      // 第一次 idle：verify 中间轮 → 保持 running；capture1 挂起（读 g1）
+      const g0 = ctx.gateMessages();
+      const g1 = ctx.gateMessages();
+      const idle1 = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      ctx.releaseMessages([toolCallAssistantMsg('ses_reuse')], g0);
+      await idle1;
+      // 第二次 idle：新鲜终态证据 → 完成收尾；capture2 挂起（读 g3）
+      const g2 = ctx.gateMessages();
+      const g3 = ctx.gateMessages();
+      const idle2 = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      ctx.releaseMessages([terminalAssistantMsg('ses_reuse')], g2);
+      await idle2;
+      // 最新请求（capture2）先回：消息无 tokens → 采样/质量 tokens 未知
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, finish: 'finish' },
+        parts: [{ type: 'text', text: 'latest-no-tokens' }],
+      }], g3);
+      await sleepMs(150);
+      // 旧请求（capture1：tokens 100）迟到——即使最新为未知，旧值也不得覆盖（未知亦遵守）
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, finish: 'finish', tokens: { input: 100, output: 50, cache: { read: 5, write: 5 } } },
+        parts: [{ type: 'text', text: 'one' }],
+      }], g1);
+      await sleepMs(150);
+      assert.strictEqual(ctx.getPendingGateCount(), 0, '全部 gate 应释放（防 runner 挂起无输出）');
+      const statsFile = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'stats.json');
+      assert.ok(fs.existsSync(statsFile), 'stats 应持久化');
+      const records = JSON.parse(fs.readFileSync(statsFile, 'utf-8')) as Array<Record<string, unknown>>;
+      // 恰好一条 completed（unknown 采样也写回）：空 records 时 Board「输入未知」是假通过，须有真实记录支撑
+      const completed = records.filter((r) => (r as { status?: string }).status === 'completed');
+      assert.strictEqual(completed.length, 1, '应恰好一条 completed 记录（未知采样仍写回）');
+      const t100 = records.find((r) => (r as { tokens?: { input?: number } }).tokens?.input === 100);
+      assert.ok(!t100, '旧值 100 不得覆盖未知（代次守卫，未知亦遵守）');
+      // Board 确实展示该 session 输入未知（非无采样的空 records 假通过）
+      const text = joinedText((await transformFor(hooks, 'ses_A')).messages[0].parts);
+      assert.ok(text.includes('ses_reuse(co-fix/输入未知)'), 'Board 应显示该 session 输入未知');
+      assert.ok(!text.includes('最近输入'), '未知采样不应显示用量');
+    },
+  },
+  {
+    name: 'idle 终态 verify 旧消息：不把旧采样回填本轮（新鲜度边界）',
+    fn: async (hooks, ctx) => {
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_reuse' });
+      // verify 读新鲜终态（完成收尾），capture 读旧历史消息（created 早于本轮调用开始）
+      const g0 = ctx.gateMessages();
+      const g1 = ctx.gateMessages();
+      const idleP = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      ctx.releaseMessages([terminalAssistantMsg('ses_reuse')], g0);
+      await idleP;
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() - 60000 }, finish: 'finish', tokens: { input: 999, output: 1, cache: { read: 1, write: 1 } } },
+        parts: [{ type: 'text', text: 'stale' }],
+      }], g1);
+      await sleepMs(150);
+      assert.strictEqual(ctx.getPendingGateCount(), 0, '全部 gate 应释放（防 runner 挂起无输出）');
+      const text = joinedText((await transformFor(hooks, 'ses_A')).messages[0].parts);
+      // 旧采样未写回 → 显示输入未知（而非旧 999）。此断言基于真实采样路径：
+      // gate 已释放使 capture 确实读到旧消息，新鲜度边界将其判为未知——不是 gate 崩溃导致的空 records 假通过。
+      assert.ok(text.includes('ses_reuse(co-fix/输入未知)'), '旧采样不应回填本轮');
+      assert.ok(!text.includes('最近输入'), '不应显示旧用量');
+    },
+  },
+  {
+    name: '并发 idle verify 倒序：旧 verify 迟到不得取代新 idle 采样（序号 await 前分配）',
+    fn: async (hooks, ctx) => {
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_reuse' });
+      // messages 直读兜底为旧有值 100（旧实现下 idle1 的 capture 直读 messages 写回覆盖新采样）
+      ctx.setMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, finish: 'finish', tokens: { input: 100, output: 50, cache: { read: 5, write: 5 } } },
+        parts: [{ type: 'text', text: 'stale' }],
+      }]);
+      const g0 = ctx.gateMessages();
+      const idle1 = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      const g2 = ctx.gateMessages();
+      const g3 = ctx.gateMessages();
+      const idle2 = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      // verify 倒序释放：新 idle2 先回（终态证据 → 完成收尾），旧 idle1 后回
+      ctx.releaseMessages([terminalAssistantMsg('ses_reuse')], g2);
+      await idle2;
+      ctx.releaseMessages([terminalAssistantMsg('ses_reuse')], g0);
+      await idle1;
+      // capture：新（idle2）先回 tokens 300
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, finish: 'finish', tokens: { input: 300, output: 200, cache: { read: 10, write: 10 } } },
+        parts: [{ type: 'text', text: 'new' }],
+      }], g3);
+      await sleepMs(150);
+      assert.strictEqual(ctx.getPendingGateCount(), 0, '全部 gate 应释放（防 runner 挂起无输出）');
+      const statsFile = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'stats.json');
+      assert.ok(fs.existsSync(statsFile), 'stats 应持久化');
+      const records = JSON.parse(fs.readFileSync(statsFile, 'utf-8')) as Array<Record<string, unknown>>;
+      // 新采样 300 应写回；旧 idle1 的 verify 迟到不得取得更大序号使新采样失效（旧采样反而写回）
+      const t300 = records.find((r) => (r as { tokens?: { input?: number } }).tokens?.input === 300);
+      const t100 = records.find((r) => (r as { tokens?: { input?: number } }).tokens?.input === 100);
+      assert.ok(t300, '新采样 300 应写回（旧 verify 迟到不得使新采样失效）');
+      assert.ok(!t100, '旧 idle1 采样 100 不得写回（verify 倒序下仍由新 idle 采样）');
+    },
+  },
+  {
+    name: '并发 idle verify 倒序：新 idle 未知写回，旧 verify 迟到不得撤销（gate 全释放）',
+    fn: async (hooks, ctx) => {
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_reuse' });
+      ctx.setMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, finish: 'finish', tokens: { input: 100, output: 50, cache: { read: 5, write: 5 } } },
+        parts: [{ type: 'text', text: 'stale' }],
+      }]);
+      const g0 = ctx.gateMessages();
+      const idle1 = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      const g2 = ctx.gateMessages();
+      const g3 = ctx.gateMessages();
+      const idle2 = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      ctx.releaseMessages([terminalAssistantMsg('ses_reuse')], g2);
+      await idle2;
+      ctx.releaseMessages([terminalAssistantMsg('ses_reuse')], g0);
+      await idle1;
+      // 新（idle2）capture 无 tokens → 最新未知（采样亦写回，不残留旧有值）
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, finish: 'finish' },
+        parts: [{ type: 'text', text: 'latest-no-tokens' }],
+      }], g3);
+      await sleepMs(150);
+      assert.strictEqual(ctx.getPendingGateCount(), 0, '全部 gate 应释放（防 runner 挂起无输出）');
+      const statsFile = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'stats.json');
+      assert.ok(fs.existsSync(statsFile), 'stats 应持久化');
+      const records = JSON.parse(fs.readFileSync(statsFile, 'utf-8')) as Array<Record<string, unknown>>;
+      const t100 = records.find((r) => (r as { tokens?: { input?: number } }).tokens?.input === 100);
+      assert.ok(!t100, '旧 idle1 有值 100 不得覆盖最新未知（verify 倒序 + 代次守卫）');
+      const text = joinedText((await transformFor(hooks, 'ses_A')).messages[0].parts);
+      assert.ok(text.includes('ses_reuse(co-fix/输入未知)'), 'Board 应显示输入未知（最新无 tokens 采样）');
+    },
+  },
+  {
+    name: '质量关闭+预算开启：同 job 先有值、后未知、最终完成 board 未知（旧样本被清空）',
+    config: { quality: { enabled: false } },
+    fn: async (hooks, ctx) => {
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_reuse' });
+      // 第一次 idle：verify 中间轮（保持 running）；capture 有 tokens → 写回采样 200
+      const g0 = ctx.gateMessages();
+      const g1 = ctx.gateMessages();
+      const idle1 = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      ctx.releaseMessages([toolCallAssistantMsg('ses_reuse')], g0);
+      await idle1;
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, finish: 'finish', tokens: { input: 100, output: 50, cache: { read: 40, write: 60 } } },
+        parts: [{ type: 'text', text: 'first' }],
+      }], g1);
+      await sleepMs(150); // 等 capture1 写回（job 仍 running，写回在内存态）
+      // 第二次 idle：verify 中间轮（保持 running）；capture 无 tokens → 提交清空 reuseInput
+      const g2 = ctx.gateMessages();
+      const g3 = ctx.gateMessages();
+      const idle2 = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      ctx.releaseMessages([toolCallAssistantMsg('ses_reuse')], g2);
+      await idle2;
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, finish: 'finish' },
+        parts: [{ type: 'text', text: 'second-no-tokens' }],
+      }], g3);
+      await sleepMs(150);
+      // 最终完成：verify 终态证据 → 落 completed；capture 无 tokens（board 未知）
+      const g4 = ctx.gateMessages();
+      const g5 = ctx.gateMessages();
+      const idle3 = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      ctx.releaseMessages([terminalAssistantMsg('ses_reuse')], g4);
+      await idle3;
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, finish: 'finish' },
+        parts: [{ type: 'text', text: 'third' }],
+      }], g5);
+      await sleepMs(150);
+      assert.strictEqual(ctx.getPendingGateCount(), 0, '全部 gate 应释放（防 runner 挂起无输出）');
+      const text = joinedText((await transformFor(hooks, 'ses_A')).messages[0].parts);
+      // 同一 job 先有值 200、后未知 → 最新未知必须清空旧样本：不显示「最近输入 200」
+      assert.ok(text.includes('ses_reuse(co-fix/输入未知)'), '最终 board 应显示输入未知（最新无 tokens 覆盖旧样本）');
+      assert.ok(!text.includes('最近输入'), '旧采样 200 不得残留（未知采样提交清空 reuseInput）');
+    },
+  },
 ];
 
 async function main() {
@@ -918,7 +1244,7 @@ async function main() {
     console.log(JSON.stringify([{ name: 'unknown-case-' + caseIndex, ok: false, message: '未知用例索引: ' + caseIndex }]));
     return;
   }
-  const result = await runCase(run.name, run.fn);
+  const result = await runCase(run.name, run.fn, run.config);
   console.log(JSON.stringify([result]));
 }
 
@@ -969,6 +1295,15 @@ const CASES = [
   '原生 subtask after undefined：不崩溃不假成功，error part 按已登记 part.id 精确收尾',
   '质量写回：两次同 child 复用输出不同 tokens，旧记录不被新结果覆盖',
   '真实 close_job 工具：co-orchestrator 取消后台任务，engine 镜像 + 精确 parent 刷新（Board 正确）',
+  '完整链路：idle 终态完成后 Board 展示可复用 session 与输入未知建议',
+  '质量关闭+预算开启：复用采样写回且不写虚构分数（开关独立）',
+  '两者皆关闭：不回写质量/采样（capture 仍承载依赖传播）',
+  '并发 idle capture：新高用量不被旧 low 迟到覆盖（代次守卫）',
+  '并发 idle capture：新未知先回，旧有值迟到不覆盖未知（未知亦遵守）',
+  'idle 终态 verify 旧消息：不把旧采样回填本轮（新鲜度边界）',
+  '并发 idle verify 倒序：旧 verify 迟到不得取代新 idle 采样（序号 await 前分配）',
+  '并发 idle verify 倒序：新 idle 未知写回，旧 verify 迟到不得撤销（gate 全释放）',
+  '质量关闭+预算开启：同 job 先有值、后未知、最终完成 board 未知（旧样本被清空）',
 ];
 
 /**

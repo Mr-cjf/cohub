@@ -1,9 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { ContextConfig } from '../context/types';
+import type { ContextConfig, ReuseBudgetConfig } from '../context/types';
 import type { QualityConfig } from '../task-manager/quality';
-import { DEFAULT_CONTEXT_CONFIG } from '../context/types';
+import { DEFAULT_CONTEXT_CONFIG, DEFAULT_REUSE_BUDGET_CONFIG } from '../context/types';
 
 // P2-4: Council 相关类型统一复用 council.ts 定义，消除双定义漂移
 //（纯类型 import + re-export，运行时零依赖；council.ts 不 import loader.ts，无循环依赖）
@@ -25,6 +25,8 @@ export interface CoHubConfig {
   context?: Partial<ContextConfig>;  // 用户可覆盖部分字段
   /** 质量回送配置（P0-1 负反馈闭环，默认开启） */
   quality?: Partial<QualityConfig>;
+  /** 软复用预算配置（默认开启，仅提示不建议复用；非法字段消费侧回退默认） */
+  reuseBudget?: Partial<ReuseBudgetConfig>;
   /** 诊断日志配置（默认全部关闭：ctx-diag opt-in；新增字段，旧配置缺省即安全） */
   diag?: CtxDiagConfig;
 }
@@ -55,10 +57,30 @@ export function loadCoHubConfig(projectDir?: string): CoHubConfig {
   if (project.quality) {
     merged.quality = { ...base.quality, ...project.quality };
   }
+  if (project.reuseBudget) {
+    merged.reuseBudget = { ...base.reuseBudget, ...project.reuseBudget };
+  }
   if (project.diag) {
     merged.diag = { ...base.diag, ...project.diag };
   }
   return merged;
+}
+
+/**
+ * 解析复用预算配置（消费侧兜底，对齐 isQualityEnabled 的现有模式）：
+ * - 配置缺失 → 默认 { enabled: true, maxInputTokens: 200_000 }；
+ * - enabled 非 boolean / maxInputTokens 非正有限数 → 分别回退默认值；
+ * - 非法字段不影响其余字段（可关可调，非法不报错不中断）。
+ */
+export function resolveReuseBudget(config?: Partial<ReuseBudgetConfig> | null): ReuseBudgetConfig {
+  const enabled = typeof config?.enabled === 'boolean'
+    ? config.enabled
+    : DEFAULT_REUSE_BUDGET_CONFIG.enabled;
+  const max = config?.maxInputTokens;
+  const maxInputTokens = typeof max === 'number' && Number.isFinite(max) && max > 0
+    ? max
+    : DEFAULT_REUSE_BUDGET_CONFIG.maxInputTokens;
+  return { enabled, maxInputTokens };
 }
 
 function readJSON(filePath: string): Record<string, unknown> | null {
@@ -71,4 +93,4 @@ function readJSON(filePath: string): Record<string, unknown> | null {
   }
 }
 
-export { DEFAULT_CONTEXT_CONFIG };
+export { DEFAULT_CONTEXT_CONFIG, DEFAULT_REUSE_BUDGET_CONFIG };

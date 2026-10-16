@@ -922,3 +922,285 @@ describe('Wave1 上下文优化基线', () => {
     }
   });
 });
+
+// ===========================================================================
+// Wave6：captureResult 有界读 + 复用预算采样（200K 软预算核心）
+// ===========================================================================
+
+/** 构造 captureResult 测试用 session.messages client（可捕获调用参数与调用次数） */
+function captureResultClient(
+  data: unknown[],
+  onCall?: (args: { path?: { id?: string }; query?: Record<string, unknown> }) => void,
+): { client: { session: { messages: (args: { path?: { id?: string }; query?: Record<string, unknown> }) => Promise<{ data: unknown[] }> } }; getCallCount: () => number } {
+  let callCount = 0;
+  const messages = async (args: { path?: { id?: string }; query?: Record<string, unknown> }) => {
+    callCount++;
+    onCall?.(args);
+    return { data };
+  };
+  return { client: { session: { messages } }, getCallCount: () => callCount };
+}
+
+/** 快捷构造 assistant 消息（默认 text part 含决策关键词，供 decisions 计数） */
+function asstMsg(info: Record<string, unknown>, parts?: Array<Record<string, unknown>>): Record<string, unknown> {
+  return {
+    info: { role: 'assistant', ...info },
+    parts: parts ?? [{ type: 'text', text: '我们决定采用 TypeScript 严格模式' }],
+  };
+}
+
+describe('captureResult 有界读与复用预算采样（Wave6）', () => {
+  test('有界读：session.messages 传入 query.limit=20（防无界读）', async () => {
+    let capturedQuery: { limit?: number } | undefined;
+    const { client } = captureResultClient([], (args) => { capturedQuery = args.query; });
+    const engine = new ContextEngine(client);
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    expect(capturedQuery).toEqual({ limit: 20 });
+    expect(result).not.toBeNull();
+  });
+
+  test('防无界读：超量消息只读一次 API（不因会话历史膨胀额外读取）', async () => {
+    const many = Array.from({ length: 100 }, (_, i) =>
+      asstMsg({ time: { created: i }, id: `msg-${i}` }, [{ type: 'text', text: '我们决定采用方案B' }]),
+    );
+    const { client, getCallCount } = captureResultClient(many);
+    const engine = new ContextEngine(client);
+    await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    expect(getCallCount()).toBe(1);
+  });
+
+  test('升序消息：output/tokens/reuseInput 取最近 assistant，摘要语义不回归', async () => {
+    const messages = [
+      asstMsg({ time: { created: 100 }, id: 'msg-old', tokens: { input: 50, output: 20, cache: { read: 10, write: 10 } } }, [{ type: 'text', text: '我们决定采用旧方案' }]),
+      asstMsg({ time: { created: 200 }, id: 'msg-new', tokens: { input: 100, output: 30, cache: { read: 40, write: 60 } } }, [{ type: 'text', text: '我们决定采用 TypeScript 严格模式' }]),
+    ];
+    const { client } = captureResultClient(messages);
+    const engine = new ContextEngine(client);
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    expect(result).not.toBeNull();
+    expect(result!.output).toContain('TypeScript 严格模式');
+    expect(result!.tokens).toEqual({ input: 100, output: 30 });
+    // 可信归一化：100 + 40 + 60 = 200（不含 output）
+    expect(result!.reuseInput).toEqual({ inputTokens: 200, sampledAt: 200, messageId: 'msg-new' });
+    expect(result!.decisions).toBe(1);
+  });
+
+  test('乱序消息：按 time.created 取最近（不按数组顺序，不挑旧数据当最新）', async () => {
+    const messages = [
+      asstMsg({ time: { created: 300 }, id: 'msg-3', tokens: { input: 300, output: 100, cache: { read: 10, write: 10 } } }, [{ type: 'text', text: '我们决定采用乱序第三条' }]),
+      asstMsg({ time: { created: 100 }, id: 'msg-1', tokens: { input: 100, output: 50, cache: { read: 20, write: 20 } } }, [{ type: 'text', text: '我们决定采用乱序第一条' }]),
+      asstMsg({ time: { created: 200 }, id: 'msg-2', tokens: { input: 200, output: 60, cache: { read: 30, write: 30 } } }, [{ type: 'text', text: '我们决定采用乱序第二条' }]),
+    ];
+    const { client } = captureResultClient(messages);
+    const engine = new ContextEngine(client);
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    expect(result!.output).toContain('乱序第三条');
+    expect(result!.tokens).toEqual({ input: 300, output: 100 });
+    expect(result!.reuseInput!.inputTokens).toBe(320); // 300+10+10
+    expect(result!.reuseInput!.messageId).toBe('msg-3');
+  });
+
+  test('最大 time.created 并列：无法判定哪个更新 → reuseInput/tokens 未知（不按数组顺序判安全）', async () => {
+    const messages = [
+      asstMsg({ time: { created: 200 }, id: 'msg-a', tokens: { input: 100, output: 20, cache: { read: 30, write: 70 } } }, [{ type: 'text', text: '我们决定采用并列方案A' }]),
+      asstMsg({ time: { created: 200 }, id: 'msg-b', tokens: { input: 10, output: 5, cache: { read: 5, write: 5 } } }, [{ type: 'text', text: '我们决定采用并列方案B' }]),
+      asstMsg({ time: { created: 100 }, id: 'msg-old', tokens: { input: 999, output: 999, cache: { read: 999, write: 999 } } }, [{ type: 'text', text: '我们决定采用旧方案' }]),
+    ];
+    const { client } = captureResultClient(messages);
+    const engine = new ContextEngine(client);
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    // 并列最大无法判定哪个更新 → 未知；绝不捞并列/旧消息的带 tokens 回填（100+30+70 / 10+5+5 / 999…）
+    expect(result!.reuseInput).toBeUndefined();
+    expect(result!.tokens).toBeUndefined();
+    // 摘要仍最佳努力：有 text 的 assistant 被取出（数组末尾向前 → msg-b）
+    expect(result!.output).toContain('并列方案');
+  });
+
+  test('低值/高值并列且数组顺序互换：均未知（不取先遇到者的低值或高值）', async () => {
+    const low = asstMsg({ time: { created: 300 }, id: 'msg-low', tokens: { input: 1, output: 1, cache: { read: 1, write: 1 } } }, [{ type: 'text', text: '我们决定采用低值方案' }]);
+    const high = asstMsg({ time: { created: 300 }, id: 'msg-high', tokens: { input: 500000, output: 1, cache: { read: 200000, write: 200000 } } }, [{ type: 'text', text: '我们决定采用高值方案' }]);
+    for (const messages of [[low, high], [high, low]]) {
+      const { client } = captureResultClient(messages);
+      const engine = new ContextEngine(client);
+      const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+      expect(result!.reuseInput, '顺序: ' + messages[0].info.id + ' 前置').toBeUndefined();
+    }
+  });
+
+  test('乱序 + 并列 + 数组尾为旧消息：摘要仍取最大时间候选，绝不回退数组尾旧结论', async () => {
+    const messages = [
+      asstMsg({ time: { created: 100 }, id: 'msg-old', tokens: { input: 999, output: 1, cache: { read: 1, write: 1 } } }, [{ type: 'text', text: '我们决定采用旧方案' }]),
+      asstMsg({ time: { created: 300 }, id: 'msg-b', tokens: { input: 5, output: 1, cache: { read: 1, write: 1 } } }, [{ type: 'text', text: '我们决定采用并列方案B' }]),
+      asstMsg({ time: { created: 300 }, id: 'msg-a', tokens: { input: 10, output: 1, cache: { read: 1, write: 1 } } }, [{ type: 'text', text: '我们决定采用并列方案A' }]),
+    ];
+    const { client } = captureResultClient(messages);
+    const engine = new ContextEngine(client);
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    // 摘要时间优先：取 300 并列候选之一（数组尾 msg-old=100 是旧消息，不得回退到它）
+    expect(result!.output).toContain('并列方案');
+    expect(result!.output).not.toContain('旧方案');
+    // 并列仍不判安全：采样/原始 tokens 未知
+    expect(result!.reuseInput).toBeUndefined();
+    expect(result!.tokens).toBeUndefined();
+  });
+
+  test('最新 assistant 缺 tokens：reuseInput/原始 tokens 均未知，不回溯旧数据当最新安全用量', async () => {
+    const messages = [
+      asstMsg({ time: { created: 300 }, id: 'msg-latest-no-tokens' }, [{ type: 'text', text: '我们决定采用最新方案' }]),
+      asstMsg({ time: { created: 100 }, id: 'msg-old-with-tokens', tokens: { input: 5000, output: 100, cache: { read: 500, write: 500 } } }, [{ type: 'text', text: '我们决定采用旧方案' }]),
+    ];
+    const { client } = captureResultClient(messages);
+    const engine = new ContextEngine(client);
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    expect(result!.tokens).toBeUndefined();
+    expect(result!.reuseInput).toBeUndefined();
+    // 摘要仍取最新消息（文本回退不受 tokens 缺失影响）
+    expect(result!.output).toContain('最新方案');
+  });
+
+  test('字段缺失/无效：input 缺失、cache 缺失、cache.read 缺失、非有限数 → 未知而非 0', async () => {
+    const cases = [
+      { time: { created: 1 }, tokens: { output: 5, cache: { read: 1, write: 1 } } },                 // input 缺失
+      { time: { created: 2 }, tokens: { input: 5, output: 5 } },                                     // cache 整体缺失
+      { time: { created: 3 }, tokens: { input: 5, output: 5, cache: { write: 1 } } },                // cache.read 缺失
+      { time: { created: 4 }, tokens: { input: 5, output: 5, cache: { read: NaN, write: 1 } } },     // 非有限数
+      { time: { created: 5 }, tokens: { input: 5, output: 5, cache: { read: 1, write: Infinity } } }, // 非有限数
+    ];
+    for (const info of cases) {
+      const { client } = captureResultClient([asstMsg(info, [{ type: 'text', text: '我们决定采用字段缺失方案' }])]);
+      const engine = new ContextEngine(client);
+      const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+      expect(result!.reuseInput, JSON.stringify(info)).toBeUndefined();
+    }
+  });
+
+  test('可信归一化口径：input+cache.read+cache.write，不叠加 output（199999/200000/200001/480000）', async () => {
+    const fixtures = [
+      { input: 99999, read: 50000, write: 50000, output: 999999, expected: 199999 },
+      { input: 100000, read: 50000, write: 50000, output: 999999, expected: 200000 },
+      { input: 100001, read: 50000, write: 50000, output: 999999, expected: 200001 },
+      { input: 250000, read: 150000, write: 80000, output: 999999, expected: 480000 },
+    ];
+    for (const f of fixtures) {
+      const { client } = captureResultClient([
+        asstMsg({ time: { created: 7 }, id: 'msg-b', tokens: { input: f.input, output: f.output, cache: { read: f.read, write: f.write } } }),
+      ]);
+      const engine = new ContextEngine(client);
+      const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+      expect(result!.reuseInput!.inputTokens).toBe(f.expected);
+      // output 绝不叠加进归一化输入
+      expect(result!.reuseInput!.inputTokens).not.toBe(f.expected + f.output);
+      // 原始 tokens 保留 output（质量回送口径不变）
+      expect(result!.tokens).toEqual({ input: f.input, output: f.output });
+    }
+  });
+
+  test('time.created 缺失：无法确认最新 → reuseInput/tokens 未知（sampledAt 不伪造新鲜度），摘要仍可取', async () => {
+    const { client } = captureResultClient([
+      asstMsg({ id: 'msg-no-time', tokens: { input: 10, output: 5, cache: { read: 2, write: 3 } } }),
+    ]);
+    const engine = new ContextEngine(client);
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    expect(result!.reuseInput).toBeUndefined();
+    expect(result!.tokens).toBeUndefined();
+    // 摘要不被未知采样破坏（最佳努力取出）
+    expect(result!.output).toContain('TypeScript 严格模式');
+  });
+
+  test('时间缺失消息在不同数组位置：均不产生 reuseInput（不按位置误判最新），摘要仍时间优先可取', async () => {
+    const timed = asstMsg({ time: { created: 100 }, id: 'msg-timed', tokens: { input: 50, output: 5, cache: { read: 1, write: 1 } } }, [{ type: 'text', text: '我们决定采用有时间方案' }]);
+    const untimed = asstMsg({ id: 'msg-untimed', tokens: { input: 999, output: 9, cache: { read: 9, write: 9 } } }, [{ type: 'text', text: '我们决定采用无时间方案' }]);
+    for (const messages of [[timed, untimed], [untimed, timed]]) {
+      const { client } = captureResultClient(messages);
+      const engine = new ContextEngine(client);
+      const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+      // 存在时间缺失消息 → 无法确认最新 → 未知（999+9+9 / 50+1+1 均不被采用）
+      expect(result!.reuseInput, '顺序: ' + messages[0].info.id + ' 前置').toBeUndefined();
+      // 摘要不因采样未知退化：仍优先最大有效 time.created 候选（msg-timed=100）
+      expect(result!.output).toContain('有时间方案');
+    }
+  });
+
+  test('负值/求和溢出：reuseInput 未知（仅非负有限数求和，溢出精度不可信不取）', async () => {
+    const cases = [
+      { time: { created: 1 }, tokens: { input: -5, output: 1, cache: { read: 1, write: 1 } } },      // 负 input
+      { time: { created: 2 }, tokens: { input: 1, output: 1, cache: { read: -1, write: 1 } } },       // 负 cache.read
+      { time: { created: 3 }, tokens: { input: 1, output: 1, cache: { read: 1, write: -2 } } },       // 负 cache.write
+      { time: { created: 4 }, tokens: { input: Number.MAX_SAFE_INTEGER, output: 1, cache: { read: Number.MAX_SAFE_INTEGER, write: Number.MAX_SAFE_INTEGER } } }, // 和溢出
+    ];
+    for (const info of cases) {
+      const { client } = captureResultClient([asstMsg(info, [{ type: 'text', text: '我们决定采用负值方案' }])]);
+      const engine = new ContextEngine(client);
+      const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+      expect(result!.reuseInput, JSON.stringify(info)).toBeUndefined();
+    }
+  });
+
+  test('最近 assistant 无 text：摘要回退更早 assistant（摘要不回归），原始 tokens/采样仍取最近', async () => {
+    const messages = [
+      asstMsg({ time: { created: 200 }, id: 'msg-tool-only', tokens: { input: 100, output: 20, cache: { read: 30, write: 70 } } }, [
+        { type: 'tool', tool: 'read', state: { status: 'completed', input: { filePath: '/a.ts' }, output: 'x' } },
+      ]),
+      asstMsg({ time: { created: 100 }, id: 'msg-text', tokens: { input: 50, output: 10, cache: { read: 5, write: 5 } } }, [
+        { type: 'text', text: '我们决定采用回退方案' },
+      ]),
+    ];
+    const { client } = captureResultClient(messages);
+    const engine = new ContextEngine(client);
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    expect(result!.output).toContain('回退方案');
+    // 原始 tokens 与复用采样仍来自最近 assistant（不回退更旧消息）
+    expect(result!.tokens).toEqual({ input: 100, output: 20 });
+    expect(result!.reuseInput!.inputTokens).toBe(200);
+  });
+
+  test('降序消息 + 最新无正文：摘要按时间降序回退取次新结论，绝不回退数组尾旧结论', async () => {
+    // 输入降序 [300 无正文(最新), 200 新结论, 100 旧结论]：旧实现按数组尾回退会误取 100 旧结论
+    const messages = [
+      asstMsg({ time: { created: 300 }, id: 'msg-new-no-text', tokens: { input: 300, output: 1, cache: { read: 10, write: 10 } } }, [
+        { type: 'tool', tool: 'read', state: { status: 'completed', input: { filePath: '/a.ts' }, output: 'x' } },
+      ]),
+      asstMsg({ time: { created: 200 }, id: 'msg-mid', tokens: { input: 200, output: 1, cache: { read: 10, write: 10 } } }, [
+        { type: 'text', text: '我们决定采用新结论' },
+      ]),
+      asstMsg({ time: { created: 100 }, id: 'msg-oldest', tokens: { input: 100, output: 1, cache: { read: 10, write: 10 } } }, [
+        { type: 'text', text: '我们决定采用旧结论' },
+      ]),
+    ];
+    const { client } = captureResultClient(messages);
+    const engine = new ContextEngine(client);
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    // 摘要时间优先：取 200 新结论，不回退 100 旧结论
+    expect(result!.output).toContain('新结论');
+    expect(result!.output).not.toContain('旧结论');
+    // 采样仍取可确认最新（300）：采样可信与摘要 best effort 彻底分开
+    expect(result!.reuseInput!.inputTokens).toBe(320); // 300+10+10
+  });
+
+  test('新鲜度边界：sampledAt 早于调用边界 → reuseInput 未知（不回填旧采样到本轮）', async () => {
+    const messages = [
+      asstMsg({ time: { created: 100 }, id: 'msg-stale', tokens: { input: 300, output: 50, cache: { read: 10, write: 10 } } }, [
+        { type: 'text', text: '我们决定采用旧历史方案' },
+      ]),
+    ];
+    const { client } = captureResultClient(messages);
+    const engine = new ContextEngine(client);
+    // notBefore = 本轮调用开始（job.createdAt）；消息 created=100 早于 200 → 不属于当前调用
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer', { notBefore: 200 });
+    expect(result!.reuseInput).toBeUndefined();
+    // 摘要仍 best effort（采样未知不破坏摘要）
+    expect(result!.output).toContain('旧历史方案');
+  });
+
+  test('新鲜度边界：sampledAt 等于调用边界 → 属于当前调用，正常采样', async () => {
+    const messages = [
+      asstMsg({ time: { created: 200 }, id: 'msg-fresh', tokens: { input: 100, output: 50, cache: { read: 40, write: 60 } } }, [
+        { type: 'text', text: '我们决定采用本轮方案' },
+      ]),
+    ];
+    const { client } = captureResultClient(messages);
+    const engine = new ContextEngine(client);
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer', { notBefore: 200 });
+    expect(result!.reuseInput).toEqual({ inputTokens: 200, sampledAt: 200, messageId: 'msg-fresh' });
+  });
+});

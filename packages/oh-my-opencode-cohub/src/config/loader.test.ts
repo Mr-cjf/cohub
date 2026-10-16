@@ -35,7 +35,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { strict as assert } from 'node:assert';
-import { loadCoHubConfig, DEFAULT_CONTEXT_CONFIG } from __LOADER_TS_PATH__;
+import { loadCoHubConfig, resolveReuseBudget, DEFAULT_CONTEXT_CONFIG } from __LOADER_TS_PATH__;
 
 // ===== 隔离守卫：os.homedir() 必须指向重定向后的临时 HOME =====
 const expectedHome = process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME;
@@ -148,6 +148,31 @@ const results = [
     const cfg = loadCoHubConfig(projectDir);
     assert.strictEqual(cfg.context.summaryReadMode, 'full');
   }),
+
+  scenario('reuseBudget 用户配置缺失 → 返回对象无该键（消费侧 resolveReuseBudget 兜底默认）', () => {
+    writeUserConfig({});
+    assert.strictEqual(loadCoHubConfig().reuseBudget, undefined);
+  }),
+
+  scenario('reuseBudget 项目级覆盖用户级（键级合并，未覆盖键保留）', () => {
+    writeUserConfig({ reuseBudget: { enabled: true, maxInputTokens: 300000 } });
+    writeProjectConfig(projectDir, { reuseBudget: { maxInputTokens: 400000 } });
+    const cfg = loadCoHubConfig(projectDir);
+    assert.strictEqual(cfg.reuseBudget.enabled, true);       // 用户未覆盖键保留
+    assert.strictEqual(cfg.reuseBudget.maxInputTokens, 400000); // 项目覆盖
+  }),
+
+  scenario('resolveReuseBudget 非法配置稳健回退：缺失/非 boolean/非正有限数 → 默认（可关可调合法值生效）', () => {
+    assert.deepStrictEqual(resolveReuseBudget(undefined), { enabled: true, maxInputTokens: 200000 });
+    assert.deepStrictEqual(resolveReuseBudget({}), { enabled: true, maxInputTokens: 200000 });
+    assert.deepStrictEqual(resolveReuseBudget({ enabled: 'yes' }), { enabled: true, maxInputTokens: 200000 });
+    assert.deepStrictEqual(resolveReuseBudget({ maxInputTokens: -1 }), { enabled: true, maxInputTokens: 200000 });
+    assert.deepStrictEqual(resolveReuseBudget({ maxInputTokens: 0 }), { enabled: true, maxInputTokens: 200000 });
+    assert.deepStrictEqual(resolveReuseBudget({ maxInputTokens: NaN }), { enabled: true, maxInputTokens: 200000 });
+    assert.deepStrictEqual(resolveReuseBudget({ maxInputTokens: '300000' }), { enabled: true, maxInputTokens: 200000 });
+    // 合法可关可调
+    assert.deepStrictEqual(resolveReuseBudget({ enabled: false, maxInputTokens: 100000 }), { enabled: false, maxInputTokens: 100000 });
+  }),
 ];
 
 console.log(JSON.stringify(results));
@@ -213,12 +238,12 @@ function runIsolatedScenarios(): Array<{ name: string; ok: boolean; message?: st
 }
 
 describe('loadCoHubConfig（隔离 HOME 子进程）', () => {
-  test('全部 9 个场景通过', () => {
+  test('全部 12 个场景通过', () => {
     const results = runIsolatedScenarios();
     const failed = results.filter((r) => !r.ok);
     const detail = failed.map((f) => f.name + ': ' + (f.message ?? '')).join('\n---\n');
     expect(failed, detail).toEqual([]);
     // 场景数量完整性检查（防止 runner 侧场景被误删）
-    expect(results).toHaveLength(9);
+    expect(results).toHaveLength(12);
   });
 });

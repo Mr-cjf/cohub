@@ -1465,3 +1465,240 @@ describe('markCancelledByAlias / getJobByAlias', () => {
     expect(tracker.getJobByAlias('nope')).toBeUndefined();
   });
 });
+
+// ===========================================================================
+// Wave6：getBoardText 复用建议（200K 软复用预算）
+//   复用建议三态：「最近输入 N / 超预算，不建议复用 / 输入未知」；
+//   预算不是硬限制（低于阈值仅显示用量，不宣称保证安全）；严格超过才警告；
+//   不传 reuse 参数（策略关闭/未配置）→ 输出与旧版完全一致，不影响既有追踪。
+// ===========================================================================
+describe('getBoardText 复用建议（Wave6 软复用预算）', () => {
+  /**
+   * 注册一个 completed 可复用背景任务（真实生命周期：registerBeforeTask → finalizeByCall 落终态，
+   * 与 index.ts idle 收尾路径一致——旧测试手动置 status/terminalReconciled=false 掩盖了真实
+   * finalize 路径，导致「正常完成 job 因 terminalReconciled=true 从 Board 消失」缺陷未被发现）。
+   */
+  function addReusable(tracker: TaskTracker, sessionId: string, quality?: NonNullable<JobRecord['quality']>): void {
+    // 真实生命周期：registerBeforeTask → finalizeByCall 落终态（与 index.ts idle 收尾路径一致），
+    // 旧测试手动置 status/terminalReconciled=false 掩盖了真实 finalize 路径缺陷。
+    // 角色保持 registerBg 原 fixture（co-explorer）→ 单行模式缩写仍为 co-exp，兼容断言不漂移。
+    const callID = 'call-' + sessionId;
+    const alias = tracker.registerBeforeTask('P', {
+      subagent_type: 'co-explorer',
+      description: '测试可复用任务',
+      task_id: sessionId,
+      background: true,
+    }, callID);
+    const r = tracker.finalizeByCall('P', callID, sessionId, 'completed');
+    if (!r.ok) throw new Error('addReusable finalizeByCall 失败: ' + r.reason);
+    const job = getJobs(tracker).get(alias);
+    if (job && quality) job.quality = quality;
+  }
+  /** 注册一个 running 背景任务（使 Board 走完整表格模式） */
+  function addActive(tracker: TaskTracker, sessionId: string): void {
+    registerBg(tracker, { sessionId, parent: 'P' });
+  }
+  /** 构造带复用采样 quality（输入量 inputTokens） */
+  function reuseQuality(inputTokens: number): NonNullable<JobRecord['quality']> {
+    return { reuseInput: { inputTokens, sampledAt: 1, messageId: 'm1' } };
+  }
+
+  test('不传 reuse：表格模式无「复用建议」列、不显示任何建议（输出与旧版一致）', () => {
+    const tracker = new TaskTracker();
+    addActive(tracker, 'ses_active');
+    addReusable(tracker, 'ses_r1', reuseQuality(12345));
+    const text = tracker.getBoardText('P');
+    expect(text).toContain('ses_r1');
+    expect(text).not.toContain('复用建议');
+    expect(text).not.toContain('最近输入');
+    expect(text).not.toContain('输入未知');
+    expect(text).not.toContain('超预算');
+  });
+
+  test('不传 reuse：单行模式不带 hint（与旧版一致）', () => {
+    const tracker = new TaskTracker();
+    addReusable(tracker, 'ses_r1', reuseQuality(12345));
+    const text = tracker.getBoardText('P');
+    expect(text).toContain('ses_r1(co-exp)');
+    expect(text).not.toContain('/最近输入');
+    expect(text).not.toContain('/输入未知');
+  });
+
+  test('边界：199999/200000 不超（严格超过才警告）、200001/480000 超预算', () => {
+    const cases = [
+      { n: 199999, label: '最近输入 199999' },
+      { n: 200000, label: '最近输入 200000' },
+      { n: 200001, label: '超预算，不建议复用' },
+      { n: 480000, label: '超预算，不建议复用' },
+    ];
+    for (const c of cases) {
+      const tracker = new TaskTracker();
+      addActive(tracker, 'ses_active');
+      addReusable(tracker, 'ses_r' + c.n, reuseQuality(c.n));
+      const text = tracker.getBoardText('P', { maxInputTokens: 200000 });
+      expect(text).toContain(c.label);
+    }
+  });
+
+  test('未采样（无 reuseInput）→ 显示「输入未知」（未知而非 0）', () => {
+    const tracker = new TaskTracker();
+    addActive(tracker, 'ses_active');
+    addReusable(tracker, 'ses_unk'); // 无 quality
+    const text = tracker.getBoardText('P', { maxInputTokens: 200000 });
+    expect(text).toContain('输入未知');
+    expect(text).not.toContain('最近输入 0');
+  });
+
+  test('关闭策略（不传 reuse）：任务仍列出、无建议（可关不影响原有追踪）', () => {
+    const tracker = new TaskTracker();
+    addActive(tracker, 'ses_active');
+    addReusable(tracker, 'ses_r1', reuseQuality(999999));
+    const text = tracker.getBoardText('P');
+    expect(text).toContain('ses_r1');
+    expect(text).toContain('ses_active');
+    expect(text).not.toContain('超预算');
+    expect(text).not.toContain('最近输入');
+  });
+
+  test('预算非硬限制：低于阈值只显示用量，不宣称「保证安全」', () => {
+    const tracker = new TaskTracker();
+    addActive(tracker, 'ses_active');
+    addReusable(tracker, 'ses_r1', reuseQuality(199999));
+    const text = tracker.getBoardText('P', { maxInputTokens: 200000 });
+    expect(text).toContain('最近输入 199999');
+    expect(text).not.toContain('安全');
+    expect(text).not.toContain('建议复用');
+  });
+
+  test('真实 finalize 路径回归：finalizeByCall 完成的背景任务出现在 Reusable Sessions（不再为空）', () => {
+    const tracker = new TaskTracker();
+    // 300K 用量 job 走真实生命周期完成（finalize 会设 terminalReconciled=true）
+    addReusable(tracker, 'ses_300k', reuseQuality(300000));
+    const text = tracker.getBoardText('P', { maxInputTokens: 200000 });
+    // terminalReconciled 只供 prune 回收，不再决定复用可见性
+    expect(text).toContain('ses_300k');
+    expect(text).toContain('超预算，不建议复用');
+    const alias = getJobs(tracker).values().next().value?.alias ?? '';
+    expect(getJobs(tracker).get(alias)!.terminalReconciled).toBe(true);
+  });
+
+  test('同 session 多次复用：Board 只展示最新 job，不重复旧记录', () => {
+    const tracker = new TaskTracker();
+    // 第一次复用记录（旧）：12345 输入
+    addReusable(tracker, 'ses_r1', reuseQuality(12345));
+    // 第二次复用同一 session 并完成（新）：200001 输入
+    const callID2 = 'call-r1-again';
+    const alias2 = tracker.registerBeforeTask('P', {
+      subagent_type: 'co-fixer',
+      description: '再次复用',
+      task_id: 'ses_r1',
+      background: true,
+    }, callID2);
+    const r2 = tracker.finalizeByCall('P', callID2, 'ses_r1', 'completed');
+    expect(r2.ok).toBe(true);
+    getJobs(tracker).get(alias2)!.quality = reuseQuality(200001);
+
+    const text = tracker.getBoardText('P', { maxInputTokens: 200000 });
+    // session 只出现一次（不重复），建议用最新 job 的采样（超预算而非 12345）
+    expect((text.match(/ses_r1/g) ?? []).length).toBe(1);
+    expect(text).toContain('超预算，不建议复用');
+  });
+
+  test('正在被复用的 session：running 绑定后历史 completed 不展示为可复用', () => {
+    const tracker = new TaskTracker();
+    addReusable(tracker, 'ses_r1', reuseQuality(12345));
+    // 复用该 session 的新调用仍 running
+    tracker.registerBeforeTask('P', {
+      subagent_type: 'co-fixer',
+      description: '活动中',
+      task_id: 'ses_r1',
+      background: true,
+    }, 'call-r1-active');
+
+    const text = tracker.getBoardText('P', { maxInputTokens: 200000 });
+    // active 区显示 running；Reusable 区不显示 ses_r1（活动中不可再复用）
+    expect(text).toContain('co-fixer / running / ses_r1');
+    expect(text).not.toContain('#### Reusable Sessions');
+  });
+
+  test('同 session 第二轮失败（errored）：遮住旧 completed，不回退展示第一轮低 token', () => {
+    const tracker = new TaskTracker();
+    // 第一轮复用完成（低 token 12345）
+    addReusable(tracker, 'ses_r1', reuseQuality(12345));
+    // 第二轮复用同一 session 并失败（errored，真实生命周期：register → finalizeByCall 落终态）
+    tracker.registerBeforeTask('P', {
+      subagent_type: 'co-fixer',
+      description: '再次复用但失败',
+      task_id: 'ses_r1',
+      background: true,
+    }, 'call-r1-fail');
+    const r2 = tracker.finalizeByCall('P', 'call-r1-fail', 'ses_r1', 'errored');
+    expect(r2.ok).toBe(true);
+
+    const text = tracker.getBoardText('P', { maxInputTokens: 200000 });
+    // 最新注册调用是 errored → 不得展示旧 completed 记录（也不能回退显示第一轮低 token）
+    expect(text).toBe('');
+    expect(text).not.toContain('ses_r1');
+    expect(text).not.toContain('最近输入 12345');
+  });
+
+  test('同 session 第二轮取消（cancelled）：遮住旧 completed 记录', () => {
+    const tracker = new TaskTracker();
+    addReusable(tracker, 'ses_r1', reuseQuality(12345));
+    tracker.registerBeforeTask('P', {
+      subagent_type: 'co-fixer',
+      description: '再次复用但取消',
+      task_id: 'ses_r1',
+      background: true,
+    }, 'call-r1-cancel');
+    const r2 = tracker.finalizeByCall('P', 'call-r1-cancel', 'ses_r1', 'cancelled');
+    expect(r2.ok).toBe(true);
+
+    const text = tracker.getBoardText('P', { maxInputTokens: 200000 });
+    expect(text).toBe('');
+    expect(text).not.toContain('ses_r1');
+  });
+
+  test('同毫秒 createdAt：后注册调用优先（Map 插入序，>= 覆盖）', () => {
+    const tracker = new TaskTracker();
+    // 先注册：co-explorer（co-exp）第一轮完成，采样 12345
+    addReusable(tracker, 'ses_r1', reuseQuality(12345));
+    // 后注册：co-fixer 复用同一 session，拉平到与第一轮相同的 createdAt（模拟同毫秒连续注册）
+    const alias2 = tracker.registerBeforeTask('P', {
+      subagent_type: 'co-fixer',
+      description: '同毫秒复用',
+      task_id: 'ses_r1',
+      background: true,
+    }, 'call-r1-same-ms');
+    const firstAlias = getJobs(tracker).values().next().value!.alias;
+    const sameMs = Date.now();
+    getJobs(tracker).get(firstAlias)!.createdAt = sameMs;
+    getJobs(tracker).get(alias2)!.createdAt = sameMs;
+    const r2 = tracker.finalizeByCall('P', 'call-r1-same-ms', 'ses_r1', 'completed');
+    expect(r2.ok).toBe(true);
+    getJobs(tracker).get(alias2)!.quality = reuseQuality(200001);
+
+    const text = tracker.getBoardText('P', { maxInputTokens: 200000 });
+    // 同毫秒时后注册优先：展示后注册调用的采样（超预算），而非第一轮 12345
+    expect(text).toContain('超预算，不建议复用');
+    expect(text).not.toContain('最近输入 12345');
+  });
+
+  test('前台调用较新：复用同一 session 的 running 前台调用遮住旧 completed（活动中不可再复用）', () => {
+    const tracker = new TaskTracker();
+    addReusable(tracker, 'ses_r1', reuseQuality(12345));
+    // 新调用复用该 session 且为前台（background=false）仍 running
+    tracker.registerBeforeTask('P', {
+      subagent_type: 'co-fixer',
+      description: '前台复用',
+      task_id: 'ses_r1',
+      background: false,
+    }, 'call-r1-fg');
+
+    const text = tracker.getBoardText('P', { maxInputTokens: 200000 });
+    // Active 区显示前台 running；Reusable 区不显示 ses_r1（前台复用中也不可再复用）
+    expect(text).toContain('co-fixer / running / ses_r1');
+    expect(text).not.toContain('#### Reusable Sessions');
+    expect(text).not.toContain('最近输入');
+  });
+});

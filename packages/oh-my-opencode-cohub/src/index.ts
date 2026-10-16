@@ -19,7 +19,7 @@ import { assessQuality, isQualityEnabled } from './task-manager/quality';
 import { ContextEngine } from './context/engine';
 import { resolveStrategy } from './context/strategy';
 import type { ContextStrategy } from './context/types';
-import { loadCoHubConfig, type AgentOverride } from './config/loader';
+import { loadCoHubConfig, resolveReuseBudget, type AgentOverride } from './config/loader';
 import { appendCtxDiag, appendTaskDiag, resolveCtxDiagSettings } from './context/diag-log';
 import { createCouncilTool, CouncilManager } from './tools/council';
 import { createCloseJobTool } from './tools/job-control';
@@ -261,6 +261,15 @@ const CoHubPlugin: Plugin = async (input, options) => {
 
   // ===== 加载用户配置覆盖 =====
   const userConfig = loadCoHubConfig(projectDir);
+  // 软复用预算（默认开启 200K；非法字段消费侧回退默认；关闭时不影响既有任务追踪）
+  const reuseBudget = resolveReuseBudget(userConfig.reuseBudget);
+  /**
+   * 采样代次守卫：alias → 最近一次 idle 发起的采样序号。
+   * 同 alias/callID/childID 的并发 capture 中，仅最新采样请求可提交（未知亦遵守）——
+   * 旧请求迟到不得覆盖新结果。序号随采样发起递增；job 被 prune 后对应条目惰性清理
+   * （见 idle 分支），避免映射无界增长；dispose 时整体清空（尊重插件生命周期）。
+   */
+  const samplingSeq = new Map<string, number>();
   // 诊断开关（缺省关闭）：在初始化时求值一次，热路径只读常量
   const ctxDiag = resolveCtxDiagSettings(userConfig.diag);
   if (userConfig.agents) {
@@ -947,40 +956,76 @@ const CoHubPlugin: Plugin = async (input, options) => {
           const job = active.job;
 
           // 有界终态证据验证 + 竞态复核 + 落真实终态（与 after 绑定后补核验共用同一 reconcile）
-          await reconcileJobTerminal(job);
-
-          // 捕获子代理结果用于依赖传播 + 质量回送（P0-1 负反馈闭环）。
-          // 必须持有 alias+parent+call+child 快照，异步 then 回来复核仍同一 job 再写回
-          // （两次同 child 复用输出不同 quality：旧记录不能被新结果覆盖，且不按 sessionId 首条匹配）。
+          // 代次守卫：每 alias 采样序号递增，仅最新采样请求可提交（未知亦遵守），
+          // 同 alias/callID/childID 并发 idle 的旧 capture 迟到不得覆盖新结果。
+          // 先惰性清理已回收 job（被 prune）的序号条目，避免映射无界增长。
+          for (const [a] of samplingSeq) {
+            if (!tracker.getJobByAlias(a)) samplingSeq.delete(a);
+          }
+          // 快照与序号必须在第一个 await（reconcileJobTerminal）之前捕获分配：
+          // 旧 idle verify 迟到若在 await 后才分配序号，会取得更大序号使新采样失效（旧采样反而写回）。
           const qAlias = job.alias;
           const qParent = job.parentSessionId;
           const qCall = job.callID;
           const qChild = sessionId;
           const qCreatedAt = job.createdAt;
+          const seq = (samplingSeq.get(qAlias) ?? 0) + 1;
+          samplingSeq.set(qAlias, seq);
+
+          await reconcileJobTerminal(job);
+
+          // await 后立刻检查是否过期：期间已有更新的采样请求（新 idle 已注册）→ 本请求过期，
+          // 不发起采样/写回——旧 verify 迟到不得采样，也不撤销最新 unknown 写回。
+          if (samplingSeq.get(qAlias) !== seq) return;
+
+          // 捕获子代理结果用于依赖传播 + 质量回送（P0-1 负反馈闭环）。
+          // 必须持有 alias+parent+call+child+createdAt 快照，异步 then 回来复核仍同一 job 再写回
+          // （两次同 child 复用输出不同 quality：旧记录不能被新结果覆盖，且不按 sessionId 首条匹配）。
           void contextEngine
-            .captureResult(sessionId, qAlias, job.agent)
+            .captureResult(sessionId, qAlias, job.agent, { notBefore: qCreatedAt })
             .then((captured) => {
+              // 代次守卫：已有更新的采样请求 → 本请求过期，不提交任何写回（未知亦遵守）
+              if (samplingSeq.get(qAlias) !== seq) return;
               if (!captured) return;
-              // 质量判定：默认开启但保守——低分只标记（写回 JobRecord.quality），不改变任务成败
-              if (!isQualityEnabled(userConfig.quality)) return;
+              // 质量评分与复用预算开关独立：quality 关闭不阻止预算采样写回；
+              // 两者皆关闭 → 不回写（captureResult 仍承载依赖传播，不受影响）。
+              const wantQuality = isQualityEnabled(userConfig.quality);
+              const wantReuse = reuseBudget.enabled;
+              if (!wantQuality && !wantReuse) return;
               // 快照复核：仍同一 job（允许 terminal completed 后回写自己——不检查 status==='running'）
               const now = qCall ? tracker.getJobByCall(qParent, qCall) : tracker.getJobBySessionId(qChild);
               if (!now || now.alias !== qAlias || now.sessionId !== qChild) {
                 appendSafeLog('event', '质量回送竞态：候选已变更，不写回复用/新调用');
                 return;
               }
-              const quality = assessQuality({
-                output: captured.output,
-                decisions: captured.decisions,
-                latencyMs: Date.now() - qCreatedAt,
-                tokens: captured.tokens,
-              });
-              tracker.updateQualityByAlias(qAlias, {
-                score: quality.score,
-                ...(quality.failureCategory ? { failureCategory: quality.failureCategory } : {}),
-                ...(quality.latencyMs !== undefined ? { latencyMs: quality.latencyMs } : {}),
-                ...(quality.tokens ? { tokens: quality.tokens } : {}),
-              });
+              // 采样新鲜度边界（写回层双保险，与 captureResult 内 notBefore 一致）：
+              // sampledAt 早于本轮调用边界（job.createdAt）→ 旧会话历史，标未知，不回填旧 low/high。
+              const freshSample =
+                wantReuse && captured.reuseInput && captured.reuseInput.sampledAt >= qCreatedAt
+                  ? captured.reuseInput
+                  : undefined;
+              if (wantQuality) {
+                const quality = assessQuality({
+                  output: captured.output,
+                  decisions: captured.decisions,
+                  latencyMs: Date.now() - qCreatedAt,
+                  tokens: captured.tokens,
+                });
+                tracker.updateQualityByAlias(qAlias, {
+                  score: quality.score,
+                  ...(quality.failureCategory ? { failureCategory: quality.failureCategory } : {}),
+                  ...(quality.latencyMs !== undefined ? { latencyMs: quality.latencyMs } : {}),
+                  ...(quality.tokens ? { tokens: quality.tokens } : {}),
+                  // 复用预算采样：仅启用时写回（随既有 idle/quality 更新路径采样，
+                  // 不另建缓存；关闭策略时字段保持未采样 → Board 不显示建议）
+                  ...(freshSample ? { reuseInput: freshSample } : {}),
+                });
+              } else if (wantReuse) {
+                // 质量评分关闭但预算开启：写回采样（fresh → 新样本；最新未知 → 提交清空
+                // reuseInput，不保留旧样本、不虚构 score，其余既有质量字段保留）。
+                const prev = tracker.getJobByAlias(qAlias)?.quality;
+                tracker.updateQualityByAlias(qAlias, { ...(prev ?? {}), reuseInput: freshSample });
+              }
               syncTrackerState(tracker.currentParentSessionId);
             })
             .catch((err) => appendSafeLog('event', '质量回送失败', err));
@@ -1136,7 +1181,11 @@ const CoHubPlugin: Plugin = async (input, options) => {
         // 1. 注入 Background Job Board（仅当 sessionID 为有效非空字符串时注入，
         //    否则跳过注入——避免 tracker 全局回退导致跨会话泄漏）
         if (typeof sessionID === 'string' && sessionID.length > 0) {
-          const board = tracker.getBoardText(sessionID);
+          // 复用建议：仅策略启用时传入预算（关闭/非法回退默认时不传 → Board 与旧版一致）
+          const board = tracker.getBoardText(
+            sessionID,
+            reuseBudget.enabled ? { maxInputTokens: reuseBudget.maxInputTokens } : undefined,
+          );
           if (board) {
             for (let j = lastUserMsg.parts.length - 1; j >= 0; j--) {
               const part = lastUserMsg.parts[j];
@@ -1184,6 +1233,7 @@ const CoHubPlugin: Plugin = async (input, options) => {
     dispose: async () => {
       clearInterval(cleanupTimer);
       clearInterval(contextCleanupTimer);
+      samplingSeq.clear(); // 采样代次守卫随插件生命周期释放
     },
   };
 };

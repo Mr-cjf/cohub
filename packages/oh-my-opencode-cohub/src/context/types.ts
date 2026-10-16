@@ -19,6 +19,23 @@ export interface DependencyResult {
   capturedAt: number;    // Date.now()
 }
 
+/**
+ * 复用预算采样：最近一次可信归一化输入（tokens.input + cache.read + cache.write）。
+ * 仅在能确认「最新且有可信 tokens」的 assistant 时产生；时间缺失/最大时间并列/
+ * 字段无效/求和溢出 → 不写本字段（未知而非 0，绝不捞旧数据回填）。
+ */
+export interface ReuseInputSample {
+  /** 归一化输入 token 数（input + cache.read + cache.write，不叠加 output/reasoning） */
+  inputTokens: number;
+  /**
+   * 来源消息真实创建时间（time.created）；只在可确认最新时写入，
+   * 绝不回退当前时间伪装老用量新鲜度。
+   */
+  sampledAt: number;
+  /** 来源 assistant 消息 ID（缺失时省略） */
+  messageId?: string;
+}
+
 /** 注入到子代理的结构化上下文 */
 export interface TaskContext {
   goal: string;                        // 任务目标
@@ -84,4 +101,21 @@ export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
   relevantMessageWindow: 20,
   maxErrorTotalChars: 600,
   dependencyKeyOutputChars: 200,
+};
+
+/**
+ * 软复用预算配置（仅提示不建议复用，不强制切换会话/清空历史/降低模型 context）。
+ * 默认阈值 200_000 输入 token；严格「超过」才警告，预算不是硬限制。
+ */
+export interface ReuseBudgetConfig {
+  /** 是否启用复用预算提示（关闭时 Board 不显示建议，也不影响既有任务追踪） */
+  enabled: boolean;
+  /** 软阈值：最近输入（input + cache.read + cache.write）超过此值 → 标注不建议复用 */
+  maxInputTokens: number;
+}
+
+/** 默认复用预算配置 */
+export const DEFAULT_REUSE_BUDGET_CONFIG: ReuseBudgetConfig = {
+  enabled: true,
+  maxInputTokens: 200_000,
 };

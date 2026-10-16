@@ -1,6 +1,6 @@
 // src/context/engine.ts — 上下文引擎核心
 
-import type { ContextStrategy, TaskContext, ContextConfig, DependencyResult, RelevantFile } from './types';
+import type { ContextStrategy, TaskContext, ContextConfig, DependencyResult, RelevantFile, ReuseInputSample } from './types';
 import { DEFAULT_CONTEXT_CONFIG } from './types';
 import * as fs from 'node:fs';
 import { extractRelevantFiles, extractDecisions, extractErrors, truncateByTokens, estimateTokens } from './extractor';
@@ -12,6 +12,13 @@ type SdkClient = ReturnType<typeof createOpencodeClient>;
 
 /** 读取上限截断的诚实提示后缀（区别于 truncateByTokens 的 token 预算截断标记） */
 const READ_LIMIT_TRUNCATION_SUFFIX = '\n… [正文已按读取上限截断]';
+
+/**
+ * captureResult 有界读取上限：SDK v1 session.messages 支持 limit 但不保证顺序，
+ * 只取最近 limit 条；绝不在复用会话历史无限膨胀时无界读全量。
+ * 与既有 verifyChildTerminal(limit=10) / fillContextAsync(relevantMessageWindow=20) 同级有界。
+ */
+const CAPTURE_RESULT_MESSAGE_LIMIT = 20;
 
 export class ContextEngine {
   /** contextId → TaskContext */
@@ -293,43 +300,176 @@ export class ContextEngine {
 
   /**
    * Phase C: 捕获子代理结果。
-   * 读取子 session 的最终输出 → 提取关键信息 → 存入 dependencyCache。
-   * 同时返回质量判定输入（output / decisions / tokens）供 P0-1 质量回送使用。
+   * 读取子 session 的最近 limit 条消息（有界）→ 提取关键信息 → 存入 dependencyCache。
+   * 同时返回质量判定输入（output / decisions / tokens）与复用预算采样（reuseInput）。
    * dependencyPropagation 为 false 时跳过 dependencyCache 写入，不影响质量数据提取。
+   *
+   * 有界/时序安全（复用预算核心）：
+   * - limit 20 防无界读；SDK 不保证顺序 → 仅当「可确认最新」时才有最近 assistant：
+   *   · 存在缺失 time.created 的 assistant（无法排序）→ 不可确认；
+   *   · 最大 time.created 并列多条 → 无法判定哪个更新 → 不可确认；
+   *   · 全部缺失 / 无 assistant → 不可确认。
+   *   不可确认 → reuseInput/tokens 均未知（绝不按数组顺序判安全，绝不捞旧带 tokens 消息回填）；
+   * - reuseInput 仅从可确认最新消息计算可信归一化输入（input+cache.read+cache.write，
+   *   不叠加 output/reasoning）；三字段均须为非负有限数，求和溢出 → 未知（绝不虚报 0）；
+   * - sampledAt 只取消息真实 time.created（可确认最新时必为数值），
+   *   绝不回退当前时间伪装老用量新鲜；
+   * - keyOutput 优先取可确认最新 assistant 的 text，无法确认/无 text 时
+   *   按 time.created 降序回退更早 assistant（摘要保持有界内最佳努力，不被未知采样破坏）；
+   * - 新鲜度边界（opts.notBefore = 本轮调用开始时间）：采样消息创建时间早于调用边界 →
+   *   该消息不属于当前调用（复用会话旧历史）→ reuseInput 标未知，绝不回填旧 low/high 到本轮。
+   *   仅在能确认最新时才有 sampledAt；样本时间不伪造。
    */
   async captureResult(
     childSessionId: string,
     alias: string,
     agent: string,
-  ): Promise<{ output: string; decisions: number; tokens?: { input: number; output: number } } | null> {
+    opts?: { notBefore?: number },
+  ): Promise<{ output: string; decisions: number; tokens?: { input: number; output: number }; reuseInput?: ReuseInputSample } | null> {
     try {
       const messagesResult = await this.client.session.messages({
         path: { id: childSessionId },
+        query: { limit: CAPTURE_RESULT_MESSAGE_LIMIT },
       });
       const messages = (messagesResult.data ?? []) as Array<{
-        info?: { role?: string; tokens?: { input?: number; output?: number } };
+        info?: {
+          role?: string;
+          id?: string;
+          time?: { created?: number };
+          tokens?: { input?: number; output?: number; cache?: { read?: number; write?: number } };
+        };
         parts?: Array<{ type?: string; text?: string }>;
       }>;
 
-      // 从最后一条 assistant 消息提取关键输出与 token 统计
-      let keyOutput = '';
-      let tokens: { input: number; output: number } | undefined;
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const info = messages[i].info;
+      // 「可确认最新」判定：仅当存在带数值 time.created 的 assistant、无时间缺失消息、
+      // 且最大 created 唯一（无并列）时才能确定哪条最新；否则保守未知。
+      // 哨兵用 -Infinity：负值时间戳也能参与比较；时间缺失消息不参与比较但显式
+      // 标记 hasUntimedAssistant（整体不可确认）——绝不因哨兵而让含糊记录误判安全。
+      let latestAssistant: (typeof messages)[number] | undefined;
+      let latestCreated = -Infinity;
+      let latestTie = false;
+      let hasUntimedAssistant = false;
+      for (const m of messages) {
+        const info = m.info;
         if (!info || info.role !== 'assistant') continue;
-        if (typeof info.tokens?.input === 'number' && typeof info.tokens?.output === 'number') {
-          tokens = { input: info.tokens.input, output: info.tokens.output };
+        const created = typeof info.time?.created === 'number' ? info.time.created : -1;
+        if (created === -1) {
+          hasUntimedAssistant = true; // 时间缺失：无法参与排序，整体不可确认最新
+          continue;
         }
-        for (const part of messages[i].parts ?? []) {
+        if (created > latestCreated) {
+          latestCreated = created;
+          latestAssistant = m;
+          latestTie = false;
+        } else if (created === latestCreated) {
+          latestTie = true; // 最大时间并列：无法判定哪个更新
+        }
+      }
+      const latestConfirmed = !hasUntimedAssistant && latestAssistant !== undefined && !latestTie;
+
+      // keyOutput（摘要最佳努力，时间优先；不因采样未知而退化）：
+      // 1. 优先「最大有效 time.created 候选组」——所有 created === latestCreated 的
+      //    assistant（时间并列可任选一致候选取摘要；乱序时绝不回退到数组尾的旧消息）；
+      // 2. 候选组无 text → 剩余带 time.created 候选按时间降序找首个有 text
+      //    （降序输入 [最新无正文, 次新结论, 最旧结论] 取次新，不误取数组尾最旧）；
+      // 3. 全部缺失 time.created（无法比时间）→ 稳定兜底：数组尾向前取任意可得 text；
+      //    无论何种回退，reuseInput/tokens 仍由 latestConfirmed 严格控制（不恢复可信采样）。
+      const maxCreatedCandidates: (typeof messages)[number][] = [];
+      if (latestAssistant !== undefined) {
+        for (const m of messages) {
+          const info = m.info;
+          if (!info || info.role !== 'assistant') continue;
+          const created = typeof info.time?.created === 'number' ? info.time.created : -1;
+          if (created === latestCreated) maxCreatedCandidates.push(m);
+        }
+      }
+      // 提取 assistant 消息首个 text part（截断 + 单行化；无 text 返回 ''）
+      const firstTextOf = (m: (typeof messages)[number]): string => {
+        for (const part of m.parts ?? []) {
           if (part.type === 'text' && part.text) {
-            keyOutput = part.text.slice(0, this.config.dependencyKeyOutputChars).replace(/\n/g, ' ');
+            return part.text.slice(0, this.config.dependencyKeyOutputChars).replace(/\n/g, ' ');
+          }
+        }
+        return '';
+      };
+
+      let keyOutput = '';
+      for (const cand of maxCreatedCandidates) {
+        const text = firstTextOf(cand);
+        if (text) {
+          keyOutput = text;
+          break;
+        }
+      }
+      if (!keyOutput) {
+        // 时间降序回退：跳过已尝试候选（最大时间候选组），按 time.created 从大到小
+        // 找首个有 text 的 assistant——乱序/降序输入时绝不按数组尾误取最旧结论。
+        const tried = new Set(maxCreatedCandidates);
+        const timed: Array<{ msg: (typeof messages)[number]; created: number }> = [];
+        const untimed: (typeof messages)[number][] = [];
+        for (const m of messages) {
+          const info = m.info;
+          if (!info || info.role !== 'assistant' || tried.has(m)) continue;
+          const created = typeof info.time?.created === 'number' ? info.time.created : -1;
+          if (created === -1) untimed.push(m);
+          else timed.push({ msg: m, created });
+        }
+        timed.sort((a, b) => b.created - a.created);
+        for (const { msg } of timed) {
+          const text = firstTextOf(msg);
+          if (text) {
+            keyOutput = text;
             break;
           }
         }
-        if (keyOutput) break;
+        // 缺 time 候选（全部无法排序）→ 稳定兜底：数组尾向前找首个有 text（跳过已尝试）。
+        // 采样是否可信与摘要 best effort 彻底分开：此处回退不影响 reuseInput/tokens 判定。
+        if (!keyOutput) {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            if (tried.has(messages[i])) continue;
+            const info = messages[i].info;
+            if (!info || info.role !== 'assistant') continue;
+            const text = firstTextOf(messages[i]);
+            if (text) {
+              keyOutput = text;
+              break;
+            }
+          }
+        }
       }
 
-      // 捕获决策数（与 fillContextAsync 相同的提取逻辑）
+      // 原始 tokens（质量回送）：仅可确认最新时取（乱序时时间最新；不可确认 → 未知）
+      let tokens: { input: number; output: number } | undefined;
+      let reuseInput: ReuseInputSample | undefined;
+      if (latestConfirmed && latestAssistant) {
+        const info = latestAssistant.info;
+        const t = info?.tokens;
+        if (t && typeof t.input === 'number' && typeof t.output === 'number') {
+          tokens = { input: t.input, output: t.output };
+        }
+        // 可信归一化最近输入：input + cache.read + cache.write。
+        // 三字段均须为非负有限数（缺 cache/负值/非有限 → 口径不能确定 → 未知）；
+        // 求和溢出（> MAX_SAFE_INTEGER）→ 精度不可信 → 未知；不回退旧数据、不虚报 0。
+        // 新鲜度边界：采样消息创建时间早于本轮调用边界（opts.notBefore，即 job.createdAt）→
+        // 属复用会话旧历史，不属于当前调用 → 标未知，不回填旧 low/high（同 job 复用同理）。
+        const belongsToCall = opts?.notBefore === undefined || latestCreated >= opts.notBefore;
+        const isNonNegFinite = (v: unknown): v is number =>
+          typeof v === 'number' && Number.isFinite(v) && v >= 0;
+        const cache = t?.cache;
+        if (belongsToCall && t && isNonNegFinite(t.input) && cache && isNonNegFinite(cache.read) && isNonNegFinite(cache.write)) {
+          const sum = t.input + cache.read + cache.write;
+          if (Number.isFinite(sum) && sum <= Number.MAX_SAFE_INTEGER) {
+            reuseInput = {
+              inputTokens: sum,
+              // 可确认最新 → created 必为数值；只用消息真实创建时间，不伪造新鲜度
+              sampledAt: latestCreated,
+              ...(typeof info?.id === 'string' && info.id !== '' ? { messageId: info.id } : {}),
+            };
+          }
+        }
+      }
+
+      // 捕获决策数（与 fillContextAsync 相同的提取逻辑，作用于有界 messages）
       const decisions = extractDecisions(messages, this.config.maxDecisions, this.config.relevantMessageWindow);
 
       // P2-1: dependencyPropagation 关闭时不写 dependencyCache（避免多余缓存污染）；
@@ -347,6 +487,7 @@ export class ContextEngine {
         output: keyOutput,
         decisions: decisions.length,
         ...(tokens ? { tokens } : {}),
+        ...(reuseInput ? { reuseInput } : {}),
       };
     } catch {
       // SDK 调用失败时静默跳过

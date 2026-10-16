@@ -26,6 +26,19 @@ export function defaultStrategyFor(agent: string): ContextStrategy {
   return DEFAULT_CONTEXT_CONFIG.strategy[agent] ?? 'none';
 }
 
+/**
+ * 复用建议短文本（软预算三态）：
+ * - 已采样且未超过 maxInputTokens → 「最近输入 N」（预算不是硬限制，不宣称保证安全）；
+ * - 已采样且严格超过 → 「超预算，不建议复用」；
+ * - 未采样（reuseInput 缺失/未知）→ 「输入未知」。
+ */
+export function reuseHint(job: JobRecord, maxInputTokens: number): { text: string; over: boolean } {
+  const sample = job.quality?.reuseInput;
+  if (!sample) return { text: '输入未知', over: false };
+  if (sample.inputTokens > maxInputTokens) return { text: '超预算，不建议复用', over: true };
+  return { text: `最近输入 ${sample.inputTokens}`, over: false };
+}
+
 /** 参与统计的指标记录（从 JobRecord 抽取） */
 export interface StatsRecord {
   agent: string;
@@ -391,19 +404,49 @@ export class TaskTracker {
    *
    * 必须显式传入父会话 ID，按 job.parentSessionId 精确过滤，不做任何全局回退：
    * 非 string（undefined / null / 数字等）或空串一律返回 ''。
+   *
+   * Reusable Sessions 筛选（与 terminalReconciled 彻底分离——终态核对只用于 prune 回收，
+   * 不决定复用可见性，修复真实 finalize 路径后正常完成 job 不再从 Board 消失）：
+   * - 同一 sessionId 只取最新注册调用（任意状态）：最新必须是 background + completed 才展示，
+   *   errored/cancelled/running/foreground 最新一律遮住旧 completed——第二轮失败/取消后
+   *   不回退展示第一轮记录；同毫秒 createdAt 时后注册优先（Map 插入序，>= 覆盖）；
+   * - 正在被复用（该 sessionId 存在 running 绑定，含前台复用）的 session 不展示（活动中不可再复用）；
+   * - 未绑定 childID（sessionId 为空）无法复用不展示。
+   *
+   * 复用建议（软复用预算，reuse 参数可选）：
+   * - 不传 reuse（策略关闭/未配置）→ 输出与旧版完全一致，不含建议列/提示；
+   * - 传入 { maxInputTokens } 时对 Reusable Sessions 追加简短建议
+   *   「最近输入 N / 超预算，不建议复用 / 输入未知」三态；
+   *   预算不是硬限制——低于阈值仅显示用量，不宣称「保证安全」；
+   *   建议直接使用 quality.reuseInput 采样（随 idle 质量回送更新），
+   *   绝不在每次 Board 请求时读取会话历史（无独立缓存系统）。
    */
-  getBoardText(parentSessionId: string): string {
+  getBoardText(parentSessionId: string, reuse?: { maxInputTokens: number }): string {
     if (typeof parentSessionId !== 'string' || parentSessionId === '') return '';
     const activeJobs: JobRecord[] = [];
-    const reusableJobs: JobRecord[] = [];
+    const activeSessions = new Set<string>();
+    // 同一 sessionId 的最新注册调用（任意状态）：第二轮失败/取消（errored/cancelled）
+    // 同样遮住旧 completed 记录；同毫秒 createdAt 时后注册优先（Map 遍历按插入序，>= 覆盖）。
+    const latestBySession = new Map<string, JobRecord>();
 
     for (const job of this.jobs.values()) {
       if (job.parentSessionId !== parentSessionId) continue;
       if (job.status === 'running') {
         activeJobs.push(job);
-      } else if (job.background && job.status === 'completed' && !job.terminalReconciled) {
-        reusableJobs.push(job);
+        if (job.sessionId) activeSessions.add(job.sessionId);
       }
+      if (job.sessionId) {
+        const prev = latestBySession.get(job.sessionId);
+        if (!prev || job.createdAt >= prev.createdAt) latestBySession.set(job.sessionId, job);
+      }
+    }
+
+    // 活动中的 session 不可复用；同 session 只保留最新 job，
+    // 且最新调用必须是 background + completed 才可复用（errored/cancelled/foreground 均遮旧）。
+    const reusableJobs: JobRecord[] = [];
+    for (const [sessionId, job] of latestBySession) {
+      if (activeSessions.has(sessionId)) continue;
+      if (job.background && job.status === 'completed') reusableJobs.push(job);
     }
 
     // 完全空态：什么都不注入
@@ -428,7 +471,10 @@ export class TaskTracker {
       const shown = reusableJobs.slice(0, maxShow);
       const extra = reusableJobs.length - maxShow;
 
-      const parts = shown.map(j => `${j.sessionId}(${abbreviate(j.agent)})`);
+      const parts = shown.map(j => {
+        const hint = reuse ? `/${reuseHint(j, reuse.maxInputTokens).text}` : '';
+        return `${j.sessionId}(${abbreviate(j.agent)}${hint})`;
+      });
       let text = '复用: ' + parts.join(' ');
       if (extra > 0) {
         text += ` …及 ${extra} 个`;
@@ -461,12 +507,18 @@ export class TaskTracker {
 
     if (reusableJobs.length > 0) {
       lines.push('#### Reusable Sessions');
-      lines.push('  Session ID                            | Agent        | Alias');
-      lines.push('  ---------------------------------------|--------------|-------');
+      if (reuse) {
+        lines.push('  Session ID                            | Agent        | Alias  | 复用建议');
+        lines.push('  ---------------------------------------|--------------|--------|----------------------');
+      } else {
+        lines.push('  Session ID                            | Agent        | Alias');
+        lines.push('  ---------------------------------------|--------------|-------');
+      }
       const maxShow = 15;
       const shown = reusableJobs.slice(0, maxShow);
       for (const j of shown) {
-        lines.push(`  \`${j.sessionId}\`  | ${j.agent}  | _${j.alias}_`);
+        const hint = reuse ? `  | ${reuseHint(j, reuse.maxInputTokens).text}` : '';
+        lines.push(`  \`${j.sessionId}\`  | ${j.agent}  | _${j.alias}_${hint}`);
       }
       const extra = reusableJobs.length - maxShow;
       if (extra > 0) {
@@ -612,11 +664,12 @@ export class TaskTracker {
   }
 
   /**
-   * 终态收尾：写入终态即视为「已与父会话核对」——两种语义在此对齐。
+   * 终态收尾：写入终态即视为「已与父会话核对」。
    *
-   * `terminalReconciled` 有两处语义：
-   * (a) Board 语义：终态任务不再出现在 `Reusable Sessions`（getBoardText 用它过滤）；
-   * (b) prune 语义：允许 `pruneTerminalJobs()` 回收。
+   * `terminalReconciled` 仅保留 prune 语义：允许 `pruneTerminalJobs()` 回收。
+   * Board 的 Reusable Sessions 筛选已不依赖本标记（见 getBoardText：按 session 最新
+   * completed 且非活动中展示）——真实 finalize 路径（finalizeByCall/updateByChildSessionId）
+   * 落终态后 job 仍保持复用可见性，不再从 Board 消失。
    *
    * 背景任务的完成路径是 `session.idle` → `updateByChildSessionId()` → `finalize()`，
    * 该路径原先不设本标记，而唯一的补设点是 `registerBeforeTask()` 的 `_reconciledForParent`

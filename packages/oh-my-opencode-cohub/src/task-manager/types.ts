@@ -1,5 +1,6 @@
 import type { ContextStrategy } from '../context/types';
 import type { FailureCategory } from './quality';
+import type { ReuseInputSample } from '../context/types';
 
 export type TaskStatus = 'running' | 'completed' | 'errored' | 'cancelled';
 
@@ -26,6 +27,12 @@ export interface JobRecord {
     failureCategory?: FailureCategory;
     latencyMs?: number;                                 // 任务耗时
     tokens?: { input: number; output: number };
+    /**
+     * 复用预算采样（最近一次可信归一化输入；undefined=未采样/未知）。
+     * 采样随既有 session.idle → captureResult → 质量写回路径更新，不另建缓存、
+     * 不在每次 Board 请求时读取会话历史；sampledAt/messageId 供新鲜度校验。
+     */
+    reuseInput?: ReuseInputSample;
   };
 }
 
