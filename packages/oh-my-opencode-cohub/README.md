@@ -8,13 +8,13 @@ OpenCode 中文智能体编排插件 CoHub——纯调度模式、全中文提�
 
 - 🚀 **独立运行**：纯 OpenCode Plugin，依赖 `@opencode-ai/plugin` SDK，零外部插件依赖
 - 🤖 **12 个内置代理**：8 个通用代理（orchestrator/oracle/librarian/explorer/designer/fixer/observer/council）+ 4 个规范/方案代理（rule-user/rule-project/rule-app/planner）
-- 🪝 **自动注入**：通过 `system.transform` 钩子在每次 LLM 调用时注入中文语言要求
+- 🪝 **自动注入**：通过 `experimental.chat.system.transform` 钩子在每次 LLM 调用时统一注入中文语言要求与并行工具调用总则（覆盖全部 12 个代理）
 - 🧠 **纯调度 Orchestrator**：不碰任何文件工具，只负责规划、委派、验证
 - 🇨🇳 **全中文提示词**：12 个代理全部使用中文提示词
-- 📋 **规范分析代理**：rule-user（用户AGENTS.md）、rule-project（项目AGENTS.md）、rule-app（.opencode/rules/）
+- 📋 **规范分析代理**：rule-user（用户级 AGENTS.md）、rule-project（从项目根逐级发现 AGENTS.md / CLAUDE.md / AGENTS.local.md / CLAUDE.local.md 及 `.rules/*.md`）、rule-app（定向分析 `.opencode/rules/*.md`）
 - 🎯 **方案制定代理**：planner 综合所有输入输出结构化任务分解
-- 🔗 **编排引擎（Orchestration Engine）**：六状态 DAG 状态机（pending→ready→running→completed/failed→cancelled）、级联取消、按代理配置的自动重试（指数退避/fixed/immediate）、全局并发调度（maxConcurrency=20）
-- ⚡ **Wave 波次并行工作流**：理解→收集→规范分析→制定方案（按依赖分 Wave）→按波次并行调度（区分修改/验证 Wave）→验证，编排引擎代码级保障执行可靠
+- 🔗 **编排引擎（Orchestration Engine）**：六状态 DAG 状态机（pending→ready→running→completed/failed→cancelled），诚实镜像原生 task 生命周期（观测/内部状态同步，不激活自动调度/自动重试）；级联取消仅同步引擎内部状态，不会自动 abort 其他运行会话
+- ⚡ **Wave 波次并行工作流**：理解→收集→规范分析→制定方案（按依赖分 Wave）→按波次并行调度（区分修改/验证 Wave）→验证，并行与失败处理由主代理显式推进。Wave 仅展示依赖层次，不构成整体等待屏障：任务实际前置依赖完成且无共享可变状态冲突即可派发，同次所有已就绪任务同一消息同时启动，不等无关任务
 - 📜 **AGENTS.md 专用分析代理**：co-rule-user / co-rule-project / co-rule-app 三个专用代理分别分析用户级/项目级 AGENTS.md 与 .opencode/rules，orchestrator 在方案制定前自动委派，分析结果注入执行上下文
 - 📖 **架构借鉴**：插件架构和代理编排理念借鉴了 oh-my-opencode-slim，但完全独立实现、无运行时依赖
 
@@ -296,8 +296,8 @@ bunx oh-my-opencode-cohub install
 | co-observer | `deepseek/deepseek-v4-flash` | 图片/PDF 分析 | — |
 | co-council | `deepseek/deepseek-v4-flash` | 多模型共识 | — |
 | co-rule-user | `deepseek/deepseek-v4-flash` | 用户级规范分析 | `~/.config/opencode/AGENTS.md` |
-| co-rule-project | `deepseek/deepseek-v4-flash` | 项目级规范分析 | 项目 `AGENTS.md` |
-| co-rule-app | `deepseek/deepseek-v4-flash` | 应用规则分析 | `.opencode/rules/*.md` |
+| co-rule-project | `deepseek/deepseek-v4-flash` | 项目级规范分析（从项目根到当前目录逐级发现 `AGENTS.md`/`CLAUDE.md`/`AGENTS.local.md`/`CLAUDE.local.md` 及该级 `.rules/*.md`，就近覆盖） | 项目根起的各级 `AGENTS.md` 等 + `.rules/*.md` |
+| co-rule-app | `deepseek/deepseek-v4-flash` | 应用规则分析（**定向分析**：仅在方案确需对照时分析明确指定的 `.opencode/rules/*.md` 文件，不猜测、不扫描目录） | 明确指定的 `.opencode/rules/*.md` |
 | co-planner | `deepseek/deepseek-v4-flash` | 方案制定 | 综合需求+信息+规则 |
 
 > **注意**：上表模型为内置兜底值。安装时 CLI 会根据 `opencode.json` 中已配置的 provider 智能匹配并写入 `oh-my-opencode-cohub.json`；若 `opencode.json` 无 provider 则生成占位配置。最终生效模型以 `oh-my-opencode-cohub.json` 为准，也可通过下文「配置文件」或「自定义模型」章节手动覆盖。
@@ -306,21 +306,25 @@ bunx oh-my-opencode-cohub install
 
 ## 编排引擎
 
-CoHub 内置轻量编排引擎（`src/orchestration/`，6 模块），通过代码级保障 orchestrator 的编排可靠性，而非仅靠 prompt 约束：
+CoHub 内置轻量编排引擎（`src/orchestration/`，6 模块），**诚实镜像 OpenCode 原生 task 生命周期**，为主代理的编排决策提供可观测的内部状态，而非接管任务执行：
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| 状态机引擎 | `engine.ts` | 六状态 DAG：`pending→ready→running→completed/failed/cancelled`，依赖自动检查、级联取消 |
-| 重试管理器 | `retry.ts` | 按代理配置重试策略（指数退避 / fixed / immediate）、可重试错误白名单；降级路由字段已预留 |
+| 状态机引擎 | `engine.ts` | 六状态 DAG：`pending→ready→running→completed/failed/cancelled`；`tool.execute.before/after` 与 `event` hook 按 `(parentSessionID, callID)` 精确关联原生 task，镜像其生命周期；级联取消仅同步引擎内部状态（标记未完成后继为 cancelled），**不会自动 abort 其他运行中的会话** |
+| 重试管理器 | `retry.ts` | 保留实现（指数退避 / fixed / immediate 策略判定），**当前入口未激活**：不自动重试/重派失败任务；宿主原生重试由 OpenCode 自行处理，插件仅观测记录 |
 | 上下文契约 | `contract.ts` | `<!-- CONTRACT_BEGIN/END -->` 结构化块：关键结果 / 决策 / 修改文件 / 验证状态 / 待完成 / 警告，子代理间传递并自动去重 |
-| 并发调度器 | `scheduler.ts` | 全局并发上限 `maxConcurrency=20`，DAG 依赖自然控制实际并行度 |
+| 并发调度器 | `scheduler.ts` | 保留实现（默认 `maxConcurrency=20`），**当前入口未激活**：不强制全局并发上限；并行度由 orchestrator 显式 Wave 推进决定（同一 Wave 一次消息同时启动多个 task） |
+
+> **职责边界（重要）**：任务的实际执行与生命周期通知来自 OpenCode 原生机制（`task` 工具 + `session.idle/deleted/error/status`、`message.part.updated` 事件）。插件侧 TaskTracker + 编排引擎做**观测与内部状态镜像**（供 Board / TUI / 诊断展示），不做自动调度、不做自动重试；唯一的干预例外是**后台任务超时清理**（见下）。主代理（co-orchestrator）显式推进并行：任务实际前置依赖完成且无共享可变状态冲突即可派发，同次所有已就绪任务同一消息同时启动，不等无关任务；失败重派、取消后继任务由主代理显式执行。`close_job` 是插件唯一主动中止会话的工具：对**已绑定子会话**的目标执行 `session.abort()`，未绑定子会话的任务仅本地取消（不中止任何会话，详见下节）。`council_session`（多模型共识）自身保留真实的空响应重试与退避降级，不在此限。
+>
+> **后台超时清理（例外，非级联取消）**：插件每 30 秒检查一次，创建超过 30 分钟且仍为 running 的后台任务会被标记为 errored；其中已绑定子会话的任务会尝试真实 `session.abort()`。此机制是超时兜底清理，不属于依赖级联取消。
 
 ### 关键工具
 
 | 工具 | 可用代理 | 功能 |
 |------|---------|------|
-| `close_job` | 仅 co-orchestrator | 按 Session ID 或任务别名中止卡住的子代理后台任务（`session.abort` + 状态同步） |
-| `council_session` | 仅 co-council | 多模型并行/串行共识：共识检测、重试决策、质量门禁、退避降级 |
+| `close_job` | 仅 co-orchestrator | 按 Session ID 或任务别名定位后台任务：**已绑定子会话**时执行真实 `session.abort()`（是否真实中止以返回的 `session_aborted` 为准），仅作用于指定目标会话；**未绑定子会话**仅本地取消（状态落 cancelled、`session_aborted=false`，不中止任何会话）；未知/歧义目标幂等拒绝，不假成功 |
+| `council_session` | 仅 co-council | 多模型并行/串行共识：共识检测、空响应重试、质量门禁、退避降级 |
 
 ### 上下文共享
 
@@ -332,6 +336,36 @@ ContextEngine（`src/context/`）按四种策略自动向子代理注入上下�
 | `relevant` | fixer / designer / planner | 相关文件路径 + 前置决策 + 近期错误 |
 | `summary` | oracle / council | 同上，且文件正文按 token 预算（2000）截断后注入 |
 | `full` | （预留） | 完整正文，目前未分配代理 |
+
+**summary 文件读取模式（`context.summaryReadMode`，默认 `bounded`）**：控制 `summary` 策略下**文件正文的读取方式**，与上面的上下文策略 `full` 是**两个不同维度**，不要混淆：
+
+- `bounded`（默认）：按 token 预算推导字节上限**有界读取**（每文件正文窗口硬上限 1 MiB，另读 4 字节 lookahead，超限保守截断），读取成本远低于全量读。注意：读取上限或 UTF-8 字符边界可能使正文内容/截断标记与全量读+截断存在差异（如纯 emoji 恰停预算边界、文件超 1 MiB 上限时附加读取截断标记）；需严格兼容旧全量行为时可选 `full`
+- `full`：保留旧行为——全量 `readFileSync` 后再按预算截断（保守选项，可关闭激进裁剪；注入后仍受 12,000 token 注入预算兜底约束）
+
+配置示例（用户级 `~/.config/opencode/oh-my-opencode-cohub.json` 或项目级 `.opencode/oh-my-opencode-cohub.json` 均支持）：
+
+```json
+{
+  "context": { "summaryReadMode": "bounded" }
+}
+```
+
+### 上下文诊断日志（默认关闭）
+
+上下文注入诊断日志是 **opt-in** 的，默认不产生任何 I/O（避免每次委派阻塞事件循环）。开启方式（环境变量优先）：
+
+| 方式 | 说明 |
+|------|------|
+| 环境变量 `COHUB_CTX_DIAG=1` | 开启（`=0` 强制关闭，优先级最高） |
+| 配置 `"diag": { "enabled": true }` | 用户级或项目级 `oh-my-opencode-cohub.json` 均可；可选 `"path"` 自定义日志路径 |
+
+```json
+{
+  "diag": { "enabled": true }
+}
+```
+
+开启后日志**路径与字段保持不变**（默认 `os.tmpdir()/opencode/ctx-diag.log`），异步串行写入 + 尾部窗口压缩，不再阻塞事件循环、文件有硬上界。**任务生命周期诊断**仅记录白名单元数据（callID/session/alias/event/status/耗时等），不携带原始错误正文或 headers；**上下文注入诊断**则包含截断后的上下文预览（详情前 120 字符）与注入 prompt 尾部（80 字符），供确认注入内容是否到达。排查「注入的上下文是否真正到达子代理」问题时才需要开启。
 
 ### 注入膨胀防护
 
@@ -426,25 +460,25 @@ CLI 安装后自动创建 `~/.config/opencode/oh-my-opencode-cohub.json`，这�
 
 ## 工作流
 
-CoHub 采用 Wave 波次分组并行模式，由编排引擎代码级保障执行可靠性：
+CoHub 采用 Wave 波次分组并行模式。并行与推进由**主代理显式执行**，编排引擎负责观测与内部状态镜像（另有后台超时清理兜底，见「编排引擎」章节）：
 
 ```
 1. 理解需求（co-orchestrator 分析用户意图）
 2. 信息收集（Wave 1 — 全并行：@co-explorer + @co-librarian + @co-observer）
 3. 规范分析（Wave 1 — 全并行：@co-rule-user + @co-rule-project + @co-rule-app）
 4. 制定方案 → @co-planner（按依赖分 Wave 1/2/3... 输出结构化任务分解）
-5. 调度执行（Wave 2+ — 同一 Wave 内全并行启动）
+5. 调度执行（Wave 2+ — 同一 Wave 内一次消息同时启动）
    - 修改 Wave：fixer/designer 仅修改文件，不编译/测试
    - 验证 Wave：所有修改完成后统一编译 + 测试
 6. 验证（@co-oracle 代码审查 + @co-designer 视觉审查）
 ```
 
-编排引擎在此流程中负责：
+主代理在此流程中负责（均为显式操作，无自动魔法）：
 
-- 任务注册与 DAG 依赖自动检查，`pending→ready` 自动转换
-- 并发调度不超过 `maxConcurrency`
-- 失败自动重试（按代理策略），超限中止
-- 级联取消：父任务取消时，未完成后继任务标记 cancelled
+- **Wave 推进**：Wave 仅表示依赖层次，不构成整体等待屏障——任务的实际前置依赖完成且无共享可变状态冲突即可派发，同次所有已就绪任务同一消息同时启动，不等本 Wave / 其他 Wave 的无关任务
+- **失败重派**：task 返回失败时，由 orchestrator 根据结果显式决定重派/换策略，不自动重试
+- **取消后继**：需要取消时显式调用 `close_job`——插件唯一注册的取消工具，对**已绑定子会话**的目标执行真实 `session.abort()`（未绑定子会话仅本地取消，以返回的 `session_aborted` 为准）；OpenCode 原生 `cancel_task` 路径仅同步插件内部状态（引擎标记 cancelled），不承诺真实中止目标会话。无自动级联取消——编排引擎的「级联取消」仅是内部状态同步（把未完成后继标记为 cancelled），不会自动中止其他运行中的会话
+- **验证区分**：修改 Wave 只改不编译（注明「验证待统一执行」），多文件修改完成后统一编译一次
 
 ## 依赖
 
@@ -536,10 +570,21 @@ npm run build
 
 ## 版本历史
 
-完整变更记录见 [CHANGELOG.md](./CHANGELOG.md)。
+完整变更记录见 [CHANGELOG.md](./CHANGELOG.md)，或 [GitHub 上的 CHANGELOG](https://github.com/Mr-cjf/cohub/blob/main/packages/oh-my-opencode-cohub/CHANGELOG.md)。
+
+> **版本说明**：v1.15.0 及更早版本的 release 链接指向**已归档的旧仓库**（`Mr-cjf/oh-my-opencode-cohub`），仅作历史存档；历史条目不代表当前运行机制——现行机制以 CHANGELOG 与源码为准。v1.15.1 之后版本为纯文本记录，未附 release 链接。
 
 | 版本 | 日期 | 主要变更 |
 |------|------|---------|
+| 1.18.4 | 2026-10-16 | README 文档跟进：版本历史补齐 1.18.3 与当前编排语义（诚实镜像原生 task 生命周期，**不激活自动调度/自动重试**）；上下文 `summaryReadMode`（`bounded`/`full`）与 opt-in 诊断日志说明；`close_job` 取消边界（已绑定子会话真实 abort / 未绑定仅本地取消）与后台超时清理例外（30 秒检查、30 分钟超时标记 errored）。无运行时代码变更 |
+| 1.18.3 | 2026-10-16 | 编排提示词并发语义修正：移除默认 2-3 / 固定数量 / 强制分批限制，无依赖、无共享可变状态冲突的任务同一条消息同时派发，不以任务/文件数量或猜测容量预限；Wave 仅展示依赖层次不构成等待屏障，已就绪任务同时启动不等无关慢任务；同文件独立只读可并行，仅真实写冲突或要求特定文件版本/读取结果的读写任务按实际冲突与依赖串行；保留 429/TPM 限流反馈（尊重 retry.next / Retry-After）、有限重试、后台已启动任务不重复派发、定向规则分析与已核实事实复用。仅提示词文案调整，无运行时 API / TUI / MCP 变更 |
+| 1.18.2 | 2026-10-16 | 任务生命周期按 `(parentSessionID, callID)` 精确关联与真实收尾；后台任务终态不再仅凭 `session.idle` 判定（有界读取验证明确终态，读失败/无终态信号保持 running 不假成功）；`close_job` 真实取消与质量回写；内部状态机诚实镜像原生 task 生命周期（**不激活自动调度/自动重试**）；`context.summaryReadMode` 支持 `bounded`（默认）/`full`；限流分类器 + opt-in 任务生命周期诊断 |
+| 1.18.1 | 2026-10-16 | 修复 Background Job Board 跨会话泄漏：Board 仅向**当前直接父会话**注入任务（显式传 `sessionID`，移除全局回退）；未知/非法会话 ID 一律返回空不注入 |
+| 1.18.0 | 2026-10-16 | 上下文注入诊断日志改 **opt-in 默认关闭**（`COHUB_CTX_DIAG=1/0` 环境变量优先，或配置 `diag.enabled`，用户级/项目级配置均支持）；`co-rule-project` 逐级发现 `AGENTS.md`/`CLAUDE.md`/`AGENTS.local.md`/`CLAUDE.local.md` 及该级 `.rules/*.md`（就近覆盖）；`co-rule-app` 定向分析明确指定的 `.opencode/rules/*.md`；oracle/council 提示词改为按需取证读取（软预算） |
+| 1.17.0 | 2026-09-16 | 新增 `co_ocr_review` 工具（仅 `co-oracle` 可调用；OCR CLI 为**软依赖**，未安装时返回引导提示并自动回退原生审查）。注：该工具仅见于本版 CHANGELOG 历史摘要，当前源码与分发产物未包含此工具 |
+| 1.16.0 | 2026-09-15 | 并行工具调用总则统一经 `experimental.chat.system.transform` hook 注入，覆盖全部 12 个代理；修正 observer 唯一串行指令与 orchestrator 禁 bash 冲突措辞 |
+| 1.15.3 | 2026-09-15 | 上下文引擎 `fillContextAsync` 改为 in-flight promise 去重（并发同 key 共享请求、无脏读）；explorer 新增搜索策略段落（首轮宽泛并行、最多 4 轮、glob→grep→read 优先级）；observer 兜底模型残留修正 |
+| 1.15.1 | 2026-09-03 | README 对齐 v1.15.0：新增「编排引擎」章节（状态机/重试/契约/调度器 + 工具权限 + 上下文 4 策略 + 注入膨胀防护 + 质量回送 + stats）、工作流章节重写为 Wave 波次分组并行、版本历史补齐 v1.13.0~v1.15.0 |
 | [v1.15.0](https://github.com/Mr-cjf/oh-my-opencode-cohub/releases/tag/v1.15.0) | 2026-09-03 | 子代理并行工具调用：fixer/designer 同消息并行读文件、librarian 并行外部搜索、explorer 并行读取 |
 | [v1.14.1](https://github.com/Mr-cjf/oh-my-opencode-cohub/releases/tag/v1.14.1) | 2026-09-03 | Dependabot 安全修复（3 high + 1 moderate 传递依赖升级） |
 | [v1.14.0](https://github.com/Mr-cjf/oh-my-opencode-cohub/releases/tag/v1.14.0) | 2026-09-03 | 修改 Wave vs 验证 Wave 区分：并行改文件不再各自编译，统一编译一次 |
