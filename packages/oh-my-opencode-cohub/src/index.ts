@@ -14,21 +14,23 @@ import { RULE_APP_PROMPT } from './prompts/rule-app';
 import { PLANNER_PROMPT } from './prompts/planner';
 import { CHINESE_LANGUAGE_INSTRUCTION, PARALLEL_TOOL_INSTRUCTION } from './instructions/chinese';
 import { TaskTracker } from './task-manager/tracker';
+import type { JobRecord } from './task-manager/types';
 import { assessQuality, isQualityEnabled } from './task-manager/quality';
 import { ContextEngine } from './context/engine';
 import { resolveStrategy } from './context/strategy';
 import type { ContextStrategy } from './context/types';
 import { loadCoHubConfig, type AgentOverride } from './config/loader';
-import { appendCtxDiag, resolveCtxDiagSettings } from './context/diag-log';
+import { appendCtxDiag, appendTaskDiag, resolveCtxDiagSettings } from './context/diag-log';
 import { createCouncilTool, CouncilManager } from './tools/council';
 import { createCloseJobTool } from './tools/job-control';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { appendLog } from './utils/log.js';
+import { appendLog, appendSafeLog } from './utils/log.js';
 import { writeFileAtomic } from './shared/fs-atomic';
 import { COUNCIL_TIMEOUT_MS, STALE_TASK_MS } from './shared/constants';
 import { createOrchestrationLayer } from './orchestration';
+import { classifyRateLimit } from './orchestration/rate-limit';
 import { stripExistingContracts } from './orchestration/contract';
 import { enforcePromptBudget } from './context/extractor';
 
@@ -131,6 +133,10 @@ interface AgentDefinition {
 const CHINESE_INSTRUCTION = CHINESE_LANGUAGE_INSTRUCTION;
 
 const CoHubPlugin: Plugin = async (input, options) => {
+  // 插件级 client 闭包：event hook 的参数（{ event: Event }）会遮蔽插件外层 input，
+  // 后台终态证据验证（verifyChildTerminal）必须用本闭包引用，避免 undefined 导致读取失败。
+  const pluginClient = input.client;
+
   // 方式一：从文件系统加载覆盖
   const projectDir = input.directory || process.cwd();
   const fileOverrides = loadFileOverrides(projectDir);
@@ -146,7 +152,8 @@ const CoHubPlugin: Plugin = async (input, options) => {
 
   const tracker = new TaskTracker();
   const orchestrationLayer = createOrchestrationLayer(tracker, {});
-  let _lastAlias = ''; // 用于 tool.execute.before → after 传递 alias
+  // 任务精确关联：before/after 均通过 hook input 的 (sessionID, callID) 精确配对（SDK 1.17.15），
+  // 不再使用共享 _lastAlias —— 并发乱序 / 复用场景由 tracker callIndex 精确定位，绝不回退"最近"。
 
   // ===== TUI 状态同步 =====
   const STATE_DIR = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub');
@@ -298,23 +305,40 @@ const CoHubPlugin: Plugin = async (input, options) => {
   const councilConfig = userConfig.council ?? DEFAULT_COUNCIL_CONFIG;
   const councilManager = new CouncilManager(input.client, input.directory, councilConfig);
   const councilTools = createCouncilTool(input, councilManager);
-  const jobTools = createCloseJobTool(input, tracker, () => syncTrackerState(tracker.currentParentSessionId));
-  // ===== 辅助：从 tool output 中提取子任务 session ID =====
+  // close_job 真实取消落地（底层保证第4回调仅首次真实取消时调用一次）：
+  // alias → getJobByAlias → engine 镜像 cancelled + 按 job.parentSessionId 精确刷新（不用 currentParentSessionId 回退）
+  const jobTools = createCloseJobTool(
+    input,
+    tracker,
+    undefined, // onClosed 保留兼容位：不误刷其他 parent
+    (alias) => {
+      const job = tracker.getJobByAlias(alias);
+      if (job && orchestrationLayer) {
+        orchestrationLayer.engine.applyLifecycleEvent(alias, 'cancelled');
+        syncTrackerState(job.parentSessionId);
+      }
+    },
+  );
+  /**
+   * 从 tool.execute.after 的 output 对象中提取子会话 session ID。
+   * output 形态（SDK 1.17.15）：{ title, output, metadata }。
+   * 红线：非 ses_ 前缀的值绝不当作 childID（防止把任意文本/别名误绑定为子会话）。
+   */
   function extractChildSessionId(output: unknown): string | undefined {
     if (!output || typeof output !== 'object') return undefined;
     const o = output as Record<string, unknown>;
-    // metadata 中可能包含 sessionId / taskId
+    // metadata 中可能包含 sessionId / taskId（仅接受 ses_ 前缀的真实子会话 ID）
     const meta = o.metadata as Record<string, unknown> | undefined;
     if (meta) {
-      if (typeof meta.sessionId === 'string') return meta.sessionId;
-      if (typeof meta.taskId === 'string') return meta.taskId;
-      if (typeof meta.task_id === 'string') return meta.task_id;
-      if (typeof meta.id === 'string') return meta.id;
+      for (const key of ['sessionId', 'taskId', 'task_id', 'id']) {
+        const v = meta[key];
+        if (typeof v === 'string' && v.startsWith('ses_')) return v;
+      }
     }
-    // 输出文本中可能包含 session ID（如 "Session: abc123"）
+    // 输出文本中可能包含 session ID（如 "session id: ses_xxx"），同样要求 ses_ 前缀
     const text = typeof o.output === 'string' ? o.output : '';
-    const m = text.match(/\b(session|task)[_\s]?(?:id|ID)[:\s]+(\S+)/i);
-    if (m) return m[2];
+    const m = text.match(/\b(?:session|task)[_\s]?id[:\s]+(ses_\S+)/i);
+    if (m) return m[1];
     return undefined;
   }
 
@@ -328,6 +352,175 @@ const CoHubPlugin: Plugin = async (input, options) => {
     if (typeof p.sessionID === 'string') return p.sessionID;
     if (typeof p.sessionId === 'string') return p.sessionId;
     return undefined;
+  }
+
+  /**
+   * 后台终态证据验证：session.idle 只能说明子会话暂时空闲，不是成功证据。
+   * 通过一次有界 session.messages 读取（limit=10），验证最新 assistant 消息的明确结局：
+   * - info.error 存在 → 'cancelled'（MessageAbortedError/中止）或 'errored'（其余最终错误）；
+   * - 未闭合工具轮（tool state pending/running/缺失，未产生最终结果）→ 'unknown'（仍在执行）；
+   *   —— 已 completed/error 的 tool parts 不阻止判定（completed tool parts + 最终 stop 合法）；
+   * - finish 明确：tool-calls 中间轮 → 'unknown'；abort/cancel → 'cancelled'；
+   *   length/content-filter → 'errored'（不成功结局）；已知成功值 → 'completed'；未知值 → 'unknown'（不臆测成功）；
+   * - 无 finish：time.completed 无法单独证明成功 → 'unknown'（保守）。
+   * 宿主重试不以非最终消息/retry part 判断：以 session.status(retry) 事件观测；最新消息缺终态信号即 'unknown'。
+   * 新鲜度边界：最新 assistant 消息创建时间晚于调用开始（job.createdAt）——复用会话的旧完成消息
+   * 不当作本轮完成证据，防止终态旧调用抢新调用。
+   */
+  async function verifyChildTerminal(
+    client: typeof input.client,
+    sessionId: string,
+    jobCreatedAt: number,
+  ): Promise<'completed' | 'errored' | 'cancelled' | 'unknown'> {
+    try {
+      const res = await client.session.messages({ path: { id: sessionId }, query: { limit: 10 } });
+      if (res.error) return 'unknown'; // 读失败：保持未知，不假成功
+      const msgs = res.data;
+      if (!Array.isArray(msgs) || msgs.length === 0) return 'unknown'; // 空记录：保持未知
+      // 挑最新 assistant 消息：优先 time.created 最大（明确时序），兜底取数组最后一个 assistant
+      let latest: { info?: Record<string, unknown>; parts?: Array<Record<string, unknown>> } | undefined;
+      let latestCreated = -1;
+      for (const item of msgs) {
+        const info = item?.info as Record<string, unknown> | undefined;
+        if (!info || info.role !== 'assistant') continue;
+        const t = info.time as Record<string, unknown> | undefined;
+        const created = typeof t?.created === 'number' ? t.created : -1;
+        if (created > latestCreated) { latestCreated = created; latest = item; }
+      }
+      if (!latest) return 'unknown';
+
+      const info = latest.info as Record<string, unknown>;
+      const time = info.time as Record<string, unknown> | undefined;
+      const created = typeof time?.created === 'number' ? time.created : undefined;
+      // 新鲜度边界：最新 assistant 消息创建时间早于本轮调用开始 → 旧会话历史，不作为本轮证据
+      if (created !== undefined && created < jobCreatedAt) return 'unknown';
+
+      // 消息级最终错误：中止/取消 → cancelled，其余最终错误 → errored
+      if (info.error) return isAbortLikeError(info.error) ? 'cancelled' : 'errored';
+
+      const parts = latest.parts ?? [];
+      // 未闭合工具轮：tool state 非 completed/error（pending/running/缺失）→ 仍在执行，不终结
+      const hasOpenTool = parts.some((p) => {
+        if (p.type !== 'tool') return false;
+        const st = p.state as Record<string, unknown> | undefined;
+        return st?.status !== 'completed' && st?.status !== 'error';
+      });
+      if (hasOpenTool) return 'unknown';
+
+      // finish 值域判定：不成功结局 / 中间轮 / 未知值都不当作成功。
+      // 已核实的已知值用【精确】映射（未知值如 'mystery-stop' 不因含 'stop' 子串误判成功，
+      // 也不会把 'not-cancelled' 之类未知文本误判终态）；未核实值一律 unknown。
+      const finish = info.finish;
+      if (typeof finish === 'string' && finish !== '') {
+        const f = finish.toLowerCase();
+        if (f === 'tool-calls' || f === 'tool_calls') return 'unknown'; // 中间轮
+        if (f === 'abort' || f === 'cancel' || f === 'cancelled') return 'cancelled';
+        if (f === 'length' || f === 'content-filter' || f === 'content_filter') return 'errored';
+        if (KNOWN_SUCCESS_FINISH.some((m) => m === f)) return 'completed';
+        return 'unknown'; // 未知 finish：不臆测成功
+      }
+      // 无 finish：time.completed 无法单独证明成功（可能截断/异常结束），保守未知
+      return 'unknown';
+    } catch {
+      return 'unknown'; // 网络异常：保持未知，不假成功
+    }
+  }
+
+  /** SDK 已知成功 finish 值（小写【精确】匹配：未知值绝不因子串误判成功）；'end_turn' 为常见 LLM 停靠值 */
+  const KNOWN_SUCCESS_FINISH = ['finish', 'stop', 'end_turn', 'end', 'success', 'done', 'completed'] as const;
+
+  /** 识别中止/取消类错误（SDK 类型已枚举：仅 MessageAbortedError 精确匹配；未知 name 不臆测） */
+  function isAbortLikeError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') return false;
+    return (err as Record<string, unknown>).name === 'MessageAbortedError';
+  }
+
+  /** 仅诊断开启时追加任务生命周期记录（白名单字段由 appendTaskDiag 内部收紧/截断） */
+  function taskDiag(record: Parameters<typeof appendTaskDiag>[0]): void {
+    if (ctxDiag.enabled) appendTaskDiag(record, ctxDiag.filePath);
+  }
+
+  /**
+   * 分类 task 工具 after 的显式结局。output 为 SDK 1.17.15 形态 { title, output, metadata }：
+   * - metadata 显式 status='cancelled' 或 cancelled=true → cancelled；
+   * - metadata 显式 status='failed'/'error'/'errored' 或 error 字段存在 → errored；
+   * - metadata 显式 status='running'/'pending' → running（后台未完成）；
+   * - 无显式标记 → unknown（正常工具返回，由入口按前台/后台语义处理）。
+   * 绝不从任意 output 文本（如用户正文含 error 词）推断失败。
+   */
+  function classifyTaskAfter(output: unknown): { status: 'cancelled' | 'errored' | 'running' | 'unknown' } {
+    if (output && typeof output === 'object') {
+      const meta = (output as Record<string, unknown>).metadata as Record<string, unknown> | undefined;
+      if (meta && typeof meta === 'object') {
+        if (meta.status === 'cancelled' || meta.cancelled === true) return { status: 'cancelled' };
+        if (
+          meta.status === 'failed' || meta.status === 'error' || meta.status === 'errored' ||
+          meta.error !== undefined
+        ) {
+          return { status: 'errored' };
+        }
+        if (meta.status === 'running' || meta.status === 'pending') return { status: 'running' };
+      }
+    }
+    return { status: 'unknown' };
+  }
+
+  /**
+   * 共用收尾核验（session.idle 与 tool.execute.after 首次 child 绑定后补核验共用）：
+   * 对候选 job 做一次有界终态证据验证（verifyChildTerminal），再按 (parent,callID)+预期 childID
+   * 竞态复核后落真实终态。保证：
+   * - 正常 after 时 child 尚未产生终态消息（messages=[]）→ 'unknown' → 保持 running，零副作用；
+   * - 已明确 completed 的任务重复核验 → finalizeByCall 幂等（stats 只记一次）；
+   * - await 读取期间绑定对象变更 / job 已被 cancel / 已新开调用 → 不更新新调用。
+   * 不新增轮询 timer、不缓存事件、不启动第二次 task。
+   */
+  async function reconcileJobTerminal(job: JobRecord): Promise<void> {
+    const parentAtCall = job.parentSessionId;
+    const callAtCall = job.callID;
+    const aliasAtCall = job.alias;
+    const childId = job.sessionId;
+    if (!childId) return; // 未绑定 childID 无法做有界核验
+
+    const verdict = await verifyChildTerminal(pluginClient, childId, job.createdAt);
+
+    // 竞态复核：await 读取期间绑定对象可能已变更 / job 已被 cancel / 已新开调用
+    const nowJob = callAtCall ? tracker.getJobByCall(parentAtCall, callAtCall) : tracker.getJobBySessionId(childId);
+    if (!nowJob || nowJob.alias !== aliasAtCall || nowJob.sessionId !== childId || nowJob.status !== 'running') {
+      appendSafeLog('event', `收尾竞态：候选已变更，不更新新调用 (session=${childId.slice(0, 20)})`);
+      return;
+    }
+
+    if (verdict === 'completed' || verdict === 'errored' || verdict === 'cancelled') {
+      const term = verdict === 'completed' ? 'completed' : verdict === 'cancelled' ? 'cancelled' : 'errored';
+      const up = callAtCall
+        ? tracker.finalizeByCall(parentAtCall, callAtCall, childId, term)
+        : tracker.updateByChildSessionId(childId, term);
+      syncTrackerState(tracker.currentParentSessionId);
+      const alias = up.ok ? up.alias : aliasAtCall;
+      if (up.ok && up.alias && orchestrationLayer) {
+        orchestrationLayer.engine.applyLifecycleEvent(up.alias, verdict === 'completed' ? 'completed' : verdict === 'cancelled' ? 'cancelled' : 'failed');
+      }
+      taskDiag({
+        t: 'task',
+        session: childId.slice(0, 20),
+        alias,
+        event: verdict === 'completed' ? 'task_completed' : verdict === 'cancelled' ? 'task_cancelled' : 'task_failed',
+        status: verdict === 'completed' ? 'completed' : verdict === 'cancelled' ? 'cancelled' : 'failed',
+        durationMs: Date.now() - job.createdAt,
+        lastActivityAt: Date.now(),
+      });
+    } else {
+      // 无终态证据（中间轮 / 未知 finish / 读失败）：保持 running + 诊断，绝不假成功
+      appendSafeLog('event', `无终态证据，保持 running (session=${childId.slice(0, 20)})`);
+      taskDiag({
+        t: 'task',
+        session: childId.slice(0, 20),
+        alias: aliasAtCall,
+        event: 'state_changed',
+        status: 'running',
+        lastActivityAt: Date.now(),
+      });
+    }
   }
 
   // ===== 兜底：定时清理过期背景任务（30 分钟超时，阈值来自共享层 STALE_TASK_MS） =====
@@ -486,20 +679,23 @@ const CoHubPlugin: Plugin = async (input, options) => {
             subagent_type: subagentType,
             task_id: (typeof output.args.task_id === 'string' && output.args.task_id.startsWith('ses_')) ? output.args.task_id : undefined,
             background: typeof args.background === 'boolean' ? args.background : undefined,
-          });
-          _lastAlias = alias;
+          }, input.callID); // 按 (parentSessionID, callID) 精确关联，不再依赖共享 _lastAlias
           syncTrackerState(input.sessionID ?? '');
           tracker.pruneTerminalJobs(STALE_TASK_MS); // 清理超 30 分钟未更新的终态 job，防止 jobs Map 无限膨胀
 
-          // 注册到 orchestration engine
+          // 注册到 orchestration engine（诚实镜像原生 task，不自动派发/重试）
           if (orchestrationLayer && subagentType && description) {
             try {
-              orchestrationLayer.engine.registerTask(
-                alias,
-                subagentType,
-                description,
-                [], // deps — 由 orchestrator 通过 prompt 指定
-              );
+              // 重复 before：tracker 按 (parent,callID) 幂等返回原 alias；engine 侧先查重避免
+              // registerTask 的 duplicate 异常（不用 catch 当正常控制流）
+              if (!orchestrationLayer.engine.getTask(alias)) {
+                orchestrationLayer.engine.registerTask(
+                  alias,
+                  subagentType,
+                  description,
+                  [], // deps — 由 orchestrator 通过 prompt 指定
+                );
+              }
               // 注入契约上下文到 prompt
               const targetField = output.args?.prompt ? 'prompt' : 'description';
               if (output.args?.[targetField] && typeof output.args[targetField] === 'string') {
@@ -511,8 +707,33 @@ const CoHubPlugin: Plugin = async (input, options) => {
                   constraints: [],
                 });
               }
+              // 原生 task 调用已被接受并启动：ready → running（异常情况结构化记录，不吞错、不假 started；
+              // 未接线 DAG 依赖时 deps 为空正常 ready→running，pending 仅理论上存在）
+              const lr = orchestrationLayer.engine.applyLifecycleEvent(alias, 'running');
+              if (!lr.ok) {
+                appendLog('orchestration', `before: applyLifecycleEvent(running) ${lr.reason} for ${alias}（状态来自实际原生生命周期，未接线 DAG 依赖不强制推进）`);
+                taskDiag({
+                  t: 'task',
+                  callID: input.callID,
+                  session: input.sessionID?.slice(0, 20),
+                  alias,
+                  event: 'state_changed',
+                  status: orchestrationLayer.engine.getState(alias) ?? 'pending',
+                  lastActivityAt: Date.now(),
+                });
+              } else {
+                taskDiag({
+                  t: 'task',
+                  callID: input.callID,
+                  session: input.sessionID?.slice(0, 20),
+                  alias,
+                  event: 'task_started',
+                  status: 'running',
+                  lastActivityAt: Date.now(),
+                });
+              }
             } catch (e) {
-              appendLog('orchestration', 'registerTask error', e);
+              appendSafeLog('orchestration', 'registerTask error', e);
             }
           }
 
@@ -578,38 +799,131 @@ const CoHubPlugin: Plugin = async (input, options) => {
     // 🆕 拦截 task 工具执行后 — 更新任务状态
     'tool.execute.after': async (input, output) => {
       try {
-        // cancel_task 集成：标记任务已取消
+        // cancel_task 集成：按 alias 或 sessionId 定位任务并中止（幂等守卫在 abortJob 内）
         if (input.tool === 'cancel_task') {
           const args = input.args as Record<string, unknown> | undefined;
           const taskId = args?.task_id;
-          if (typeof taskId === 'string') tracker.markCancelled(taskId);
+          if (typeof taskId === 'string') {
+            const aborted = tracker.abortJob(taskId);
+            if (aborted && orchestrationLayer) {
+              orchestrationLayer.engine.applyLifecycleEvent(aborted.job.alias, 'cancelled');
+              taskDiag({
+                t: 'task',
+                session: input.sessionID?.slice(0, 20),
+                alias: aborted.job.alias,
+                event: 'task_cancelled',
+                status: 'cancelled',
+                lastActivityAt: Date.now(),
+              });
+            }
+          }
           syncTrackerState(input.sessionID ?? '');
         }
         if (input.tool === 'task') {
-          // 尝试从 output 中提取子任务 session ID
+          // after output 形态（SDK 1.17.15）：{ title, output, metadata }，
+          // 从 metadata / 文本中提取子会话 session ID（仅接受 ses_ 前缀）。
           const childSessionId = extractChildSessionId(output);
-          tracker.updateAfterTask(input.sessionID, 'completed', childSessionId);
-          syncTrackerState(input.sessionID ?? '');
+          const job0 = tracker.getJobByCall(input.sessionID, input.callID);
+          if (!job0) {
+            // 未知 callID：不回退最近任务，仅诊断观测
+            appendSafeLog('tool.execute.after', `after 未知 callID，no-op (parent=${input.sessionID?.slice(0, 20)})`);
+            syncTrackerState(input.sessionID ?? '');
+            return;
+          }
 
-          // 同步 orchestration 状态
-          if (orchestrationLayer && input.tool === 'task') {
+          // P1-3 宿主 subtask 失败路径：result 可 undefined（v1.17.15 SessionPrompt.handleSubtask 失败）。
+          // 没有有效工具结果不能当成功——保留 running/unknown 等原生精确终态，不访问 undefined 崩溃，
+          // 后续由原生 task part error/abort 或 idle 证据精确收尾。
+          if (output === undefined || output === null) {
+            appendSafeLog('tool.execute.after', `after 无有效输出，不假成功 (parent=${input.sessionID?.slice(0, 20)})`);
+            syncTrackerState(input.sessionID ?? '');
+            return;
+          }
+
+          // P1-1 宿主 promotion：before 可能未标记 background，但 after 的原生 metadata 明确
+          // background:true（宿主 shape {sessionId, background, jobId}）→ 先精确升级为后台。
+          // 仅读 metadata 布尔值，绝不从 output 文本（如正文含 'background' 词）推断。
+          const meta = (output as Record<string, unknown> | null)?.metadata as Record<string, unknown> | undefined;
+          const metaBg = meta && typeof meta === 'object' ? meta.background : undefined;
+          if (metaBg === true && !job0.background) {
+            tracker.setBackgroundByCall(input.sessionID, input.callID, true);
+            // job0 与 tracker 内为同一对象引用，background 已同步
+          }
+
+          // 显式结局分类：metadata 显式 status/error 优先；不从任意 output 文本推断失败
+          const outcome = classifyTaskAfter(output);
+          if (outcome.status === 'cancelled' || outcome.status === 'errored') {
+            // task 工具调用明确失败/取消：按 (parent,callID) 精确落真实终态（前台/后台均适用），
+            // 不经过后台"只绑定不终结"的 applyCallUpdate 路径
+            const term = outcome.status === 'cancelled' ? 'cancelled' : 'errored';
+            const up = tracker.finalizeByCall(input.sessionID, input.callID, (childSessionId ?? job0.sessionId) || undefined, term);
+            syncTrackerState(input.sessionID ?? '');
+            if (up.ok && up.alias && orchestrationLayer) {
+              orchestrationLayer.engine.applyLifecycleEvent(up.alias, term === 'cancelled' ? 'cancelled' : 'failed');
+            }
+            taskDiag({
+              t: 'task',
+              callID: input.callID,
+              session: input.sessionID?.slice(0, 20),
+              alias: up.ok ? up.alias : job0.alias,
+              event: term === 'cancelled' ? 'task_cancelled' : 'task_failed',
+              status: term === 'cancelled' ? 'cancelled' : 'failed',
+              durationMs: Date.now() - job0.createdAt,
+              lastActivityAt: Date.now(),
+            });
+            return;
+          }
+          // 正常工具返回（或后台显式 running）：前台终结 / 后台仅绑定 childID 保持 running
+          const up = tracker.updateAfterTaskByCall(input.sessionID, input.callID, 'completed', childSessionId);
+          syncTrackerState(input.sessionID ?? '');
+          if (up.ok && orchestrationLayer) {
             try {
-              // 从 output 中提取子代理结果并提取契约
-              if (typeof output === 'string') {
-                const contract = orchestrationLayer.contractMgr.extract(output);
-                if (contract) {
-                  orchestrationLayer.engine.setResult(_lastAlias, contract.keyResult, contract);
+              if (!job0.background) {
+                // 前台：task 工具同步返回即明确完成 → 引擎镜像 completed（矛盾终态不覆盖）
+                const lr = orchestrationLayer.engine.applyLifecycleEvent(job0.alias, 'completed');
+                if (!lr.ok) appendLog('orchestration', `after: applyLifecycleEvent(completed) ${lr.reason} for ${job0.alias}`);
+                // 从 output.output 文本提取契约（output 为对象，不假设 string）
+                const text = typeof output === 'string'
+                  ? output
+                  : (typeof (output as Record<string, unknown> | null)?.output === 'string'
+                    ? (output as Record<string, string>).output
+                    : '');
+                if (text) {
+                  const contract = orchestrationLayer.contractMgr.extract(text);
+                  if (contract) orchestrationLayer.engine.setResult(job0.alias, contract.keyResult, contract);
                 }
+                taskDiag({
+                  t: 'task',
+                  callID: input.callID,
+                  session: input.sessionID?.slice(0, 20),
+                  alias: job0.alias,
+                  event: 'task_completed',
+                  status: 'completed',
+                  durationMs: Date.now() - job0.createdAt,
+                  lastActivityAt: Date.now(),
+                });
+              } else {
+                // 后台：after 只确认"调用已派发"，不证明子会话完成——先绑定 childID 保持 running，
+                // 再补一次有界终态核验（P1-2：首次 child 绑定前 idle 可能已丢失，这里兜底收尾）。
+                // 正常情况 child 尚无终态消息（messages=[]）→ reconcile 返回 'unknown' → 仍 running。
+                taskDiag({
+                  t: 'task',
+                  callID: input.callID,
+                  session: input.sessionID?.slice(0, 20),
+                  alias: job0.alias,
+                  event: 'state_changed',
+                  status: 'running',
+                  lastActivityAt: Date.now(),
+                });
+                await reconcileJobTerminal(job0);
               }
-              // 标记调度器完成
-              orchestrationLayer.scheduler.markCompleted(_lastAlias);
             } catch (e) {
-              appendLog('orchestration', 'afterTask error', e);
+              appendSafeLog('orchestration', 'afterTask engine 同步失败', e);
             }
           }
         }
       } catch (err) {
-        appendLog('tool.execute.after', 'hook 失败', err);
+        appendSafeLog('tool.execute.after', 'hook 失败', err);
       }
     },
 
@@ -617,102 +931,153 @@ const CoHubPlugin: Plugin = async (input, options) => {
     event: async (input) => {
       try {
         const e = input.event as { type: string; properties?: unknown };
-        const sessionId = extractSessionIdFromEvent(e.properties);
-        if (!sessionId) return;
+        const props = e.properties as Record<string, unknown> | undefined;
+        const sessionId = extractSessionIdFromEvent(props);
 
         if (e.type === 'session.idle') {
-          tracker.updateByChildSessionId(sessionId, 'completed');
+          if (!sessionId) return;
+          // 唯一活动归属定位：已结束历史不参与计数（修复复用场景新调用永不收尾）
+          const active = tracker.findActiveByChildSessionId(sessionId);
           syncTrackerState(tracker.currentParentSessionId);
+          if (!active.ok) {
+            // no-match（无 running）或 ambiguous（多个 running 共享 childID）：保守不操作
+            appendSafeLog('event', `session.idle ${active.reason} 不操作 (session=${sessionId.slice(0, 20)})`);
+            return;
+          }
+          const job = active.job;
 
-          // 新增：orchestration session.idle 状态转换
-          if (orchestrationLayer) {
-            try {
-              const job = tracker.getJobBySessionId(sessionId);
-              if (job) {
-                orchestrationLayer.engine.transition(job.alias, 'completed');
-                orchestrationLayer.scheduler.markCompleted(job.alias);
+          // 有界终态证据验证 + 竞态复核 + 落真实终态（与 after 绑定后补核验共用同一 reconcile）
+          await reconcileJobTerminal(job);
+
+          // 捕获子代理结果用于依赖传播 + 质量回送（P0-1 负反馈闭环）。
+          // 必须持有 alias+parent+call+child 快照，异步 then 回来复核仍同一 job 再写回
+          // （两次同 child 复用输出不同 quality：旧记录不能被新结果覆盖，且不按 sessionId 首条匹配）。
+          const qAlias = job.alias;
+          const qParent = job.parentSessionId;
+          const qCall = job.callID;
+          const qChild = sessionId;
+          const qCreatedAt = job.createdAt;
+          void contextEngine
+            .captureResult(sessionId, qAlias, job.agent)
+            .then((captured) => {
+              if (!captured) return;
+              // 质量判定：默认开启但保守——低分只标记（写回 JobRecord.quality），不改变任务成败
+              if (!isQualityEnabled(userConfig.quality)) return;
+              // 快照复核：仍同一 job（允许 terminal completed 后回写自己——不检查 status==='running'）
+              const now = qCall ? tracker.getJobByCall(qParent, qCall) : tracker.getJobBySessionId(qChild);
+              if (!now || now.alias !== qAlias || now.sessionId !== qChild) {
+                appendSafeLog('event', '质量回送竞态：候选已变更，不写回复用/新调用');
+                return;
               }
-            } catch (e) {
-              appendLog('orchestration', 'session.idle transition error', e);
-            }
-          }
-
-          // 新增：捕获子代理结果用于依赖传播 + 质量回送（P0-1 负反馈闭环）
-          const job = tracker.getJobBySessionId(sessionId);
-          if (job) {
-            void contextEngine
-              .captureResult(sessionId, job.alias, job.agent)
-              .then((captured) => {
-                if (!captured) return;
-                // 质量判定：默认开启但保守——低分只标记（写回 JobRecord.quality），不改变任务成败
-                if (!isQualityEnabled(userConfig.quality)) return;
-                const quality = assessQuality({
-                  output: captured.output,
-                  decisions: captured.decisions,
-                  latencyMs: Date.now() - job.createdAt,
-                  tokens: captured.tokens,
-                });
-                tracker.updateQuality(sessionId, {
-                  score: quality.score,
-                  ...(quality.failureCategory ? { failureCategory: quality.failureCategory } : {}),
-                  ...(quality.latencyMs !== undefined ? { latencyMs: quality.latencyMs } : {}),
-                  ...(quality.tokens ? { tokens: quality.tokens } : {}),
-                });
-                syncTrackerState(tracker.currentParentSessionId);
-              })
-              .catch((err) => appendLog('event', '质量回送失败', err));
-          }
+              const quality = assessQuality({
+                output: captured.output,
+                decisions: captured.decisions,
+                latencyMs: Date.now() - qCreatedAt,
+                tokens: captured.tokens,
+              });
+              tracker.updateQualityByAlias(qAlias, {
+                score: quality.score,
+                ...(quality.failureCategory ? { failureCategory: quality.failureCategory } : {}),
+                ...(quality.latencyMs !== undefined ? { latencyMs: quality.latencyMs } : {}),
+                ...(quality.tokens ? { tokens: quality.tokens } : {}),
+              });
+              syncTrackerState(tracker.currentParentSessionId);
+            })
+            .catch((err) => appendSafeLog('event', '质量回送失败', err));
         } else if (e.type === 'session.deleted') {
-          tracker.updateByChildSessionId(sessionId, 'errored');
+          if (!sessionId) return;
+          // 明确结局（宿主删除/中断会话）：按真实结局收尾，不自动重试、不假成功。
+          // 优先按唯一 active 的 (parent,callID) 精确终结；legacy 无 callID 走唯一关联兜底。
+          const active = tracker.findActiveByChildSessionId(sessionId);
+          const up = active.ok && active.job.callID
+            ? tracker.finalizeByCall(active.job.parentSessionId, active.job.callID, sessionId, 'errored')
+            : tracker.updateByChildSessionId(sessionId, 'errored');
           syncTrackerState(tracker.currentParentSessionId);
-
-          // 新增：orchestration session.deleted 状态转换 + 自动重试
-          if (orchestrationLayer) {
-            try {
-              const job = tracker.getJobBySessionId(sessionId);
-              if (job) {
-                orchestrationLayer.engine.transition(job.alias, 'failed');
-                orchestrationLayer.scheduler.markFailed(job.alias);
-                // 自动重试
-                const task = orchestrationLayer.engine.getTask(job.alias);
-                if (task) {
-                  const decision = orchestrationLayer.retryMgr.decide(task, 'session deleted');
-                  if (decision === 'retry') {
-                    orchestrationLayer.engine.transition(job.alias, 'pending');
-                  }
-                }
-              }
-            } catch (e) {
-              appendLog('orchestration', 'session.deleted transition error', e);
-            }
+          if (up.ok && up.alias && orchestrationLayer) {
+            orchestrationLayer.engine.applyLifecycleEvent(up.alias, 'failed');
+          }
+          taskDiag({
+            t: 'task',
+            session: sessionId.slice(0, 20),
+            alias: up.alias,
+            event: 'task_failed',
+            status: 'failed',
+            lastActivityAt: Date.now(),
+          });
+        } else if (e.type === 'message.part.updated') {
+          // 原生 task part 明确失败/取消结局：按父 session + 调用精确映射。
+          // 关联优先 (parent, part.callID)；兼容已登记 (parent, part.id)（宿主 subtask 失败路径
+          // 用 part.id 作调用标识，后续错误 part.callID 可能不同）。两键分别命中不同 alias → 拒绝歧义不猜。
+          // 仅对已登记的确切 part id 回退，不建立任意错误关联。
+          // part.completed 不代表子会话完成（后台调用返回即 completed），交 idle+证据收尾。
+          const part = props?.part as Record<string, unknown> | undefined;
+          if (!part || part.type !== 'tool' || part.tool !== 'task') return;
+          const pstate = part.state as Record<string, unknown> | undefined;
+          const pstatus = pstate?.status;
+          if (pstatus !== 'error' && pstatus !== 'cancelled') return; // 仅明确失败/取消结局
+          const parentSessionID = typeof part.sessionID === 'string' ? part.sessionID : undefined;
+          if (!parentSessionID) return; // 缺 sessionID 不关联
+          const partCallID = typeof part.callID === 'string' ? part.callID : undefined;
+          const partID = typeof part.id === 'string' ? part.id : undefined;
+          const byCall = partCallID ? tracker.getJobByCall(parentSessionID, partCallID) : undefined;
+          const byId = partID ? tracker.getJobByCall(parentSessionID, partID) : undefined;
+          if (byCall && byId && byCall.alias !== byId.alias) return; // 歧义：两键命中不同 alias，拒绝不猜
+          const job = byCall ?? byId;
+          if (!job || job.status !== 'running') return; // 未知关联不回退；已终态幂等
+          const term = pstatus === 'cancelled' ? 'cancelled' : 'errored';
+          const up = tracker.finalizeByCall(parentSessionID, job.callID!, job.sessionId || undefined, term);
+          syncTrackerState(tracker.currentParentSessionId);
+          if (up.ok && up.alias && orchestrationLayer) {
+            orchestrationLayer.engine.applyLifecycleEvent(up.alias, term === 'cancelled' ? 'cancelled' : 'failed');
+          }
+          taskDiag({
+            t: 'task',
+            session: parentSessionID.slice(0, 20),
+            alias: up.ok ? up.alias : job.alias,
+            event: term === 'cancelled' ? 'task_cancelled' : 'task_failed',
+            status: term === 'cancelled' ? 'cancelled' : 'failed',
+            lastActivityAt: Date.now(),
+          });
+        } else if (e.type === 'session.status') {
+          if (!sessionId) return;
+          const status = props?.status as Record<string, unknown> | undefined;
+          // 宿主 retry：仅观测 attempt/next，不终结（重试中的临时错误不是最终结局）
+          if (status?.type === 'retry') {
+            taskDiag({
+              t: 'task',
+              session: sessionId.slice(0, 20),
+              event: 'retry_scheduled',
+              status: 'running',
+              retryAttempt: typeof status.attempt === 'number' ? status.attempt : undefined,
+              retryNextMs: typeof status.next === 'number' ? status.next - Date.now() : undefined,
+              lastActivityAt: Date.now(),
+            });
+            appendLog('event', `session.status retry 观测 (session=${sessionId.slice(0, 20)} attempt=${String(status.attempt)})`);
           }
         } else if (e.type === 'session.error') {
-          tracker.updateByChildSessionId(sessionId, 'errored');
-          syncTrackerState(tracker.currentParentSessionId);
-
-          // 新增：orchestration session.error 状态转换 + 自动重试
-          if (orchestrationLayer) {
-            try {
-              const job = tracker.getJobBySessionId(sessionId);
-              if (job) {
-                orchestrationLayer.engine.transition(job.alias, 'failed');
-                orchestrationLayer.scheduler.markFailed(job.alias);
-                // 自动重试
-                const task = orchestrationLayer.engine.getTask(job.alias);
-                if (task) {
-                  const decision = orchestrationLayer.retryMgr.decide(task, 'session error');
-                  if (decision === 'retry') {
-                    orchestrationLayer.engine.transition(job.alias, 'pending');
-                  }
-                }
-              }
-            } catch (e) {
-              appendLog('orchestration', 'session.error transition error', e);
-            }
+          // sessionID 缺失：不归给任何任务
+          if (!sessionId) {
+            appendSafeLog('event', 'session.error 缺少 sessionID，不关联任何任务', props?.error);
+            return;
           }
+          // 不凭 isRetryable 推断必成功：API 错误可能只是宿主重试中的临时错误，
+          // 保守仅观测不终结；最终结局由 session.deleted / idle+终态证据确认。
+          if (ctxDiag.enabled) {
+            const info = classifyRateLimit(props?.error);
+            taskDiag({
+              t: 'task',
+              session: sessionId.slice(0, 20),
+              event: 'rate_limit_detected',
+              status: 'running',
+              rateLimitKind: info.kind,
+              retryAfterMs: info.retryAfterMs,
+              lastActivityAt: Date.now(),
+            });
+          }
+          appendSafeLog('event', `session.error 仅观测不终结 (session=${sessionId.slice(0, 20)})`, props?.error);
         }
       } catch (err) {
-        appendLog('event', '事件处理失败', err);
+        appendSafeLog('event', '事件处理失败', err);
       }
     },
 

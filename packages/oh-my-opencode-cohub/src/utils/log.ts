@@ -12,6 +12,7 @@
 import * as os from 'os';
 import * as path from 'path';
 import { createLogger, type LogFn } from '../shared/log';
+import { classifyRateLimit } from '../orchestration/rate-limit';
 
 const LOG_DIR = path.join(os.homedir(), '.local', 'share', 'opencode', 'log');
 
@@ -24,3 +25,23 @@ export const appendLog: LogFn = createLogger({
   keepDays: 7,
   async: true,
 });
+
+/**
+ * 安全观测辅助：记录错误摘要而非原始错误对象。
+ *
+ * 原始 err 可能携带 SDK ApiError 的 responseBody / responseHeaders（含密钥），
+ * 若直接 `appendLog(tag, msg, err)` 会把敏感内容写入 ~/.local 日志。
+ * 本函数先用 classifyRateLimit 生成脱敏固定摘要（maskedMessage），
+ * 仅记录摘要文本，不把原始 err 传给底层 logger（避免 String(err)/err.stack 泄漏）。
+ *
+ * 用法（Wave4 接线）：
+ *   try { ... } catch (e) { appendSafeLog('orchestration', 'session.idle 处理失败', e); }
+ */
+export function appendSafeLog(tag: string, message: string, err?: unknown): void {
+  if (err === undefined) {
+    appendLog(tag, message);
+    return;
+  }
+  const { maskedMessage } = classifyRateLimit(err);
+  appendLog(tag, `${message} — ${maskedMessage}`);
+}

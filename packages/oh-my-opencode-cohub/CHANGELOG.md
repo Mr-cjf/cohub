@@ -1,4 +1,22 @@
 # CHANGELOG
+## [1.18.2] - 2026-10-16
+
+### 修复
+- **任务生命周期精确关联与真实收尾**：`tool.execute.before/after` 按 `(parentSessionID, callID)` 精确配对，消除共享别名回退；后台任务终态不再仅凭 `session.idle` 判定，需有界读取（`session.messages` limit=10）验证最新 assistant 明确结束/失败/取消才收尾，读失败/空/无终态信号/未知 finish 一律保持 running，不假成功
+  - 复用子会话：已结束历史不阻碍唯一活动归属，按调用精确终结；消息时间晚于本轮调用开始的新鲜度边界防止旧完成消息抢新调用
+  - 宿主 promotion：after 原生 metadata `background:true` 精确升级后台任务（不从输出文本推断）；首次 child 绑定前的早到 idle 由 after 绑定后补一次有界核验兜底
+  - 原生 subtask 失败路径：after 结果 `undefined` 不再被当作成功，保留 running/unknown 等原生精确终态；`message.part.updated` 关联优先 `(parent, part.callID)`、兼容已登记 `(parent, part.id)`，两键命中不同 alias 拒绝歧义
+  - 精确取消与质量回写：`close_job` 真实取消经第 4 回调同步内部状态并精确刷新父会话；质量回写按调用快照复核，不再按子会话首条匹配旧历史
+  - 内部状态机诚实镜像原生 task 生命周期，不激活自动调度/自动重试；重复注册用预检避免异常路径
+
+### 新增
+- 上下文读取 `summaryReadMode` 支持 `bounded`（默认）与 `full` 可选：`bounded` 按预算读取，每文件正文窗口硬上限 1 MiB，另读 4 字节 lookahead，超限保守截断；UTF-8 安全仅指读取窗口边界；`full` 可显式回退
+- 限流/网络错误分类器（rate_limit / retryable_network / other，仅信息透传不控制原生重试）与 opt-in 任务生命周期诊断（默认关闭，字段白名单与长度截断；分类摘要不携带原始错误正文或 headers）
+- 编排提示词按需增量取证与分批软策略，替代无预算的批量整读
+
+### 测试
+- 新增集成回归（隔离 HOME 子进程）覆盖：并发乱序精确配对、复用收尾/歧义、宿主 promotion、早到 idle 补核验、after undefined、part.id 兼容关联、取消与质量写回、finish 中间轮/未知值/不成功结局分类、diag 默认关闭与开启结构化记录；tracker 侧固定种子随机序列与精确 callID 命中不变量保留
+
 ## [1.18.1] - 2026-10-16
 
 ### 修复

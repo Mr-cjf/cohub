@@ -45,6 +45,12 @@ export interface ContextConfig {
   dependencyPropagation: boolean;
   /** LLM 摘要最大 token 数 */
   summarizeMaxTokens: number;
+  /**
+   * summary 文件正文读取模式（可选，缺省即 'bounded'）：
+   * - 'bounded'：按 token 预算推导字节上限有界读取（默认，注入结果与全量读+截断等价，读取成本大幅下降）；
+   * - 'full'：保留旧行为——全量 readFileSync 后再按预算截断（保守选项，可关闭激进裁剪）。
+   */
+  summaryReadMode?: 'bounded' | 'full';
   /** 从父 session 中扫描最近多少条消息 */
   relevantMessageWindow: number;
   /** 错误列表总字符上限 */
@@ -74,6 +80,7 @@ export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
   maxDependencies: 8,
   dependencyPropagation: true,
   summarizeMaxTokens: 2000,
+  summaryReadMode: 'bounded',
   relevantMessageWindow: 20,
   maxErrorTotalChars: 600,
   dependencyKeyOutputChars: 200,

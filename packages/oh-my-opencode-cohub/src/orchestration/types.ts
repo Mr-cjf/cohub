@@ -49,6 +49,20 @@ export function validateTransition(from: TaskState, to: TaskState): void {
   }
 }
 
+/**
+ * 生命周期事件安全适配入口（applyLifecycleEvent）的结果：
+ * - applied：事件正常应用（状态已推进）；
+ * - idempotent：目标状态已达成（重复终态/重复状态），零副作用；
+ * - unknown-task：alias 未注册，安全 no-op（不抛错、不影响其他任务）；
+ * - invalid-transition：矛盾/非法转换，状态不被篡改（安全入口不抛错，供事件适配）。
+ */
+export type LifecycleReason = 'applied' | 'idempotent' | 'unknown-task' | 'invalid-transition';
+
+export interface LifecycleResult {
+  ok: boolean;
+  reason: LifecycleReason;
+}
+
 // ====== RetryPolicy ======
 
 export interface RetryPolicy {

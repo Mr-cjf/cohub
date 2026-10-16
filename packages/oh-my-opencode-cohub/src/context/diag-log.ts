@@ -18,11 +18,18 @@
  *   仅在「自上次压缩以来累计写入 > MAX_BYTES」时触发一次压缩，且压缩**只读文件尾部窗口**
  *   （不读全文），压缩后计数器归零 → 需要再累积 MAX_BYTES 才会再次压缩，循环被消除。
  * - 文件创建时使用 mode 0o600（POSIX 收紧权限；Windows 上为 no-op）。
+ *
+ * 任务生命周期诊断（Wave3 扩展）：
+ * - 新增 `appendTaskDiag(record, filePath)`：最小 task 诊断 record（白名单收窄，
+ *   支持 call 关联 / event / duration / lastActivityAt / 宿主 retry / 限流 kind /
+ *   注入预算估算），复用本文件同一异步串行队列与压缩/权限机制，不另建日志系统。
+ * - 关闭路径零新增 I/O：调用方须用 `ctxDiag.enabled` 门控（与 appendCtxDiag 一致）。
  */
 
 import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { RateLimitKind } from '../orchestration/rate-limit';
 
 /** 触发压缩的累计写入字节阈值（不同于旧的「当前文件 50KB」判定） */
 const MAX_BYTES = 256 * 1024;
@@ -167,4 +174,122 @@ export const CTX_DIAG_LIMITS = { MAX_BYTES, KEEP_LINES, TAIL_WINDOW } as const;
 /** 诊断日志目录（供排查指引使用） */
 export function ctxDiagDir(filePath?: string): string {
   return path.dirname(filePath ?? resolveCtxDiagPath());
+}
+
+// ============================================================
+// 任务生命周期诊断（最小 record，白名单收窄，复用同一串行队列）
+// ============================================================
+//
+// 与上下文注入诊断（appendCtxDiag）共用同一队列/压缩/0600/静默失败机制，
+// 不另建独立日志系统。关闭路径：调用方先用 `ctxDiag.enabled` 门控，
+// 不调用则零新增 I/O（本模块自身不做开关判断，与 appendCtxDiag 风格一致）。
+//
+// Wave4 index.ts 接线例：
+//   const ctxDiag = resolveCtxDiagSettings(userConfig.diag);   // 已有
+//   if (ctxDiag.enabled) {
+//     const info = classifyRateLimit(e);
+//     appendTaskDiag({
+//       t: 'task',
+//       callID: `${input.sessionID ?? ''}:${callId}`,
+//       session: input.sessionID?.slice(0, 20),
+//       event: 'rate_limit_detected',
+//       status: job?.state,
+//       retryAttempt: task?.retryCount,
+//       retryAfterMs: info.retryAfterMs,
+//       rateLimitKind: info.kind,
+//       lastActivityAt: Date.now(),
+//     }, ctxDiag.filePath);
+//   }
+
+/** 建议的任务生命周期事件值（record 白名单以字段为准，值仅作约定） */
+export type TaskDiagEvent =
+  | 'task_started'
+  | 'task_completed'
+  | 'task_failed'
+  | 'task_cancelled'
+  | 'retry_scheduled'
+  | 'rate_limit_detected'
+  | 'state_changed';
+
+/**
+ * 任务诊断最小 record（白名单字段；调用方只允许传这些键，
+ * 未知字段会在 sanitize 时被丢弃——天然阻断 apiKey/body/headers 等敏感内容）。
+ */
+export interface TaskDiagRecord {
+  /** 记录类型标记：task 诊断（区别于上下文注入诊断） */
+  t: 'task';
+  /** 调用关联标识（如 `(parentSessionID, callID)` 组合串） */
+  callID?: string;
+  /** 会话 ID（建议调用方传入截断值） */
+  session?: string;
+  /** 任务 alias */
+  alias?: string;
+  /** 生命周期事件（见 TaskDiagEvent 约定值） */
+  event?: string;
+  /** 引擎侧任务状态 */
+  status?: string;
+  /** 任务耗时（毫秒） */
+  durationMs?: number;
+  /** 最近活动时间戳（调用方传 Date.now()，不新增轮询 timer） */
+  lastActivityAt?: number;
+  /** 宿主重试尝试次数 */
+  retryAttempt?: number;
+  /** 宿主计划下次重试的等待毫秒 */
+  retryNextMs?: number;
+  /** 限流分类（classifyRateLimit 的 kind） */
+  rateLimitKind?: RateLimitKind;
+  /** 服务端 Retry-After 毫秒 */
+  retryAfterMs?: number;
+  /** 注入预算估算（字符数，仅必要元数据） */
+  budgetChars?: number;
+  /** 注入预算估算（token 数，仅必要元数据） */
+  budgetTokens?: number;
+}
+
+/** 单值长度上限：防超长输入撑爆日志文件 */
+const TASK_DIAG_STRING_MAX = 64;
+
+const TASK_DIAG_STRING_KEYS = ['callID', 'session', 'alias', 'event', 'status'] as const;
+const TASK_DIAG_NUMBER_KEYS = [
+  'durationMs',
+  'lastActivityAt',
+  'retryAttempt',
+  'retryNextMs',
+  'retryAfterMs',
+  'budgetChars',
+  'budgetTokens',
+] as const;
+
+/** 白名单收窄：只保留允许字段并做类型/长度校验；非对象输入返回 null */
+export function sanitizeTaskDiagRecord(input: unknown): TaskDiagRecord | null {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return null;
+  const src = input as Record<string, unknown>;
+  const out: TaskDiagRecord = { t: 'task' };
+
+  for (const key of TASK_DIAG_STRING_KEYS) {
+    const v = src[key];
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (trimmed !== '') out[key] = trimmed.slice(0, TASK_DIAG_STRING_MAX);
+    }
+  }
+  for (const key of TASK_DIAG_NUMBER_KEYS) {
+    const v = src[key];
+    if (typeof v === 'number' && Number.isFinite(v)) out[key] = v;
+  }
+  const kind = src['rateLimitKind'];
+  if (kind === 'rate_limit' || kind === 'retryable_network' || kind === 'other') {
+    out.rateLimitKind = kind;
+  }
+  return out;
+}
+
+/**
+ * 追加一条任务生命周期诊断（异步串行，失败静默，复用 ctxDiag 队列）。
+ * 调用方须先判断 `settings.enabled`；无效输入直接返回（零 I/O）。
+ */
+export function appendTaskDiag(record: unknown, filePath: string): void {
+  const safe = sanitizeTaskDiagRecord(record);
+  if (!safe) return;
+  appendCtxDiag(safe, filePath);
 }

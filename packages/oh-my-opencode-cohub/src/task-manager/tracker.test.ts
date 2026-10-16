@@ -1,7 +1,7 @@
 // src/task-manager/tracker.test.ts
 // 验证"关闭卡住子代理"相关能力：abortJob 定位/幂等/状态守卫、cleanupStaleJobs 超时清理
 
-import type { JobRecord } from './types';
+import type { JobRecord, TaskStatus } from './types';
 import { TaskTracker } from './tracker';
 
 // ---- 最小化 bun:test 全局声明 ----
@@ -16,7 +16,7 @@ interface ExpectResult {
   readonly not: Omit<ExpectResult, 'not'>;
 }
 declare function describe(name: string, fn: () => void): void;
-declare function test(name: string, fn: () => void): void;
+declare function test(name: string, fn: () => void, timeout?: number): void;
 declare function expect(actual: unknown): ExpectResult;
 
 /** 访问 TaskTracker 私有字段 jobs（仅测试用，绕过 private 可见性检查） */
@@ -429,5 +429,1039 @@ describe('getBoardText 空值/非法值不回退全局（缺陷回归）', () =>
     setupAB(tracker);
     // 保持 receiver 的方法调用 + 类型断言模拟运行时传入 123
     expect(tracker.getBoardText(123 as unknown as string)).toBe('');
+  });
+});
+
+// ===== Wave1 回归补充：updateAfterTask / updateByChildSessionId 无匹配绝不改动 =====
+// 背景：后续将改为 (parentSessionID, callID) 精确关联 alias 与 childSessionID。
+// 当前公开签名 updateAfterTask(parent, status, sessionId?) 无法表达"更新哪一次调用"，
+// callID 关联缺陷场景由 src/index.test.ts 的 hook 集成用例覆盖（RED，预期失败）。
+// 本组用例聚焦当前签名可表达的防回归底线（既有通过 GREEN）：
+//   无匹配（未知 parent / 无 running job / 未知 sessionId / 未知 id）绝不改动任何 job；
+//   前台 after 终结 + 绑定 childSessionId；后台 after 仅绑定不终结；重复 after 幂等。
+
+describe('updateAfterTask 基础行为与无匹配守卫（既有通过）', () => {
+  test('前台任务 after：状态终结、绑定 childSessionId、标记 reconciled', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', {
+      subagent_type: 'co-fixer',
+      description: '前台任务',
+      background: false,
+    });
+
+    tracker.updateAfterTask('A', 'completed', 'ses_x');
+
+    const job = getJobs(tracker).get(alias)!;
+    expect(job.status).toBe('completed');
+    expect(job.sessionId).toBe('ses_x');
+    expect(job.terminalReconciled).toBe(true);
+  });
+
+  test('后台任务 after：仅绑定 childSessionId、保持 running 待 event 终结', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', {
+      subagent_type: 'co-fixer',
+      description: '后台任务',
+      background: true,
+    });
+
+    tracker.updateAfterTask('A', 'completed', 'ses_x');
+
+    const job = getJobs(tracker).get(alias)!;
+    expect(job.status).toBe('running');
+    expect(job.sessionId).toBe('ses_x');
+  });
+
+  test('未知 parent 的 after：不修改任何 job', () => {
+    const tracker = new TaskTracker();
+    const aliasA = tracker.registerBeforeTask('A', {
+      subagent_type: 'co-fixer',
+      description: 'A 任务',
+      background: false,
+    });
+    const jobA = getJobs(tracker).get(aliasA)!;
+
+    tracker.updateAfterTask('no-such-parent', 'completed', 'ses_x');
+
+    expect(jobA.status).toBe('running');
+    expect(jobA.sessionId).toBe('');
+  });
+
+  test('parent 下无 running job 的 after：不修改任何 job（含其他 parent 的活跃任务）', () => {
+    const tracker = new TaskTracker();
+    // A 的 job 已终结；B 的 job 仍运行
+    const aliasA = tracker.registerBeforeTask('A', {
+      subagent_type: 'co-fixer',
+      description: 'A 前台',
+      background: false,
+    });
+    const aliasB = tracker.registerBeforeTask('B', {
+      subagent_type: 'co-fixer',
+      description: 'B 后台',
+      background: true,
+    });
+    tracker.updateAfterTask('A', 'completed', 'ses_a');
+    const jobA = getJobs(tracker).get(aliasA)!;
+    const jobB = getJobs(tracker).get(aliasB)!;
+    const bBefore = { status: jobB.status, sessionId: jobB.sessionId };
+
+    // A 已无 running：再次 after(A) 不得误伤 A 的终态 job，也不得触碰 B 的活跃 job
+    tracker.updateAfterTask('A', 'completed', 'ses_a2');
+
+    expect(jobA.status).toBe('completed');
+    expect(jobA.sessionId).toBe('ses_a');
+    expect(jobB.status).toBe(bBefore.status);
+    expect(jobB.sessionId).toBe(bBefore.sessionId);
+  });
+
+  test('重复 after 幂等：已终结前台任务二次 after 不改写状态与 sessionId', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', {
+      subagent_type: 'co-fixer',
+      description: '前台任务',
+      background: false,
+    });
+    tracker.updateAfterTask('A', 'completed', 'ses_x');
+    const job = getJobs(tracker).get(alias)!;
+
+    tracker.updateAfterTask('A', 'completed', 'ses_y');
+
+    expect(job.status).toBe('completed');
+    expect(job.sessionId).toBe('ses_x');
+  });
+});
+
+describe('updateByChildSessionId 精确匹配守卫（既有通过）', () => {
+  test('未知 sessionId：不修改任何 job', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', {
+      subagent_type: 'co-fixer',
+      description: '后台任务',
+      task_id: 'ses_known',
+      background: true,
+    });
+    const job = getJobs(tracker).get(alias)!;
+
+    tracker.updateByChildSessionId('ses_unknown', 'completed');
+
+    expect(job.status).toBe('running');
+    expect(job.terminalReconciled).toBe(false);
+  });
+
+  test('前台 job（非 background）即使 sessionId 命中也不被 event 终结', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', {
+      subagent_type: 'co-fixer',
+      description: '前台任务',
+      task_id: 'ses_fg',
+      background: false,
+    });
+    const job = getJobs(tracker).get(alias)!;
+
+    tracker.updateByChildSessionId('ses_fg', 'completed');
+
+    // 守卫要求 background && running：前台任务不经 event 终结
+    expect(job.status).toBe('running');
+  });
+});
+
+describe('固定种子随机事件序列：无匹配调用绝不改动任何 job（隔离/幂等不变式）', () => {
+  // 用固定种子（mulberry32，seed=20241016）生成 1000 组事件序列，每组在独立
+  // TaskTracker 上执行。对每步"可能改写"的调用做调用前后快照对比，断言不变式：
+  //   I1 updateAfterTask：变化的 job ⊆ 该 parent 下 running 集合（无 running → 零变化）
+  //   I2 updateByChildSessionId：变化的 job ⊆ sessionId 精确匹配的 background running 集合
+  //   I3 abortJob / markCancelled：变化的 job ⊆ alias/sessionId 精确匹配集合；未知 → 零变化
+  // 这些不变式是 (parentSessionID, callID) 精确关联改造后也必须保持的防回归底线。
+  // 低开销：每序列 5-15 步、job 数个，1000 组纯内存运行，不启动模型/网络/宿主任务。
+  // ⚠️ 与既有 tracker.test.ts 一致：终态路径会触发 persistStats() 写 STATS_FILE
+  //（真实 home，既有 abortJob/cleanupStaleJobs 用例已建立该行为），本组不新增路径。
+  function mulberry32(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  interface JobSnap {
+    status: TaskStatus;
+    sessionId: string;
+    terminalReconciled: boolean;
+  }
+
+  function snapshot(tracker: TaskTracker): Map<string, JobSnap> {
+    const out = new Map<string, JobSnap>();
+    for (const [alias, job] of getJobs(tracker)) {
+      out.set(alias, { status: job.status, sessionId: job.sessionId, terminalReconciled: job.terminalReconciled });
+    }
+    return out;
+  }
+
+  function changedAliases(before: Map<string, JobSnap>, after: Map<string, JobSnap>): string[] {
+    const out: string[] = [];
+    for (const [alias, st] of after) {
+      const prev = before.get(alias);
+      if (!prev || prev.status !== st.status || prev.sessionId !== st.sessionId || prev.terminalReconciled !== st.terminalReconciled) {
+        out.push(alias);
+      }
+    }
+    for (const alias of before.keys()) {
+      if (!after.has(alias)) out.push(alias);
+    }
+    return out;
+  }
+
+  test('1000 组固定种子序列全部满足无匹配不改不变式', () => {
+    const rand = mulberry32(20241016);
+    const parents = ['A', 'B', 'C'];
+    const knownSessions: string[] = [];
+    let executed = 0;
+
+    for (let seq = 0; seq < 1000; seq++) {
+      const tracker = new TaskTracker();
+      const steps = 5 + Math.floor(rand() * 11); // 5-15 步
+      const log: string[] = [];
+
+      for (let s = 0; s < steps; s++) {
+        const parent = parents[Math.floor(rand() * parents.length)];
+        const op = Math.floor(rand() * 5);
+
+        if (op === 0) {
+          // registerBeforeTask：只新增 job，不做快照对比（允许新建/同 parent reconcile）
+          const bg = rand() < 0.5;
+          const taskId = rand() < 0.5 ? 'ses_r' + seq + '_' + s : undefined;
+          tracker.registerBeforeTask(parent, {
+            subagent_type: 'co-fixer',
+            description: '任务' + seq + '-' + s,
+            ...(taskId ? { task_id: taskId } : {}),
+            background: bg,
+          });
+          if (taskId) knownSessions.push(taskId);
+          log.push('register(' + parent + ',bg=' + bg + ')');
+          continue;
+        }
+
+        if (op === 1) {
+          // I1 updateAfterTask
+          const allowed = new Set<string>();
+          for (const job of getJobs(tracker).values()) {
+            if (job.parentSessionId === parent && job.status === 'running') allowed.add(job.alias);
+          }
+          const before = snapshot(tracker);
+          tracker.updateAfterTask(parent, 'completed', rand() < 0.5 ? 'ses_e' + seq + '_' + s : undefined);
+          const diff = changedAliases(before, snapshot(tracker));
+          if (!diff.every((a) => allowed.has(a))) {
+            throw new Error(
+              'I1 违反（seq=' + seq + ' step=' + s + '）: diff=' + JSON.stringify(diff) +
+              ' allowed=' + JSON.stringify([...allowed]) + '\n序列: ' + log.join(' | ') + ' | afterTask(' + parent + ')',
+            );
+          }
+          log.push('afterTask(' + parent + ')');
+          continue;
+        }
+
+        if (op === 2) {
+          // I2 updateByChildSessionId：优先命中已知 session，其余未知
+          const sid = knownSessions.length > 0 && rand() < 0.6
+            ? knownSessions[Math.floor(rand() * knownSessions.length)]
+            : 'ses_unknown_' + seq + '_' + s;
+          const allowed = new Set<string>();
+          for (const job of getJobs(tracker).values()) {
+            if (job.sessionId === sid && job.background && job.status === 'running') allowed.add(job.alias);
+          }
+          const before = snapshot(tracker);
+          tracker.updateByChildSessionId(sid, 'completed');
+          const diff = changedAliases(before, snapshot(tracker));
+          if (!diff.every((a) => allowed.has(a))) {
+            throw new Error(
+              'I2 违反（seq=' + seq + ' step=' + s + '）: diff=' + JSON.stringify(diff) +
+              ' allowed=' + JSON.stringify([...allowed]) + ' sid=' + sid + '\n序列: ' + log.join(' | ') + ' | childIdle(' + sid + ')',
+            );
+          }
+          log.push('childIdle(' + sid + ')');
+          continue;
+        }
+
+        // op 3/4：I3 abortJob / markCancelled
+        const aliasList = [...getJobs(tracker).keys()];
+        const knownIds = [...knownSessions, ...aliasList];
+        const id = knownIds.length > 0 && rand() < 0.6
+          ? knownIds[Math.floor(rand() * knownIds.length)]
+          : 'no-such-id_' + seq + '_' + s;
+        const allowed = new Set<string>();
+        for (const [alias, job] of getJobs(tracker)) {
+          if (alias === id || job.sessionId === id) allowed.add(alias);
+        }
+        const before = snapshot(tracker);
+        if (op === 3) tracker.abortJob(id);
+        else tracker.markCancelled(id);
+        const diff = changedAliases(before, snapshot(tracker));
+        if (!diff.every((a) => allowed.has(a))) {
+          throw new Error(
+            (op === 3 ? 'I3a' : 'I3b') + ' 违反（seq=' + seq + ' step=' + s + '）: diff=' + JSON.stringify(diff) +
+            ' allowed=' + JSON.stringify([...allowed]) + ' id=' + id + '\n序列: ' + log.join(' | ') + ' | ' + (op === 3 ? 'abort(' : 'cancel(') + id + ')',
+          );
+        }
+        log.push((op === 3 ? 'abort(' : 'cancel(') + id + ')');
+      }
+      executed++;
+    }
+
+    expect(executed).toBe(1000);
+  }, 20_000); // 重型 1000 组固定种子用例：显式合理 timeout（同步 stats 写盘 + 大序列），不全局放宽
+});
+
+// ===== Wave3 回归补充：精确关联 (parentSessionID, callID) =====
+// registerBeforeTask 第三参 callID 建立 (parent, callID) → alias 精确索引；
+// updateAfterTaskByCall / updateByAlias 按调用精确更新；noteChildSessionIdle 观测不终结；
+// legacy updateAfterTask 只允许无歧义单一匹配；updateByChildSessionId 复用歧义 no-op。
+// 本组测试全部为既有实现应满足的目标行为（Wave4 接线后 index 集成用例转绿）。
+
+describe('精确关联 (parentSessionID, callID)：命中具体 alias、不串任务', () => {
+  function snapJob(job: JobRecord) {
+    return { status: job.status, sessionId: job.sessionId, terminalReconciled: job.terminalReconciled };
+  }
+
+  test('注册带 callID：getJobByCall 精确命中；重复注册同 (parent,callID) 幂等返回原 alias', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', {
+      subagent_type: 'co-fixer',
+      description: '任务X',
+      background: true,
+    }, 'call-1');
+    expect(tracker.getJobByCall('A', 'call-1')?.alias).toBe(alias);
+    // 跨 parent 同名 callID 不命中
+    expect(tracker.getJobByCall('B', 'call-1')).toBeUndefined();
+    expect(tracker.getJobByCall('A', 'call-other')).toBeUndefined();
+
+    // 重复注册同 (parent, callID)：返回原 alias、不新建 job、不覆盖状态
+    const alias2 = tracker.registerBeforeTask('A', {
+      subagent_type: 'co-fixer',
+      description: '任务X2',
+      background: true,
+    }, 'call-1');
+    expect(alias2).toBe(alias);
+    expect(getJobs(tracker).size).toBe(1);
+  });
+
+  test('同 parent 并发乱序：updateAfterTaskByCall 各自命中具体 alias、互不串扰', () => {
+    const tracker = new TaskTracker();
+    const alias1 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '任务X', background: true }, 'call-1');
+    const alias2 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '任务Y', background: true }, 'call-2');
+    // 乱序结束：先 call2 后 call1
+    const r2 = tracker.updateAfterTaskByCall('A', 'call-2', 'completed', 'ses_y');
+    expect(r2.ok).toBe(true);
+    expect(r2.alias).toBe(alias2);
+    const r1 = tracker.updateAfterTaskByCall('A', 'call-1', 'completed', 'ses_x');
+    expect(r1.ok).toBe(true);
+    expect(r1.alias).toBe(alias1);
+
+    const j1 = getJobs(tracker).get(alias1)!;
+    const j2 = getJobs(tracker).get(alias2)!;
+    expect(j1.sessionId).toBe('ses_x');
+    expect(j2.sessionId).toBe('ses_y');
+    // 后台 after 只绑定不终结
+    expect(j1.status).toBe('running');
+    expect(j2.status).toBe('running');
+  });
+
+  test('跨 parent 同 callID：更新 A 的调用不触碰 B 的 job', () => {
+    const tracker = new TaskTracker();
+    const aliasA = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'A', background: true }, 'shared');
+    const aliasB = tracker.registerBeforeTask('B', { subagent_type: 'co-fixer', description: 'B', background: true }, 'shared');
+    const r = tracker.updateAfterTaskByCall('A', 'shared', 'completed', 'ses_a');
+    expect(r.alias).toBe(aliasA);
+    expect(getJobs(tracker).get(aliasA)!.sessionId).toBe('ses_a');
+    expect(getJobs(tracker).get(aliasB)!.sessionId).toBe('');
+    expect(getJobs(tracker).get(aliasB)!.status).toBe('running');
+  });
+
+  test('未知 callID：updateAfterTaskByCall 安全 no-op、不猜最近任务', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '任务X', background: true }, 'call-1');
+    const before = snapJob(getJobs(tracker).get(alias)!);
+
+    const r = tracker.updateAfterTaskByCall('A', 'call-never-registered', 'completed', 'ses_unk');
+
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('no-match');
+    const after = snapJob(getJobs(tracker).get(alias)!);
+    expect(after.status).toBe(before.status);
+    expect(after.sessionId).toBe(before.sessionId);
+  });
+
+  test('前台 after 终结 + 重复 after 幂等：终态不回归、sessionId 不覆盖', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '任务X', background: false }, 'call-1');
+
+    const r1 = tracker.updateAfterTaskByCall('A', 'call-1', 'completed', 'ses_f');
+    expect(r1.ok).toBe(true);
+    expect(r1.alias).toBe(alias);
+    const job = getJobs(tracker).get(alias)!;
+    expect(job.status).toBe('completed');
+    expect(job.sessionId).toBe('ses_f');
+
+    // 重复 after：幂等 no-op，不覆盖原终态/原 sessionId
+    const r2 = tracker.updateAfterTaskByCall('A', 'call-1', 'completed', 'ses_f2');
+    expect(r2.ok).toBe(true);
+    expect(r2.reason).toBe('idempotent');
+    expect(job.status).toBe('completed');
+    expect(job.sessionId).toBe('ses_f');
+  });
+
+  test('后台 after 只绑定不终结；同调用重复 after 幂等不重复改写', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '任务X', background: true }, 'call-1');
+
+    tracker.updateAfterTaskByCall('A', 'call-1', 'completed', 'ses_b');
+    const job = getJobs(tracker).get(alias)!;
+    expect(job.status).toBe('running');
+    expect(job.sessionId).toBe('ses_b');
+
+    tracker.updateAfterTaskByCall('A', 'call-1', 'completed', 'ses_b');
+    expect(job.status).toBe('running');
+    expect(job.sessionId).toBe('ses_b');
+  });
+
+  test('legacy updateAfterTask 歧义守卫：同 parent 多个 running 时 no-op、不猜最近', () => {
+    const tracker = new TaskTracker();
+    const alias1 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', background: true });
+    const alias2 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'Y', background: true });
+
+    const r = tracker.updateAfterTask('A', 'completed', 'ses_x');
+
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('ambiguous');
+    expect(getJobs(tracker).get(alias1)!.sessionId).toBe('');
+    expect(getJobs(tracker).get(alias2)!.sessionId).toBe('');
+    expect(getJobs(tracker).get(alias1)!.status).toBe('running');
+    expect(getJobs(tracker).get(alias2)!.status).toBe('running');
+  });
+
+  test('child 会话复用：同一 sessionId 关联多个调用时 idle 归属不明 → no-op 不批量终结', () => {
+    const tracker = new TaskTracker();
+    // 旧调用完成：后台 after 只绑定 childID（updateAfterTaskByCall 对后台仅绑定不终结，
+    // 已批准契约），明确收尾必须经 finalizeByCall（Wave4.1 专用 API）落真实终态
+    const alias1 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '旧调用', task_id: 'ses_reuse', background: true }, 'call-1');
+    tracker.updateAfterTaskByCall('A', 'call-1', 'completed', 'ses_reuse'); // 仅绑定 ses_reuse
+    tracker.finalizeByCall('A', 'call-1', 'ses_reuse', 'completed'); // 旧调用落真实终态（成为历史）
+    const alias2 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '新调用', task_id: 'ses_reuse', background: true }, 'call-2');
+    const j2 = getJobs(tracker).get(alias2)!;
+
+    // session.idle(ses_reuse)：复用历史归属不明 → 安全 no-op
+    const idle = tracker.noteChildSessionIdle('ses_reuse');
+
+    expect(idle.ok).toBe(false);
+    expect(idle.reason).toBe('ambiguous');
+    expect(j2.status).toBe('running'); // 新调用不被旧 idle 终结
+    expect(getJobs(tracker).get(alias1)!.status).toBe('completed'); // 旧终态不回归
+  });
+
+  test('noteChildSessionIdle：唯一运行关联时仅观测不终结（idle 不是成功证据）', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '任务X', task_id: 'ses_b1', background: true }, 'call-1');
+    tracker.updateAfterTaskByCall('A', 'call-1', 'completed', 'ses_b1');
+
+    const r = tracker.noteChildSessionIdle('ses_b1');
+
+    expect(r.ok).toBe(true);
+    expect(r.reason).toBe('observed');
+    expect(r.alias).toBe(alias);
+    expect(getJobs(tracker).get(alias)!.status).toBe('running'); // 不终结
+  });
+
+  test('updateByAlias 未知 alias 安全 no-op', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', background: true }, 'call-1');
+    const before = snapJob(getJobs(tracker).get(alias)!);
+
+    const r = tracker.updateByAlias('no-such-alias', 'completed', 'ses_x');
+
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('no-match');
+    expect(getJobs(tracker).get(alias)!.status).toBe(before.status);
+  });
+
+  test('pruneTerminalJobs 同步移除 callIndex 关联', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', background: false }, 'call-1');
+    tracker.updateAfterTaskByCall('A', 'call-1', 'completed', 'ses_x');
+    const job = getJobs(tracker).get(alias)!;
+    job.terminalReconciled = true;
+    job.createdAt = Date.now() - 100_000;
+
+    const count = tracker.pruneTerminalJobs(60_000);
+
+    expect(count).toBe(1);
+    expect(tracker.getJobByCall('A', 'call-1')).toBeUndefined();
+  });
+});
+
+describe('固定种子随机事件序列（精确 callID）：命中必须落在具体 alias', () => {
+  // 通过新精确 API（registerBeforeTask 带 callID + updateAfterTaskByCall + updateByAlias +
+  // noteChildSessionIdle）验证 1000 组固定种子（seed=20241017）事件序列。断言强度高于
+  // 旧的"⊆ 同 parent running 集合"不变量——每次命中必须精确等于注册时返回的 alias：
+  //   P1  updateAfterTaskByCall 命中：变更集合 === {该 call 的 alias}（或零变更幂等）；
+  //       未命中：零变更、返回 no-match（绝不猜最近）。
+  //   P2  updateByAlias：只影响自身 alias。
+  //   P3  noteChildSessionIdle：永不终结任何 job（零变更）、观测返回具体 alias。
+  //   P4  重复注册同 (parent, callID)：幂等返回原 alias、不新建 job。
+  // 低开销：每序列 8-20 步、job 数个，1000 组纯内存运行，不启动模型/网络/宿主任务。
+  function mulberry32(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  interface JobSnap {
+    status: TaskStatus;
+    sessionId: string;
+    terminalReconciled: boolean;
+  }
+
+  function snapshot(tracker: TaskTracker): Map<string, JobSnap> {
+    const out = new Map<string, JobSnap>();
+    for (const [alias, job] of getJobs(tracker)) {
+      out.set(alias, { status: job.status, sessionId: job.sessionId, terminalReconciled: job.terminalReconciled });
+    }
+    return out;
+  }
+
+  function changedAliases(before: Map<string, JobSnap>, after: Map<string, JobSnap>): string[] {
+    const out: string[] = [];
+    for (const [alias, st] of after) {
+      const prev = before.get(alias);
+      if (!prev || prev.status !== st.status || prev.sessionId !== st.sessionId || prev.terminalReconciled !== st.terminalReconciled) {
+        out.push(alias);
+      }
+    }
+    for (const alias of before.keys()) {
+      if (!after.has(alias)) out.push(alias);
+    }
+    return out;
+  }
+
+  test('1000 组固定种子序列：精确 callID 命中不落错 alias、未知零变更', () => {
+    const rand = mulberry32(20241017);
+    const parents = ['A', 'B', 'C'];
+    interface Call { parent: string; callID: string; alias: string }
+    const localSessions: string[] = [];
+    let executed = 0;
+
+    for (let seq = 0; seq < 1000; seq++) {
+      const tracker = new TaskTracker();
+      const steps = 8 + Math.floor(rand() * 13); // 8-20 步
+      const log: string[] = [];
+      const localCalls: Call[] = [];
+
+      for (let s = 0; s < steps; s++) {
+        const parent = parents[Math.floor(rand() * parents.length)];
+        const op = Math.floor(rand() * 4);
+
+        if (op === 0) {
+          // register：20% 复用同 (parent, callID) 测幂等（P4），否则新 callID
+          let callID: string;
+          let reused = false;
+          if (localCalls.length > 0 && rand() < 0.2) {
+            const pick = localCalls[Math.floor(rand() * localCalls.length)];
+            callID = pick.callID;
+            reused = true;
+          } else {
+            callID = 'call-' + seq + '-' + s;
+          }
+          const bg = rand() < 0.5;
+          const taskId = rand() < 0.5 ? 'ses_c' + seq + '_' + s : undefined;
+          const alias = tracker.registerBeforeTask(parent, {
+            subagent_type: 'co-fixer',
+            description: '任务' + seq + '-' + s,
+            ...(taskId ? { task_id: taskId } : {}),
+            background: bg,
+          }, callID);
+          if (reused) {
+            const orig = localCalls.find((c) => c.parent === parent && c.callID === callID);
+            if (orig && alias !== orig.alias) {
+              throw new Error('P4 违反（seq=' + seq + ' step=' + s + '）: 重复注册返回新 alias ' + alias + ' ≠ ' + orig.alias + '\n序列: ' + log.join(' | '));
+            }
+          } else {
+            localCalls.push({ parent, callID, alias });
+            if (taskId) localSessions.push(taskId);
+          }
+          log.push('register(' + parent + ',' + callID + ')');
+          continue;
+        }
+
+        if (op === 1) {
+          // P1 updateAfterTaskByCall：60% 命中本地注册，40% 未知
+          const hit = localCalls.length > 0 && rand() < 0.6;
+          const call = hit
+            ? localCalls[Math.floor(rand() * localCalls.length)]
+            : { parent, callID: 'no-such-' + seq + '-' + s, alias: '' };
+          const sid = rand() < 0.5 ? 'ses_e' + seq + '_' + s : undefined;
+          const before = snapshot(tracker);
+          const r = tracker.updateAfterTaskByCall(call.parent, call.callID, 'completed', sid);
+          const diff = changedAliases(before, snapshot(tracker));
+
+          if (!hit) {
+            if (diff.length !== 0) {
+              throw new Error('P1a 违反（seq=' + seq + ' step=' + s + '）: 未知 call 变更了 ' + JSON.stringify(diff) + '\n序列: ' + log.join(' | '));
+            }
+            if (r.ok) {
+              throw new Error('P1b 违反（seq=' + seq + ' step=' + s + '）: 未知 call 应 no-match，实际 ' + r.reason + '\n序列: ' + log.join(' | '));
+            }
+          } else {
+            if (diff.length === 1) {
+              if (diff[0] !== call.alias) {
+                throw new Error('P1c 违反（seq=' + seq + ' step=' + s + '）: 命中落错 alias ' + diff[0] + ' ≠ ' + call.alias + '\n序列: ' + log.join(' | '));
+              }
+              if (r.alias !== call.alias) {
+                throw new Error('P1d 违反（seq=' + seq + ' step=' + s + '）: 返回值 alias ' + r.alias + ' ≠ ' + call.alias + '\n序列: ' + log.join(' | '));
+              }
+              if (!r.ok) {
+                throw new Error('P1e 违反（seq=' + seq + ' step=' + s + '）: 命中应 ok，实际 ' + r.reason + '\n序列: ' + log.join(' | '));
+              }
+            } else if (diff.length !== 0) {
+              throw new Error('P1f 违反（seq=' + seq + ' step=' + s + '）: 命中变更了多个 job ' + JSON.stringify(diff) + '\n序列: ' + log.join(' | '));
+            }
+            const byCall = tracker.getJobByCall(call.parent, call.callID);
+            if (!byCall || byCall.alias !== call.alias) {
+              throw new Error('P1g 违反（seq=' + seq + ' step=' + s + '）: getJobByCall 未命中注册 alias\n序列: ' + log.join(' | '));
+            }
+          }
+          log.push('afterByCall(' + call.parent + ',' + call.callID + ')');
+          continue;
+        }
+
+        if (op === 2) {
+          // P2 updateByAlias：只影响自身 alias
+          if (localCalls.length === 0) { log.push('(skip byAlias)'); continue; }
+          const call = localCalls[Math.floor(rand() * localCalls.length)];
+          const before = snapshot(tracker);
+          const r = tracker.updateByAlias(call.alias, 'completed', rand() < 0.5 ? 'ses_a' + seq + '_' + s : undefined);
+          const diff = changedAliases(before, snapshot(tracker));
+          if (diff.length === 1) {
+            if (diff[0] !== call.alias) {
+              throw new Error('P2a 违反（seq=' + seq + ' step=' + s + '）: updateByAlias 落错 alias ' + diff[0] + '\n序列: ' + log.join(' | '));
+            }
+            if (!r.ok) {
+              throw new Error('P2b 违反（seq=' + seq + ' step=' + s + '）: 命中应 ok，实际 ' + r.reason + '\n序列: ' + log.join(' | '));
+            }
+          } else if (diff.length !== 0) {
+            throw new Error('P2c 违反（seq=' + seq + ' step=' + s + '）: updateByAlias 影响多个 job ' + JSON.stringify(diff) + '\n序列: ' + log.join(' | '));
+          }
+          log.push('byAlias(' + call.alias + ')');
+          continue;
+        }
+
+        // op 3：P3 noteChildSessionIdle —— 永不终结（零变更）、观测返回具体 alias
+        const sid = localSessions.length > 0 && rand() < 0.6
+          ? localSessions[Math.floor(rand() * localSessions.length)]
+          : 'ses_noidle_' + seq + '_' + s;
+        const before = snapshot(tracker);
+        const r = tracker.noteChildSessionIdle(sid);
+        const diff = changedAliases(before, snapshot(tracker));
+        if (diff.length !== 0) {
+          throw new Error('P3a 违反（seq=' + seq + ' step=' + s + '）: idle 观测变更了 ' + JSON.stringify(diff) + '\n序列: ' + log.join(' | '));
+        }
+        if (r.ok && r.reason !== 'observed') {
+          throw new Error('P3b 违反（seq=' + seq + ' step=' + s + '）: 观测 reason 应为 observed，实际 ' + r.reason + '\n序列: ' + log.join(' | '));
+        }
+        if (!r.ok && r.reason !== 'no-match' && r.reason !== 'ambiguous') {
+          throw new Error('P3c 违反（seq=' + seq + ' step=' + s + '）: 未观测 reason 异常 ' + r.reason + '\n序列: ' + log.join(' | '));
+        }
+        log.push('childIdle(' + sid + ')');
+      }
+      executed++;
+    }
+
+    expect(executed).toBe(1000);
+  }, 20_000); // 重型 1000 组固定种子（精确 callID）用例：显式合理 timeout，不全局放宽、不去掉精确 alias 断言
+});
+
+// ===== Wave4.1 回归补充：复用后台任务安全收尾 =====
+// 阻塞修复：sessionId 一对多历史不再让唯一活动任务永远 ambiguous、永不收尾。
+// finalizeByCall 按 (parent, callID)+预期 childID 精确终结唯一 running job；
+// findActiveByChildSessionId 以"running 数"为唯一活动判定依据，已结束历史不计数。
+
+describe('findActiveByChildSessionId：唯一活动归属（历史不计数）', () => {
+  test('唯一 running → ok；含 completed 历史仍唯一 → ok（历史不影响）', () => {
+    const tracker = new TaskTracker();
+    // 旧调用已终结（completed 历史），共享同一 childID
+    const alias1 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '旧调用', task_id: 'ses_reuse', background: true }, 'call-1');
+    getJobs(tracker).get(alias1)!.status = 'completed';
+    getJobs(tracker).get(alias1)!.terminalReconciled = true;
+    // 新调用唯一 active
+    const alias2 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '新调用', task_id: 'ses_reuse', background: true }, 'call-2');
+
+    const r = tracker.findActiveByChildSessionId('ses_reuse');
+
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.job.alias).toBe(alias2);
+    expect(getJobs(tracker).get(alias1)!.status).toBe('completed');
+  });
+
+  test('两个 running 共享 childID → ambiguous（保守不选、零副作用）', () => {
+    const tracker = new TaskTracker();
+    tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', task_id: 'ses_dup', background: true }, 'call-1');
+    tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'Y', task_id: 'ses_dup', background: true }, 'call-2');
+
+    const r = tracker.findActiveByChildSessionId('ses_dup');
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('ambiguous');
+  });
+
+  test('无 running（未知或全部已终态）→ no-match', () => {
+    const tracker = new TaskTracker();
+    expect(tracker.findActiveByChildSessionId('ses_unknown').ok).toBe(false);
+
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', task_id: 'ses_done', background: true }, 'call-1');
+    getJobs(tracker).get(alias)!.status = 'cancelled';
+    const r = tracker.findActiveByChildSessionId('ses_done');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('no-match');
+  });
+});
+
+describe('finalizeByCall：精确终结唯一活动 job（复用收尾）', () => {
+  test('旧 completed 历史 + 唯一 active 复用：新鲜 stop 可收尾（历史不影响唯一活动）', () => {
+    const tracker = new TaskTracker();
+    // 旧调用已 completed（历史），共享 ses_reuse
+    const alias1 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '旧调用', task_id: 'ses_reuse', background: true }, 'call-1');
+    getJobs(tracker).get(alias1)!.status = 'completed';
+    getJobs(tracker).get(alias1)!.terminalReconciled = true;
+    // 新调用唯一 active
+    const alias2 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: '新调用', task_id: 'ses_reuse', background: true }, 'call-2');
+
+    const r = tracker.finalizeByCall('A', 'call-2', 'ses_reuse', 'completed');
+
+    expect(r.ok).toBe(true);
+    expect(r.reason).toBe('ok');
+    expect(r.alias).toBe(alias2);
+    const j2 = getJobs(tracker).get(alias2)!;
+    expect(j2.status).toBe('completed');
+    expect(j2.terminalReconciled).toBe(true);
+    // 旧历史不被改写
+    expect(getJobs(tracker).get(alias1)!.status).toBe('completed');
+  });
+
+  test('两个 running 共享 childID → ambiguous no-op，不批量终结', () => {
+    const tracker = new TaskTracker();
+    const alias1 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', task_id: 'ses_dup', background: true }, 'call-1');
+    const alias2 = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'Y', task_id: 'ses_dup', background: true }, 'call-2');
+
+    const r = tracker.finalizeByCall('A', 'call-1', 'ses_dup', 'completed');
+
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('ambiguous');
+    expect(getJobs(tracker).get(alias1)!.status).toBe('running');
+    expect(getJobs(tracker).get(alias2)!.status).toBe('running');
+  });
+
+  test('绑定对象已变更（expectedChildId 与 job.sessionId 不一致）→ no-match，旧候选不更新新调用', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', background: true }, 'call-1');
+    getJobs(tracker).get(alias)!.sessionId = 'ses_bound_old';
+
+    const r = tracker.finalizeByCall('A', 'call-1', 'ses_new_candidate', 'completed');
+
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('no-match');
+    expect(getJobs(tracker).get(alias)!.status).toBe('running');
+    expect(getJobs(tracker).get(alias)!.sessionId).toBe('ses_bound_old');
+  });
+
+  test('job 未绑定时 expectedChildId 允许首次绑定并终结', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', background: true }, 'call-1');
+    // sessionId 未绑定（''）
+
+    const r = tracker.finalizeByCall('A', 'call-1', 'ses_first', 'completed');
+
+    expect(r.ok).toBe(true);
+    const j = getJobs(tracker).get(alias)!;
+    expect(j.sessionId).toBe('ses_first');
+    expect(j.status).toBe('completed');
+  });
+
+  test('已终态 job → idempotent，不重复改写、terminal stats 只写一次', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', task_id: 'ses_done', background: true }, 'call-1');
+    // 第一次终结：ok
+    const first = tracker.finalizeByCall('A', 'call-1', 'ses_done', 'completed');
+    expect(first.ok).toBe(true);
+    const j = getJobs(tracker).get(alias)!;
+    expect(j.status).toBe('completed');
+
+    // 重复终结：idempotent、状态不变（隐含 stats 不重复写——第二次未走落终态路径）
+    const second = tracker.finalizeByCall('A', 'call-1', 'ses_done', 'completed');
+    expect(second.ok).toBe(true);
+    expect(second.reason).toBe('idempotent');
+    expect(j.status).toBe('completed');
+    expect(j.sessionId).toBe('ses_done');
+  });
+
+  test('未知 callID → no-match，不回退最近任务', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', background: true }, 'call-1');
+    const before = getJobs(tracker).get(alias)!.status;
+
+    const r = tracker.finalizeByCall('A', 'call-never-registered', 'ses_x', 'completed');
+
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('no-match');
+    expect(getJobs(tracker).get(alias)!.status).toBe(before);
+  });
+
+  test('拒绝 status=running（非终态写入）', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', background: true }, 'call-1');
+
+    const r = tracker.finalizeByCall('A', 'call-1', undefined, 'running');
+
+    expect(r.ok).toBe(false);
+    expect(getJobs(tracker).get(alias)!.status).toBe('running');
+  });
+
+  test('跨 parent 同 callID 不串：finalize(A) 不触碰 B', () => {
+    const tracker = new TaskTracker();
+    const aliasA = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'A', task_id: 'ses_a', background: true }, 'shared');
+    const aliasB = tracker.registerBeforeTask('B', { subagent_type: 'co-fixer', description: 'B', task_id: 'ses_b', background: true }, 'shared');
+
+    const r = tracker.finalizeByCall('A', 'shared', 'ses_a', 'completed');
+
+    expect(r.ok).toBe(true);
+    expect(r.alias).toBe(aliasA);
+    expect(getJobs(tracker).get(aliasB)!.status).toBe('running');
+  });
+
+  test('expectedChildId 未传：按 (parent,callID) 精确定位直接终结', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'X', task_id: 'ses_x', background: true }, 'call-1');
+
+    const r = tracker.finalizeByCall('A', 'call-1', undefined, 'errored');
+
+    expect(r.ok).toBe(true);
+    expect(getJobs(tracker).get(alias)!.status).toBe('errored');
+  });
+});
+
+// ===========================================================================
+// Wave5：精确取消与质量写回
+//   setBackgroundByCall（promotion 精确更新）/ updateQualityByAlias /
+//   legacy updateQuality 收紧（多匹配歧义 no-op）/ abortJob session 收紧 /
+//   resolveCancelTarget（只读解析，供 close_job 使用）/
+//   markCancelledByAlias（真实 abort 成功后落状态）/ getJobByAlias
+// ===========================================================================
+describe('setBackgroundByCall：promotion 精确更新', () => {
+  test('前台 → 后台 promotion：精确更新目标，其他 parent 同 callID 不串', () => {
+    const tracker = new TaskTracker();
+    const aliasA = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'A', background: false }, 'c1');
+    const aliasB = tracker.registerBeforeTask('B', { subagent_type: 'co-fixer', description: 'B', background: false }, 'c1');
+
+    const r = tracker.setBackgroundByCall('A', 'c1', true);
+
+    expect(r.ok).toBe(true);
+    expect(r.reason).toBe('ok');
+    expect(r.alias).toBe(aliasA);
+    expect(getJobs(tracker).get(aliasA)!.background).toBe(true);
+    // 其他 parent 同 callID 不受影响
+    expect(getJobs(tracker).get(aliasB)!.background).toBe(false);
+  });
+
+  test('未知 (parent,callID) → no-match，不回退最近 job', () => {
+    const tracker = new TaskTracker();
+    tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'A' }, 'c1');
+    const r = tracker.setBackgroundByCall('A', 'never-registered', true);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('no-match');
+  });
+
+  test('已终态任务 → idempotent，不复活不修改历史', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('A', { subagent_type: 'co-fixer', description: 'A', background: false }, 'c1');
+    tracker.updateAfterTaskByCall('A', 'c1', 'completed');
+
+    const r = tracker.setBackgroundByCall('A', 'c1', true);
+
+    expect(r.ok).toBe(true);
+    expect(r.reason).toBe('idempotent');
+    expect(getJobs(tracker).get(alias)!.status).toBe('completed');
+    expect(getJobs(tracker).get(alias)!.background).toBe(false); // 历史不变
+  });
+});
+
+describe('updateQualityByAlias / legacy updateQuality 收紧', () => {
+  test('两 job 共享 child：质量只改目标 alias，不扩散到复用历史', () => {
+    const tracker = new TaskTracker();
+    const oldAlias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'old', task_id: 'ses_shared', background: true }, 'c-old');
+    const newAlias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'new', task_id: 'ses_shared', background: true }, 'c-new');
+    // 旧历史已终态（复用场景）
+    tracker.finalizeByCall('P', 'c-old', 'ses_shared', 'completed');
+
+    const q = { score: 0.9, latencyMs: 100 };
+    const r = tracker.updateQualityByAlias(newAlias, q);
+
+    expect(r.ok).toBe(true);
+    expect(r.alias).toBe(newAlias);
+    expect(getJobs(tracker).get(newAlias)!.quality).toEqual(q);
+    // 旧 alias 质量不被扩散
+    expect(getJobs(tracker).get(oldAlias)!.quality).toBeUndefined();
+  });
+
+  test('updateQualityByAlias 未知 alias → no-match', () => {
+    const tracker = new TaskTracker();
+    const r = tracker.updateQualityByAlias('no-such-alias', { score: 1 });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('no-match');
+  });
+
+  test('legacy updateQuality：多匹配（复用历史）歧义 no-op 不猜', () => {
+    const tracker = new TaskTracker();
+    tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'old', task_id: 'ses_shared', background: true }, 'c-old');
+    tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'new', task_id: 'ses_shared', background: true }, 'c-new');
+
+    tracker.updateQuality('ses_shared', { score: 0.5 });
+
+    const jobs = Array.from(getJobs(tracker).values());
+    for (const j of jobs) expect(j.quality).toBeUndefined();
+  });
+
+  test('legacy updateQuality：唯一匹配时写回', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'only', task_id: 'ses_only', background: true }, 'c1');
+
+    tracker.updateQuality('ses_only', { score: 0.7 });
+
+    expect(getJobs(tracker).get(alias)!.quality?.score).toBe(0.7);
+  });
+});
+
+describe('abortJob / resolveCancelTarget：取消只命中唯一活动', () => {
+  test('session 有旧 completed + 新 running：abortJob(sessionId) 只命中新', () => {
+    const tracker = new TaskTracker();
+    // 真实复用顺序：旧调用先登记并在其唯一 running 时终结为历史，然后才登记复用同 session 的新调用
+    const oldAlias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'old', task_id: 'ses_reuse', background: true }, 'c-old');
+    tracker.finalizeByCall('P', 'c-old', 'ses_reuse', 'completed'); // 旧历史终态（此时唯一 running）
+    const newAlias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'new', task_id: 'ses_reuse', background: true }, 'c-new');
+
+    const hit = tracker.abortJob('ses_reuse');
+
+    expect(hit?.job.alias).toBe(newAlias);
+    expect(getJobs(tracker).get(newAlias)!.status).toBe('cancelled');
+    expect(getJobs(tracker).get(oldAlias)!.status).toBe('completed'); // 旧不抢当前
+  });
+
+  test('session 仅一条终态历史（无 running）→ abortJob 幂等返回原状态（不据此中止真实复用 session）', () => {
+    const tracker = new TaskTracker();
+    const oldAlias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'old', task_id: 'ses_hist', background: true }, 'c-old');
+    tracker.finalizeByCall('P', 'c-old', 'ses_hist', 'completed');
+
+    // 安全兼容契约：恰好一条匹配历史 → 幂等返回原状态（调用方仍须守卫 active；
+    // job-control 走 resolveCancelTarget 只认 running，不会对历史发 SDK abort）
+    const hit = tracker.abortJob('ses_hist');
+
+    expect(hit).toBeDefined();
+    expect(hit!.job.alias).toBe(oldAlias);
+    expect(getJobs(tracker).get(oldAlias)!.status).toBe('completed'); // 状态不变
+  });
+
+  test('session 多条终态历史（无 running）→ abortJob 歧义 no-op，不任取一条', () => {
+    const tracker = new TaskTracker();
+    const h1 = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'h1', task_id: 'ses_multi', background: true }, 'c-1');
+    tracker.finalizeByCall('P', 'c-1', 'ses_multi', 'completed');
+    const h2 = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'h2', task_id: 'ses_multi', background: true }, 'c-2');
+    tracker.finalizeByCall('P', 'c-2', 'ses_multi', 'completed');
+
+    // 多条历史：归属不明，绝不任取一条（undefined），两条历史均保持不变
+    expect(tracker.abortJob('ses_multi')).toBeUndefined();
+    expect(getJobs(tracker).get(h1)!.status).toBe('completed');
+    expect(getJobs(tracker).get(h2)!.status).toBe('completed');
+  });
+
+  test('两个 running 共享 child：abortJob / resolveCancelTarget 拒绝', () => {
+    const tracker = new TaskTracker();
+    tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'a', task_id: 'ses_amb', background: true }, 'c-a');
+    tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'b', task_id: 'ses_amb', background: true }, 'c-b');
+
+    expect(tracker.abortJob('ses_amb')).toBeUndefined();
+    const t = tracker.resolveCancelTarget('ses_amb');
+    expect(t.ok).toBe(false);
+    if (!t.ok) expect(t.reason).toBe('ambiguous');
+  });
+
+  test('resolveCancelTarget：alias 命中（含已终态历史，供调用方守卫）', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'old', task_id: 'ses_a', background: true }, 'c1');
+    tracker.finalizeByCall('P', 'c1', 'ses_a', 'completed');
+
+    const t = tracker.resolveCancelTarget(alias);
+    expect(t.ok).toBe(true);
+    if (t.ok) {
+      expect(t.job.alias).toBe(alias);
+      expect(t.job.status).toBe('completed'); // 已终态仍返回，调用方必须守卫 status==='running'
+    }
+  });
+
+  test('resolveCancelTarget：sessionId 唯一 running 命中；无 running → no-match', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'x', task_id: 'ses_r', background: true }, 'c1');
+    const t = tracker.resolveCancelTarget('ses_r');
+    expect(t.ok).toBe(true);
+    if (t.ok) expect(t.job.alias).toBe(alias);
+    expect(tracker.resolveCancelTarget('ses_absent').ok).toBe(false);
+  });
+
+  test('旧 alias 命中已终态：abortJob(alias) 幂等返回原状态，不改写', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'old', task_id: 'ses_a', background: true }, 'c1');
+    tracker.finalizeByCall('P', 'c1', 'ses_a', 'completed');
+
+    const hit = tracker.abortJob(alias);
+    expect(hit?.job.alias).toBe(alias);
+    expect(getJobs(tracker).get(alias)!.status).toBe('completed');
+  });
+});
+
+describe('markCancelledByAlias / getJobByAlias', () => {
+  test('markCancelledByAlias：running → cancelled；重复调用 idempotent', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'x', task_id: 'ses_c', background: true }, 'c1');
+
+    const r = tracker.markCancelledByAlias(alias);
+    expect(r.ok).toBe(true);
+    expect(r.reason).toBe('ok');
+    expect(getJobs(tracker).get(alias)!.status).toBe('cancelled');
+
+    const r2 = tracker.markCancelledByAlias(alias);
+    expect(r2.ok).toBe(true);
+    expect(r2.reason).toBe('idempotent');
+    expect(getJobs(tracker).get(alias)!.status).toBe('cancelled');
+  });
+
+  test('markCancelledByAlias：已终态不改回 cancelled；未知 no-match', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'x', task_id: 'ses_d', background: true }, 'c1');
+    tracker.finalizeByCall('P', 'c1', 'ses_d', 'completed');
+
+    const r = tracker.markCancelledByAlias(alias);
+    expect(r.reason).toBe('idempotent');
+    expect(getJobs(tracker).get(alias)!.status).toBe('completed'); // 不把 completed 改回 cancelled
+
+    expect(tracker.markCancelledByAlias('nope').reason).toBe('no-match');
+  });
+
+  test('getJobByAlias：命中与未知', () => {
+    const tracker = new TaskTracker();
+    const alias = tracker.registerBeforeTask('P', { subagent_type: 'co-fixer', description: 'x' }, 'c1');
+    expect(tracker.getJobByAlias(alias)?.alias).toBe(alias);
+    expect(tracker.getJobByAlias('nope')).toBeUndefined();
   });
 });

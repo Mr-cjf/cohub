@@ -3,11 +3,15 @@
 import type { ContextStrategy, TaskContext, ContextConfig, DependencyResult, RelevantFile } from './types';
 import { DEFAULT_CONTEXT_CONFIG } from './types';
 import * as fs from 'node:fs';
-import { extractRelevantFiles, extractDecisions, extractErrors, truncateByTokens } from './extractor';
+import { extractRelevantFiles, extractDecisions, extractErrors, truncateByTokens, estimateTokens } from './extractor';
 import { formatContextMarker, replaceMarkerWithContext, CONTEXT_MARKER_PATTERN } from './formatter';
+import { tokenBudgetToByteLimit, utf8TrimIncomplete, SUMMARY_READ_LOOKAHEAD_BYTES } from './prompt-budget';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
 
 type SdkClient = ReturnType<typeof createOpencodeClient>;
+
+/** 读取上限截断的诚实提示后缀（区别于 truncateByTokens 的 token 预算截断标记） */
+const READ_LIMIT_TRUNCATION_SUFFIX = '\n… [正文已按读取上限截断]';
 
 export class ContextEngine {
   /** contextId → TaskContext */
@@ -130,17 +134,65 @@ export class ContextEngine {
   /**
    * summary 策略：读取相关文件正文并按 token 预算截断。
    * 预算按文件数均摊，总注入不超过 summarizeMaxTokens；读取失败的文件保留 summary 回退。
+   *
+   * 读取模式（config.summaryReadMode，缺省 'bounded'）：
+   * - 'bounded'（默认）：按预算推导字节上限（见 prompt-budget.ts，默认 2000 tokens → 16KB），
+   *   open/read/close 部分读取 + 4 字节 lookahead 判定「是否超出读取上限」+ UTF-8 边界修正，
+   *   再 truncateByTokens。ASCII/CJK 常规场景注入结果与旧全量读+截断**等价**；
+   *   当文件超出读取上限且预算未触发 token 截断时（如纯 emoji 恰停在预算边界、或预算触发 1MiB 硬 cap），
+   *   附加诚实读取截断标记「… [正文已按读取上限截断]」，不再宣称逐字节等价；
+   *   与旧 truncateByTokens 的差异仅源于修复其在 4 字节非 CJK 字符边界切出孤立 surrogate 的缺陷。
+   * - 'full'：保留旧行为——全量 readFileSync 后再按预算截断（保守选项，关闭激进裁剪）。
    */
   private attachTruncatedBodies(files: RelevantFile[]): void {
     if (files.length === 0) return;
     const budgetPerFile = Math.max(1, Math.floor(this.config.summarizeMaxTokens / files.length));
     for (const file of files) {
       try {
-        const content = fs.readFileSync(file.path, 'utf-8');
-        file.body = truncateByTokens(content, budgetPerFile);
+        if (this.config.summaryReadMode === 'full') {
+          const content = fs.readFileSync(file.path, 'utf-8');
+          file.body = truncateByTokens(content, budgetPerFile);
+        } else {
+          // 有界读取：字节上限由 token 预算推导（见 prompt-budget.ts），UTF-8 边界修正后再截断
+          const { text, truncatedByReadLimit } = this.readBoundedUtf8(file.path, tokenBudgetToByteLimit(budgetPerFile));
+          file.body = truncateByTokens(text, budgetPerFile);
+          // 诚实提示：文件超出读取上限且预算内未填满（token 截断未触发）→ 正文被读取上限截断
+          if (truncatedByReadLimit && estimateTokens(file.body) <= budgetPerFile) {
+            file.body += READ_LIMIT_TRUNCATION_SUFFIX;
+          }
+        }
       } catch {
         // 文件不存在/不可读：保留 summary 回退，不中断
       }
+    }
+  }
+
+  /**
+   * 按字节上限有界读取 UTF-8 文本（默认 summary 模式使用）。
+   * 读取 min(size, byteLimit + SUMMARY_READ_LOOKAHEAD_BYTES) 字节：
+   * - 实际读到的字节数 > byteLimit → 文件超出读取上限（lookahead 判定，比 fstat size 更诚实，
+   *   覆盖读取期间文件被修改等边缘）；
+   * - 返回文本始终先 utf8TrimIncomplete 修正字符边界（避免 U+FFFD 与末尾未配对 surrogate）。
+   * fd 在正常与异常路径都会关闭（try/finally）；open 失败由调用方 catch 兜底。
+   */
+  private readBoundedUtf8(filePath: string, byteLimit: number): { text: string; truncatedByReadLimit: boolean } {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const { size } = fs.fstatSync(fd);
+      const toRead = Math.min(size, byteLimit + SUMMARY_READ_LOOKAHEAD_BYTES);
+      const buf = Buffer.allocUnsafe(Math.max(0, toRead));
+      let filled = 0;
+      while (filled < toRead) {
+        const n = fs.readSync(fd, buf, filled, toRead - filled, filled);
+        if (n <= 0) break; // short-read 后继续循环；EOF（0）正常结束
+        filled += n;
+      }
+      const truncatedByReadLimit = filled > byteLimit;
+      const raw = buf.subarray(0, Math.min(filled, byteLimit));
+      // 先修正 UTF-8 字符边界再解码，避免窗口末尾出现 U+FFFD 乱码
+      return { text: utf8TrimIncomplete(raw).toString('utf-8'), truncatedByReadLimit };
+    } finally {
+      fs.closeSync(fd);
     }
   }
 
