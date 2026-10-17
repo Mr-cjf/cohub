@@ -77,8 +77,9 @@ assert.ok(
 
 // ===== SDK client 最小 stub =====
 // ContextEngine / CouncilManager / close_job 构造仅持有 client 引用；
-// fillContextAsync 仅在 context_override !== 'none' 时调用 client.session.messages，
-// 本测试统一传 context_override:'none' 避开。
+// fillContextAsync 仅在策略非 none 时调用 client.session.messages——默认策略全部为 none，
+// 本测试 registerTask 默认省略 context_override（走真实默认 none 路径，不读父历史），
+// 显式 opt-in 用例单独传 context_override:'relevant' 验证详情注入。
 // session.messages 供后台终态证据验证（session.idle 触发一次有界读取）——默认空记录
 // （无证据 → 不终结），用例可经 setMessages 注入终态 / 中间轮 / 旧消息，
 // 或经 gateMessages/releaseMessages 门控读取（模拟 idle await 期间的竞态）。
@@ -148,22 +149,29 @@ function makePluginInput(projectDir: string, client: unknown) {
   };
 }
 
-/** 经真实 tool.execute.before hook 注册一个子任务（context_override:'none' 避开外部 API） */
+/**
+ * 经真实 tool.execute.before hook 注册一个子任务。
+ * 默认省略 context_override（走默认策略——已改为全部 none，不注册/填充/读父历史，
+ * 不注入上下文块）；需要验证显式 opt-in 时传 context_override:'relevant' 等；
+ * 契约用例可传自定义 prompt（验证用户原文/手写契约块/空壳清理）。
+ */
 async function registerTask(
   hooks: any,
   sessionID: string,
-  opts: { subagent_type: string; description: string; task_id?: string; background?: boolean; callID?: string },
+  opts: { subagent_type: string; description: string; task_id?: string; background?: boolean; callID?: string; context_override?: string; prompt?: string },
 ) {
-  const output = {
+  const output: any = {
     args: {
       subagent_type: opts.subagent_type,
       description: opts.description,
       task_id: opts.task_id,
       background: opts.background ?? true,
-      context_override: 'none',
-      prompt: '请执行：' + opts.description,
+      prompt: opts.prompt ?? '请执行：' + opts.description,
     },
   };
+  if (opts.context_override !== undefined) {
+    output.args.context_override = opts.context_override;
+  }
   await hooks['tool.execute.before'](
     { tool: 'task', sessionID, callID: opts.callID ?? 'call-' + sessionID + '-' + Math.random().toString(36).slice(2, 6) },
     output,
@@ -188,7 +196,7 @@ async function afterTask(
     metadata: opts.childSessionId ? { sessionId: opts.childSessionId } : {},
   };
   await hooks['tool.execute.after'](
-    { tool: 'task', sessionID, callID, args: { background: opts.background ?? true, context_override: 'none' } },
+    { tool: 'task', sessionID, callID, args: { background: opts.background ?? true } },
     output,
   );
 }
@@ -887,6 +895,168 @@ const runs: Array<{ name: string; fn: (hooks: any, ctx: any) => Promise<void>; c
     },
   },
   {
+    name: '早到 idle：after 确认完成后仍捕获正文/质量与 300001 输入超预算',
+    fn: async (hooks, ctx) => {
+      // before 未传 task_id（未绑定 child）；child 已完成但 idle 在绑定前到达（no-match 丢失）
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      ctx.setMessages([{
+        info: { role: 'assistant', sessionID: 'ses_b1', time: { created: Date.now(), completed: Date.now() }, finish: 'finish', tokens: { input: 300000, output: 50, cache: { read: 0, write: 1 } } },
+        parts: [{ type: 'text', text: '关键结论正文' }],
+      }]);
+      await emitEvent(hooks, 'session.idle', 'ses_b1'); // 早到：未绑定 childID → no-match 丢失
+      // after 绑定 childID → 补核验 completed → 补捕获（正文/质量/复用采样随 idle 共用路径写回）
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_b1' });
+      await sleepMs(150); // 等待 capture .then 异步写回
+      const text = joinedText((await transformFor(hooks, 'ses_A')).messages[0].parts);
+      assert.ok(!text.includes('Background Job Board'), '早到 idle + after 补核验应收尾完成');
+      // 归一化输入 = 300000 + 0 + 1 = 300001 > 200K 默认预算 → 超预算，不建议复用
+      assert.ok(text.includes('ses_b1(co-fix/超预算，不建议复用)'), '300001 输入应标超预算不建议复用');
+      const statsFile = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'stats.json');
+      assert.ok(fs.existsSync(statsFile), 'stats 应持久化');
+      const records = JSON.parse(fs.readFileSync(statsFile, 'utf-8')) as Array<Record<string, unknown>>;
+      const rec = records.find((r) => (r as { status?: string }).status === 'completed');
+      assert.ok(rec, '应有 completed 统计记录（after 补捕获写回）');
+      assert.strictEqual((rec as { tokens?: { input?: number } }).tokens?.input, 300000, '质量 tokens 应写回');
+    },
+  },
+  {
+    name: '早到 idle：显式 dependencyPropagation=true 结果可传播',
+    config: { context: { dependencyPropagation: true } },
+    fn: async (hooks, ctx) => {
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      ctx.setMessages([{
+        info: { role: 'assistant', sessionID: 'ses_b1', time: { created: Date.now(), completed: Date.now() }, finish: 'finish' },
+        parts: [{ type: 'text', text: '已确定方案：采用字段缺失方案' }],
+      }]);
+      await emitEvent(hooks, 'session.idle', 'ses_b1'); // 早到：no-match 丢失
+      // after 绑定 childID → 补核验 completed → 补捕获 → dependencyCache 写入（显式开启传播）
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_b1' });
+      await sleepMs(200); // 等待 capture 异步写入 dependencyCache
+      // 复用该 session 发起新调用（显式 relevant 触发 fill）：依赖结果应注入 prompt
+      const out = await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '新任务', task_id: 'ses_b1', background: true, callID: 'call-2', context_override: 'relevant' });
+      assert.ok(out.args.prompt.includes('依赖结果'), '应注入依赖结果区块');
+      assert.ok(out.args.prompt.includes('已确定方案'), '依赖结果应传播到新调用 prompt');
+    },
+  },
+  {
+    name: '早到 idle：重复 after/idle 仅针对原调用收尾捕获，不累积不覆盖',
+    fn: async (hooks, ctx) => {
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      ctx.setMessages([{
+        info: { role: 'assistant', sessionID: 'ses_b1', time: { created: Date.now(), completed: Date.now() }, finish: 'finish', tokens: { input: 100, output: 50, cache: { read: 5, write: 5 } } },
+        parts: [{ type: 'text', text: 'done' }],
+      }]);
+      await emitEvent(hooks, 'session.idle', 'ses_b1'); // 早到丢失
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_b1' }); // 首次：补核验 completed + 补捕获
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_b1' }); // 重复 after：不重复捕获
+      await emitEvent(hooks, 'session.idle', 'ses_b1'); // 重复 idle：已终态 no-match 不操作
+      await sleepMs(150);
+      const statsFile = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'stats.json');
+      assert.ok(fs.existsSync(statsFile), 'stats 应持久化');
+      const records = JSON.parse(fs.readFileSync(statsFile, 'utf-8')) as Array<Record<string, unknown>>;
+      const completed = records.filter((r) => (r as { status?: string }).status === 'completed');
+      assert.strictEqual(completed.length, 1, '重复 after/idle 不应累积 stats 记录');
+      // 读取计数明确无重复捕获：早到 idle 0 读 + 首次 after verify 1 读 + capture 1 读 +
+      // 重复 after 核验 1 读（竞态拦截不捕获）+ 重复 idle 0 读 = 3；重复 after 不得再发起 capture。
+      assert.strictEqual(ctx.calls.messagesRead, 3, '重复 after/idle 不应产生额外捕获读取');
+      assert.ok(records.find((r) => (r as { tokens?: { input?: number } }).tokens?.input === 100), '首次补捕获应写回质量 tokens');
+      const text = joinedText((await transformFor(hooks, 'ses_A')).messages[0].parts);
+      assert.ok(text.includes('ses_b1(co-fix/最近输入 110)'), '应展示一次采样 100+5+5=110');
+    },
+  },
+  {
+    name: '早到 idle：异步旧采样晚到不污染复用后新调用（snapshot+sequence guards）',
+    fn: async (hooks, ctx) => {
+      // 旧调用：before 未绑定 child，idle 早到丢失（no-match，不读 messages）
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '旧调用', background: true, callID: 'call-1' });
+      await emitEvent(hooks, 'session.idle', 'ses_reuse');
+      // FIFO gate：after-1 verify(g0)、after-1 补捕获 capture(g1)、after-2 verify(g2)、
+      // 新 idle verify(g3)、新 idle capture(g4)
+      const g0 = ctx.gateMessages();
+      const g1 = ctx.gateMessages();
+      const g2 = ctx.gateMessages();
+      const g3 = ctx.gateMessages();
+      const g4 = ctx.gateMessages();
+      const afterP = afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_reuse' });
+      ctx.releaseMessages([terminalAssistantMsg('ses_reuse')], g0); // verify 见终态 → completed
+      await afterP; // 补捕获已发起（capture 读 g1 挂起）
+      // 复用同一 child 发起新调用：绑定后保持 running（verify 读 g2 中间轮）
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '新调用', task_id: 'ses_reuse', background: true, callID: 'call-2' });
+      const after2 = afterTask(hooks, 'ses_A', 'call-2', { childSessionId: 'ses_reuse' });
+      ctx.releaseMessages([toolCallAssistantMsg('ses_reuse')], g2); // 中间轮 → unknown → 保持 running
+      await after2;
+      // 新 idle：终态证据 → cof-2 收尾 + 捕获（读 g3/g4）
+      const idleP = emitEvent(hooks, 'session.idle', 'ses_reuse');
+      ctx.releaseMessages([terminalAssistantMsg('ses_reuse', Date.now())], g3);
+      await idleP;
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() }, finish: 'finish', tokens: { input: 300, output: 200, cache: { read: 10, write: 10 } } },
+        parts: [{ type: 'text', text: 'two' }],
+      }], g4);
+      await sleepMs(150); // 新调用采样 300 先写回
+      // 旧 after 补捕获迟到（g1）：旧消息 tokens 100（created 早于旧调用开始 → 复用采样未知）
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_reuse', time: { created: Date.now() - 60000 }, finish: 'finish', tokens: { input: 100, output: 50, cache: { read: 5, write: 5 } } },
+        parts: [{ type: 'text', text: 'old-stale' }],
+      }], g1);
+      await sleepMs(150);
+      assert.strictEqual(ctx.getPendingGateCount(), 0, '全部 gate 应释放（防 runner 挂起无输出）');
+      const statsFile = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'stats.json');
+      assert.ok(fs.existsSync(statsFile), 'stats 应持久化');
+      const records = JSON.parse(fs.readFileSync(statsFile, 'utf-8')) as Array<Record<string, unknown>>;
+      // 快照/代次守卫：旧 after 补捕获 100 写回原调用（call-1），不得覆盖新调用 cof-2 的 300
+      const t300 = records.find((r) => (r as { tokens?: { input?: number } }).tokens?.input === 300);
+      const t100 = records.find((r) => (r as { tokens?: { input?: number } }).tokens?.input === 100);
+      assert.ok(t300, '新调用采样 300 应写回（不被旧采样覆盖）');
+      assert.ok(t100, '旧 after 补捕获 100 应写回原调用（call 隔离，不污染新调用）');
+    },
+  },
+  {
+    name: '同 call 同 alias：旧 after 核验迟到不得借用 idle 收尾额外捕获（300001 保留）',
+    fn: async (hooks, ctx) => {
+      // 精确反例（oracle 实测）：同 call 同 alias，after 核验 await 挂起期间新 idle 核验并发
+      // 收尾 completed 并采样 300001；旧 after 核验返回中间轮，reconcile 竞态复核看到终态直接
+      // 退出——外层不得借用 idle 的 completed 状态递增 seq 额外捕获（丢 idle 有效采样、Board 变
+      // 输入未知）。修复：reconcile 返回"本次实际完成 running→completed"，非本次收尾不补捕获。
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      // 首次 after 绑定自带补核验：verify 直读默认空消息（在 g0 之前，不占 gate）→ unknown → 不捕获
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_race' });
+      // FIFO gate：旧 after verify(g0)、新 idle verify(g1)、新 idle capture(g2)
+      const g0 = ctx.gateMessages();
+      const afterP = afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_race' }); // 旧 after 重入：verify 挂起 g0
+      const g1 = ctx.gateMessages();
+      const g2 = ctx.gateMessages();
+      const idleP = emitEvent(hooks, 'session.idle', 'ses_race'); // 新 idle：verify 读 g1 挂起
+      // 新 idle 先回终态：本次收尾 completed + 分配代次 + 发起采样（capture 读 g2 挂起）
+      ctx.releaseMessages([terminalAssistantMsg('ses_race', Date.now())], g1);
+      await idleP;
+      // 旧 after 核验迟到回中间轮：reconcile 竞态复核发现 job 已被 idle 收尾 → 本次未收尾、
+      // 外层不得因看到 completed 而额外捕获（不递增代次、不发起第二次 capture）
+      ctx.releaseMessages([toolCallAssistantMsg('ses_race')], g0);
+      await afterP;
+      // idle 的采样 300001（300000 + 0 + 1）应写回；旧 after 若额外捕获会把有效采样覆盖为未知
+      ctx.releaseMessages([{
+        info: { role: 'assistant', sessionID: 'ses_race', time: { created: Date.now(), completed: Date.now() }, finish: 'finish', tokens: { input: 300000, output: 50, cache: { read: 0, write: 1 } } },
+        parts: [{ type: 'text', text: 'big' }],
+      }], g2);
+      await sleepMs(150);
+      assert.strictEqual(ctx.getPendingGateCount(), 0, '全部 gate 应释放（防 runner 挂起无输出）');
+      const statsFile = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'stats.json');
+      assert.ok(fs.existsSync(statsFile), 'stats 应持久化');
+      const records = JSON.parse(fs.readFileSync(statsFile, 'utf-8')) as Array<Record<string, unknown>>;
+      const completed = records.filter((r) => (r as { status?: string }).status === 'completed');
+      assert.strictEqual(completed.length, 1, '旧 after 不得额外捕获产生第二条 completed 记录');
+      const t300 = records.find((r) => (r as { tokens?: { input?: number } }).tokens?.input === 300000);
+      assert.ok(t300, 'idle 的 300000 采样应写回（不被旧 after 额外捕获覆盖为未知）');
+      // 读取计数恰为 4：首次 after 绑定补核验 verify(1) + 旧 after 重入 verify(2) +
+      // 新 idle verify(3) + 新 idle capture(4)；旧 after 重入竞态拦截不补捕获（无第 5 读）。
+      assert.strictEqual(ctx.calls.messagesRead, 4, '读取应恰为首次 after verify + 旧 after verify + 新 idle verify + 新 idle capture（旧 after 重入无额外捕获）');
+      const text = joinedText((await transformFor(hooks, 'ses_A')).messages[0].parts);
+      assert.ok(text.includes('ses_race(co-fix/超预算，不建议复用)'), 'Board 应保留 idle 的 300001 超预算建议');
+      assert.ok(!text.includes('输入未知'), '旧 after 不得把有效采样冲成未知');
+    },
+  },
+  {
     name: '原生 subtask after undefined：不崩溃不假成功，error part 按已登记 part.id 精确收尾',
     fn: async (hooks) => {
       // before.callID = part.id（宿主 subtask 失败路径：调用标识用 part.id）
@@ -1235,6 +1405,68 @@ const runs: Array<{ name: string; fn: (hooks: any, ctx: any) => Promise<void>; c
       assert.ok(!text.includes('最近输入'), '旧采样 200 不得残留（未知采样提交清空 reuseInput）');
     },
   },
+  {
+    name: '默认省略 context_override：不注入任务上下文块、不追加契约、不读父历史',
+    fn: async (hooks, ctx) => {
+      const out = await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务A', background: true });
+      // 默认策略全部 none：不注册/填充/注入历史详情
+      assert.ok(!out.args.prompt.includes('任务上下文'), '默认不应注入任务上下文块');
+      assert.ok(!out.args.prompt.includes('当前任务'), '默认不应注入当前任务目标');
+      assert.ok(!out.args.prompt.includes('CONTRACT_BEGIN'), '默认不应追加契约块');
+      assert.strictEqual(ctx.calls.messagesRead, 0, '默认不应读父历史消息');
+    },
+  },
+  {
+    name: '显式 context_override=relevant：父历史有内容才注入详情，无内容不注入',
+    fn: async (hooks, ctx) => {
+      // 父历史为空 → 详情为空 → 不注入任何上下文块
+      ctx.setMessages([]);
+      const outEmpty = await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务E', background: true, context_override: 'relevant' });
+      assert.ok(!outEmpty.args.prompt.includes('任务上下文'), '无父历史内容不应注入上下文块');
+      assert.ok(!outEmpty.args.prompt.includes('相关文件'), '无父历史内容不应注入相关文件详情');
+      assert.strictEqual(ctx.calls.messagesRead, 1, 'opt-in 时应读取一次父历史');
+
+      // 父历史有内容 → 详情非空才附加（仅详情，不重复任务目标）
+      ctx.setMessages([
+        {
+          info: { role: 'assistant' },
+          parts: [
+            { type: 'tool', tool: 'read', state: { status: 'completed', input: { filePath: '/src/main.ts' }, output: 'main content' } },
+          ],
+        },
+      ]);
+      const outFilled = await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务F', background: true, context_override: 'relevant' });
+      assert.ok(outFilled.args.prompt.includes('相关文件'), '父历史有内容应注入相关文件详情');
+      assert.ok(outFilled.args.prompt.includes('/src/main.ts'), '应注入文件路径');
+      assert.ok(!outFilled.args.prompt.includes('任务上下文'), '详情注入不应包含旧任务上下文标题');
+      assert.ok(!outFilled.args.prompt.includes('当前任务'), '详情注入不应重复任务目标');
+      assert.strictEqual(ctx.calls.messagesRead, 2, '第二次 opt-in 应再次读取父历史');
+    },
+  },
+  {
+    name: '契约：用户手写契约块与原文保留、goal-only 空壳被清理、重复 before 不累积',
+    fn: async (hooks) => {
+      // 用户手写契约块（含内容）保守保留，原文保留，且不追加新契约
+      const handWritten = '<!-- CONTRACT_BEGIN -->\\n- 关键结果: 用户手写结论\\n<!-- CONTRACT_END -->';
+      const out = await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, prompt: '前置文本\\n' + handWritten + '\\n后置文本' });
+      assert.ok(out.args.prompt.includes('关键结果: 用户手写结论'), '用户手写契约块应保留');
+      assert.ok(out.args.prompt.includes('前置文本'), '用户原文应保留');
+      assert.ok(out.args.prompt.includes('后置文本'), '用户原文应保留');
+      assert.strictEqual((out.args.prompt.match(/CONTRACT_BEGIN/g) || []).length, 1, '不应追加新契约块');
+
+      // 插件旧版 goal-only 空壳被清理，用户原文保留
+      const shell = '<!-- CONTRACT_BEGIN -->\\n## 本任务前置上下文\\n- 目标: 旧目标\\n<!-- CONTRACT_END -->';
+      const out2 = await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务Y', background: true, prompt: '开头\\n' + shell + '\\n结尾' });
+      assert.ok(!out2.args.prompt.includes('CONTRACT_BEGIN'), 'goal-only 空壳应被清理');
+      assert.ok(out2.args.prompt.includes('开头') && out2.args.prompt.includes('结尾'), '空壳清理后用户原文保留');
+
+      // 重复 before（同 callID 重入）：不累积契约块、不产生内容膨胀
+      const out3 = await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务Z', background: true, callID: 'reenter-call', prompt: '原文' });
+      const out3again = await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务Z', background: true, callID: 'reenter-call', prompt: '原文' });
+      assert.strictEqual(out3.args.prompt, '原文', '无注入时 prompt 保持用户原文');
+      assert.strictEqual(out3again.args.prompt, '原文', '重复 before 不累积任何内容');
+    },
+  },
 ];
 
 async function main() {
@@ -1292,6 +1524,11 @@ const CASES = [
   '宿主 promotion：before 前台但 after 原生后台 shape → 保留 running，idle 新鲜终态正常收尾',
   '宿主 promotion 最终 error：原生后台 idle + 最终错误 → errored（不假成功）',
   '首次 child 绑定前 idle 丢失：after 绑定后补有界核验收尾，不永久 running',
+  '早到 idle：after 确认完成后仍捕获正文/质量与 300001 输入超预算',
+  '早到 idle：显式 dependencyPropagation=true 结果可传播',
+  '早到 idle：重复 after/idle 仅针对原调用收尾捕获，不累积不覆盖',
+  '早到 idle：异步旧采样晚到不污染复用后新调用（snapshot+sequence guards）',
+  '同 call 同 alias：旧 after 核验迟到不得借用 idle 收尾额外捕获（300001 保留）',
   '原生 subtask after undefined：不崩溃不假成功，error part 按已登记 part.id 精确收尾',
   '质量写回：两次同 child 复用输出不同 tokens，旧记录不被新结果覆盖',
   '真实 close_job 工具：co-orchestrator 取消后台任务，engine 镜像 + 精确 parent 刷新（Board 正确）',
@@ -1304,6 +1541,9 @@ const CASES = [
   '并发 idle verify 倒序：旧 verify 迟到不得取代新 idle 采样（序号 await 前分配）',
   '并发 idle verify 倒序：新 idle 未知写回，旧 verify 迟到不得撤销（gate 全释放）',
   '质量关闭+预算开启：同 job 先有值、后未知、最终完成 board 未知（旧样本被清空）',
+  '默认省略 context_override：不注入任务上下文块、不追加契约、不读父历史',
+  '显式 context_override=relevant：父历史有内容才注入详情，无内容不注入',
+  '契约：用户手写契约块与原文保留、goal-only 空壳被清理、重复 before 不累积',
 ];
 
 /**

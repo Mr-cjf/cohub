@@ -78,15 +78,19 @@ export interface ContextConfig {
 
 /** 默认配置 */
 export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
+  /**
+   * 默认全部 'none'：历史上下文默认不注入，避免每次委派自动读取父会话历史。
+   * 需要注入时由调度者显式传递 context_override 或在用户配置 context.strategy 中 opt-in。
+   */
   strategy: {
     'co-explorer': 'none',
     'co-librarian': 'none',
     'co-observer': 'none',
-    'co-fixer': 'relevant',
-    'co-designer': 'relevant',
-    'co-planner': 'relevant',
-    'co-oracle': 'summary',
-    'co-council': 'summary',
+    'co-fixer': 'none',
+    'co-designer': 'none',
+    'co-planner': 'none',
+    'co-oracle': 'none',
+    'co-council': 'none',
     'co-rule-user': 'none',
     'co-rule-project': 'none',
     'co-rule-app': 'none',
@@ -95,7 +99,7 @@ export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
   maxDecisions: 10,
   maxErrors: 5,
   maxDependencies: 8,
-  dependencyPropagation: true,
+  dependencyPropagation: false,
   summarizeMaxTokens: 2000,
   summaryReadMode: 'bounded',
   relevantMessageWindow: 20,

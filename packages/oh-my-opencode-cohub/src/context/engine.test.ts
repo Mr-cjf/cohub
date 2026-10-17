@@ -1204,3 +1204,44 @@ describe('captureResult 有界读与复用预算采样（Wave6）', () => {
     expect(result!.reuseInput).toEqual({ inputTokens: 200, sampledAt: 200, messageId: 'msg-fresh' });
   });
 });
+
+// ===========================================================================
+// 依赖传播开关（默认关闭）：captureResult 捕获返回与采样不受开关影响，
+// 仅 dependencyCache 写入受控——默认 false 不缓存，fill 不注入依赖；显式 true 才传播。
+// ===========================================================================
+describe('captureResult 依赖传播开关（默认关闭）', () => {
+  test('默认（dependencyPropagation=false）：仍返回结果与采样，但不写依赖缓存、fill 不注入依赖', async () => {
+    const { client } = captureResultClient([
+      asstMsg({ time: { created: 300 }, id: 'msg-new', tokens: { input: 100, output: 30, cache: { read: 40, write: 60 } } }, [
+        { type: 'text', text: '我们决定采用 TypeScript 严格模式' },
+      ]),
+    ]);
+    const engine = new ContextEngine(client);
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    // 捕获返回与复用预算采样不受传播开关影响（captureResult 独立于传播策略）
+    expect(result!.output).toContain('TypeScript 严格模式');
+    expect(result!.decisions).toBe(1);
+    expect(result!.reuseInput).toEqual({ inputTokens: 200, sampledAt: 300, messageId: 'msg-new' });
+    // 依赖缓存未写入 → fill 后详情不含依赖结果
+    const ctxId = engine.registerContext({ description: 'test' });
+    await engine.fillContextAsync(ctxId, 'ses_parent', { strategy: 'relevant' });
+    expect(engine.formatContextDetails(ctxId)).not.toContain('📦 依赖结果');
+  });
+
+  test('dependencyPropagation=true：captureResult 写依赖缓存，fill 注入依赖结果', async () => {
+    const { client } = captureResultClient([
+      asstMsg({ time: { created: 300 }, id: 'msg-new' }, [
+        { type: 'text', text: '我们决定采用 TypeScript 严格模式' },
+      ]),
+    ]);
+    const engine = new ContextEngine(client, { dependencyPropagation: true });
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    expect(result!.output).toContain('TypeScript 严格模式');
+    const ctxId = engine.registerContext({ description: 'test' });
+    await engine.fillContextAsync(ctxId, 'ses_parent', { strategy: 'relevant' });
+    const details = engine.formatContextDetails(ctxId);
+    expect(details).toContain('📦 依赖结果');
+    expect(details).toContain('**co-fixer**');
+    expect(details).toContain('TypeScript 严格模式');
+  });
+});

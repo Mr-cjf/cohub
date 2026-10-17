@@ -7,12 +7,27 @@ const CONTRACT_PATTERN = /<!-- CONTRACT_BEGIN -->\n([\s\S]*?)<!-- CONTRACT_END -
 const CONTRACT_STRIP_PATTERN = /<!-- CONTRACT_BEGIN -->[\s\S]*?<!-- CONTRACT_END -->/g;
 
 /**
- * 删除文本中所有 `<!-- CONTRACT_BEGIN -->...<!-- CONTRACT_END -->` 块。
- * 用于防止同一次 task() 的 prompt 中契约块重复膨胀。
+ * 清理历史残留的插件自生成「goal-only 空壳」契约块。
+ *
+ * 背景：旧版 buildPrompt 在无约束/无前置时仍输出 `## 本任务前置上下文 + - 目标: xxx`，
+ * 目标已随本任务 prompt 传递、无独立信息价值，同一次 task() 重复 before 会累积这些空壳块。
+ * 仅严格匹配该空壳形态（标题 + 仅一行 `- 目标:`、无任何其他内容）才清除；
+ * 含约束/前置结果/其他内容的契约块（含用户手写契约、调度显式约束）**保守保留**——
+ * 绝不按中文标题宽泛删除用户内容。
  * 无匹配时原样返回。
  */
 export function stripExistingContracts(text: string): string {
-  return text.replace(CONTRACT_STRIP_PATTERN, '');
+  return text.replace(CONTRACT_STRIP_PATTERN, (match) => {
+    const inner = match
+      .replace(/<!-- CONTRACT_BEGIN -->/, '')
+      .replace(/<!-- CONTRACT_END -->/, '')
+      .trim();
+    const lines = inner.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length === 2 && lines[0] === '## 本任务前置上下文' && lines[1].startsWith('- 目标:')) {
+      return '';
+    }
+    return match;
+  });
 }
 
 export class ContractManager {
@@ -52,7 +67,10 @@ export class ContractManager {
   }
 
   /**
-   * 构建传递给子代理的提示词，包含目标、约束和前置任务结果。
+   * 构建传递给子代理的提示词，包含约束和显式前置任务结果交接。
+   * 目标不再重复输出（任务目标已在本任务 prompt 中，避免重复膨胀）；
+   * 仅当存在真正约束或显式前置依赖交接时才生成契约块，否则返回空字符串
+   * （入口仅在非空时追加，保证重复 before 不堆积空壳契约）。
    * 输出包含 CONTRACT_BEGIN/END 标记，子代理可追加自己的契约。
    */
   buildPrompt(context: {
@@ -60,8 +78,7 @@ export class ContractManager {
     prerequisites: { from: string; contract: AgentContract }[];
     constraints: string[];
   }): string {
-    const lines = ['<!-- CONTRACT_BEGIN -->', '## 本任务前置上下文'];
-    lines.push(`- 目标: ${context.goal}`);
+    const lines: string[] = [];
     if (context.constraints.length) {
       lines.push('- 约束:');
       context.constraints.forEach(c => lines.push(`  - ${c}`));
@@ -78,8 +95,8 @@ export class ContractManager {
         }
       });
     }
-    lines.push('<!-- CONTRACT_END -->');
-    return lines.join('\n');
+    if (lines.length === 0) return '';
+    return ['<!-- CONTRACT_BEGIN -->', '## 本任务前置上下文', ...lines, '<!-- CONTRACT_END -->'].join('\n');
   }
 
   /**
