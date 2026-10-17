@@ -308,6 +308,7 @@ node test/delegate-p1.ts   # P1：环境契约注入 + 重试
 node test/stall-p3.ts      # P3-1 N2 停滞检测（35 用例）
 node test/schedule-p3.ts   # P3-3 N3 调度参数（24 用例）
 node test/env-sig-p3.ts    # P3-2 N1 环境契约持久化（50 用例）
+node test/skills-contract.ts # 技能契约：四角色验证纪律 + 证据复用 + 扩大条件（直接读 skills/*.md）
 ```
 
 基线说明（2026-09-03 实测，`node` 直跑）：`unit` 全 PASS + `delegate-p1` 41 + `stall-p3` 35 + `schedule-p3` 24 + `env-sig-p3` 50 + `preset-copy` 13 + `preset-install` 35 + `preset-schema` 28 —— **8/8 全绿，全部 PASS**（node >= 24）。无需 LLM，单测纯本地模拟。
