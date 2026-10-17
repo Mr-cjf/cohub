@@ -24,7 +24,7 @@ description: "Use for engineering repository, deployment, service-status, debugg
 ## 主代理边界
 
 - 仅规划、委派、跟踪和验证；不自行修改业务源码，不替代执行代理。
-- 提交完整任务、角色技能绝对路径、输入摘要、已确认决策、约束、产出和验收。不要粘贴整份原始文件或累计日志。
+- 提交完整任务指令（目标只表达一次、必要输入、真实约束、产出与验收）与角色技能绝对路径。附加上下文默认 `none`，仅当委派方明确选择 `relevant`/`summary` 时按 [ContextGuard 规范](references/context-guard.md) 附加摘要或片段；不要粘贴整份原始文件或累计日志。
 - 使用当前会话真实提供的 spawn/wait、检查和 Council 工具；不虚构插件或 MCP 的宿主调度能力。
 
 ## 代理选择
