@@ -1,5 +1,7 @@
 // dsh-port/test/unit.ts —— 运行时单元验证（无需 LLM）
 // 用法：node test/unit.ts（node >= 24，默认类型剥离）
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
 import { Context } from "@deepseek-ai/cordis";
 import systemPrompt from "@deepseek-ai/dsh-system-prompt";
 import skills from "@deepseek-ai/dsh-skill";
@@ -80,6 +82,94 @@ const okDelegate = capturedPrompt.includes(fixer.brief)
   && !capturedPrompt.includes('破坏性或大范围的 shell 操作前');
 console.log('delegate 注入 brief:', okDelegate ? 'PASS' : 'FAIL');
 
+// ③d 编排契约保留：orchestrator 技能关键规则原样存在（纯调度禁止 / schema / 批次 / 失败处理 / 专责审查）
+const orchContent = COHUB_SKILLS.find((s: any) => s.name === 'co-orchestrator')!.content;
+const ORCH_KEYS: [string, string][] = [
+  ['纯调度禁止', '禁止使用任何文件/代码操作工具'],
+  ['仅允许调度工具', '仅允许调度工具'],
+  ['delegate schema 必填 skill', 'invalid arguments: missing required property "skill"'],
+  ['delegate schema 必填 prompt', 'prompt'],
+  ['批次限制参数', 'schedule.maxParallelBatch'],
+  ['缺省批大小 3', '缺省 3'],
+  ['墙钟预算参数', 'wallClockBudgetMs'],
+  ['批量并行(工具层 allSettled)', 'Promise.allSettled'],
+  ['消息层多 tool_use 并发', 'tool_use'],
+  ['写冲突串行', '写冲突'],
+  ['失败处理状态枚举', 'completed/failed/error'],
+  ['中止断点续跑', '从中断处继续'],
+  ['专责代码审查', 'co-oracle 代码审查'],
+  ['独立 UI 审查', 'co-designer UI 审查'],
+  ['planner 审批选项', 'ask_user_question'],
+  ['规则1 方案先行', '必须先输出方案'],
+  ['规则4 三问不新增', '低频吗'],
+];
+let failKeys = 0;
+for (const [k, v] of ORCH_KEYS) {
+  const ok = orchContent.includes(v);
+  console.log(`  契约[${k}]: ${ok ? 'PASS' : 'FAIL'}`);
+  if (!ok) failKeys++;
+}
+const okOrch = failKeys === 0;
+console.log('编排契约保留:', okOrch ? 'PASS' : 'FAIL');
+
+// ③e 两层并行语义：第一层子代理内部原生工具并行；第二层代理间独立验收并行
+const okLayer1 = orchContent.includes('子代理内部')
+  && orchContent.includes('原生工具')
+  && orchContent.includes('不按文件数')
+  && orchContent.includes('不自动合并');
+const okLayer2 = orchContent.includes('可独立执行验收')
+  && orchContent.includes('maxParallelBatch')
+  && orchContent.includes('缺省 3')
+  && orchContent.includes('delegate_batch')
+  && orchContent.includes('tool_use');
+const okWriteConflict = orchContent.includes('写冲突')
+  && orchContent.includes('独立只读同文件可并行');
+console.log('第一层(子代理内部工具并行):', okLayer1 ? 'PASS' : 'FAIL');
+console.log('第二层(代理间独立验收并行):', okLayer2 ? 'PASS' : 'FAIL');
+console.log('写冲突精确限定(非一律同文件串行):', okWriteConflict ? 'PASS' : 'FAIL');
+const okLayers = okLayer1 && okLayer2 && okWriteConflict;
+
+// ③f brief 预算：orchestrator / planner brief ≤300 字且含中文
+const okBriefBudget = ['co-orchestrator', 'co-planner'].every((n) => {
+  const s = COHUB_SKILLS.find((x: any) => x.name === n)!;
+  return s.brief.length <= 300 && /[\u4e00-\u9fff]/.test(s.brief);
+});
+const plannerBrief = COHUB_SKILLS.find((x: any) => x.name === 'co-planner')!.brief;
+const okPlannerBrief = plannerBrief.includes('可独立执行验收')
+  && plannerBrief.includes('不按文件数')
+  && plannerBrief.includes('写冲突');
+console.log('brief 预算(≤300/含中文):', okBriefBudget ? 'PASS' : 'FAIL');
+console.log('planner brief 并行判据(独立验收/非文件数):', okPlannerBrief ? 'PASS' : 'FAIL');
+
+// ③f2 orchestrator brief 并行语义：与 orchestrator.md 正文一致（子代理内部聚合 / 代理间独立验收并行 / 写冲突精确限定 / 必要原 brief 保留）
+const orchBrief = COHUB_SKILLS.find((x: any) => x.name === 'co-orchestrator')!.brief;
+const okOrchBrief = orchBrief.includes('子代理内部')          // 同具体目标多读取/搜索聚合子代理内部工具并行
+  && orchBrief.includes('不拆多个代理')                        // 不按文件数/复杂度拆任务
+  && orchBrief.includes('可独立执行验收')                       // 代理间并行判据
+  && orchBrief.includes('无实依赖写冲突')
+  && orchBrief.includes('代理间并行')
+  && orchBrief.includes('maxParallelBatch')                    // 平台批次上限保持
+  && orchBrief.includes('独立只读可并行')                        // 写冲突精确限定：非一律同文件串行
+  && orchBrief.includes('纯调度')                               // 纯调度禁止保留
+  && orchBrief.includes('用户确认')                              // 规划审批保留
+  && orchBrief.includes('co-fixer') && orchBrief.includes('co-designer') // 专责保留
+  && !orchBrief.includes('同文件/依赖串行');                    // 负断言：旧笼统"同文件一律串行"语义已删除
+console.log('orchestrator brief 并行语义(聚合/独立验收/写冲突限定/原brief保留):', okOrchBrief ? 'PASS' : 'FAIL');
+
+// ③g 生成源一致：COHUB_SKILLS.content 与磁盘 skills/*.md 完全一致（需先 bun run build 重新生成）
+// 磁盘文件按 checkout 可能为 CRLF/CR，而模板字面量运行时恒为 LF：比较前仅规范化换行，其余字符/空格/内容严格相等
+const normalizeEol = (t: string) => t.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+const okNorm = normalizeEol('a\r\nb\rc\nd') === 'a\nb\nc\nd' && normalizeEol('a\r\nb') !== normalizeEol('a\r\nx');
+console.log('换行规范化(CRLF/CR→LF 等价, 实质字符变化仍区分):', okNorm ? 'PASS' : 'FAIL');
+const SKILLS_DIR = path.join(import.meta.dirname, '..', 'skills');
+let genMismatch = 0;
+for (const s of COHUB_SKILLS) {
+  const disk = readFileSync(path.join(SKILLS_DIR, `${s.name.replace('co-', '')}.md`), 'utf-8');
+  if (normalizeEol(disk) !== s.content) { genMismatch++; console.log(`  源不一致: ${s.name}（请先 bun run build）`); }
+}
+const okGen = genMismatch === 0 && okNorm;
+console.log('生成源一致(需 build 后验证):', okGen ? 'PASS' : 'FAIL');
+
 // ============ M4：council 工具 ============
 console.log('');
 console.log('===== M4 council 测试 =====');
@@ -141,7 +231,7 @@ const okAgg = String(out).includes('**expert1** (m1):')
 console.log('聚合输出:', okAgg ? 'PASS' : 'FAIL');
 console.log('输出预览:', String(out).split('\n').slice(0, 6).join(' / '));
 
-const allOk = okSkills && okContent && okBrief && okDelegate && okRouting && okAgg;
+const allOk = okSkills && okContent && okBrief && okDelegate && okOrch && okLayers && okBriefBudget && okPlannerBrief && okOrchBrief && okGen && okRouting && okAgg;
 console.log('');
 console.log(allOk ? '✅ 全部 PASS' : '❌ 存在 FAIL');
 process.exit(allOk ? 0 : 1);
