@@ -52,6 +52,8 @@ codex plugin remove oh-my-codex-cohub@personal
 
 主编排采用「理解 → 收集 → 规范分析 → 制定方案 → 调度执行 → 验证」，包含 ContextGuard 上下文包、任务看板和文件冲突纪律。
 
+上下文默认策略：所有角色 ContextGuard 默认 `none`——委派只携带完整任务指令（目标只表达一次、必要输入、真实约束、验收），不按角色默认附加历史文件、决策、错误或依赖摘要；任务明确选择 `relevant`/`summary` 时才附加相应材料（数量与字符软预算见[效率规范](skills/cohub/references/efficiency.md)）。`none` 不表示零任务信息，也不等于 `fork_turns=none`：宿主 fork 分支、模型/推理覆盖限制和主会话 `ultra` 设置保持不变。
+
 ## 批量操作
 
 普通任务只执行必要的理解、收集、规则分析、规划、执行和验证步骤；复杂任务可采用完整流程。Codex 版的规划、调度和执行技能共享[效率规范](skills/cohub/references/efficiency.md)与[批量操作规范](skills/cohub/references/batch-execution.md)：
