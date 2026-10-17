@@ -65,7 +65,7 @@ task 派发
 | 环节 | 落点 | 说明 |
 |---|---|---|
 | 上下文策略选择 | 【现状】src/context/strategy.ts resolveStrategy()（优先级：task 覆盖参数 > 代理默认配置 > none） | 已有参数面，但为静态配置 |
-| 静态策略表 | 【现状】src/context/types.ts DEFAULT_CONTEXT_CONFIG（co-fixer/co-designer/co-planner=relevant；co-oracle/co-council=summary；其余 none） | 无运行时调整 |
+| 静态策略表 | 【现状】src/context/types.ts DEFAULT_CONTEXT_CONFIG（全部代理默认 none——历史上下文默认不注入；显式 `context_override` 或配置 `context.strategy` opt-in 后按策略注入；`dependencyPropagation` 默认 false，显式开启才传播依赖摘要） | 无运行时调整 |
 | 模型/变体覆盖 | 【现状】src/index.ts:350-401（hub config 的 model/variant 覆盖链） | 静态覆盖 |
 | 动态自适应 | 【改进点】adaptive 关键词零命中——未实现基于反馈的自动参数调整 | 任务 P2「参数自适应」针对此缺口 |
 

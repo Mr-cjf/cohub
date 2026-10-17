@@ -115,10 +115,11 @@ bun test
 
 ### 发版
 
-流程见 `.opencode/rules/发版规范.md`。关键步骤：
-1. 更新 `CHANGELOG.md`
-2. `npm version patch|minor|major`
-3. 确保使用 SSH remote 后 `git push --follow-tags`（CI 自动构建并发布到 npm）
+权威流程见 `.opencode/rules/发版规范.md`。关键步骤：
+1. 更新 `CHANGELOG.md`（独立 docs commit）
+2. **准备版本不提前打 tag**：直接编辑 `package.json` 与 `package-lock.json` 的 `version` 并独立 chore commit；**不使用 `npm version`**（避免其自动 commit / 打 tag / 触发 lifecycle）
+3. 合并到 main 后，对已核实的 main SHA 打 **annotated** 标签 `opencode-vX.Y.Z`（`git tag -a "opencode-vX.Y.Z" -m "release X.Y.Z" <main-SHA>`），确保使用 SSH remote 后 `git push --follow-tags`
+4. 发布由根仓库 Publish to npm workflow（OIDC 身份）执行，**不在本地运行 `npm publish`**
 
 ## 常见陷阱
 

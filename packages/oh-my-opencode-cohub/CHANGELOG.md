@@ -1,4 +1,20 @@
 # CHANGELOG
+## [1.18.7] - 2026-10-17
+
+### 变更（⚠️ 行为变更）
+- **默认不再注入历史文件与依赖上下文**：所有代理上下文策略默认改为 `none`，`dependencyPropagation` 默认 `false`——默认不再读取父会话历史文件、不再注入历史文件内容 / 历史决策 / 历史错误 / 依赖摘要
+- **显式 opt-in 保留**：显式配置的 context 策略与 `dependencyPropagation` 开关能力完整保留，需要历史上下文或依赖注入的代理可显式开启
+- **去目标空壳与重复**：编排契约移除 goal-only 空目标壳与重复目标，保留实质契约内容
+
+### 修复
+- **后台任务 idle 早于 after 绑定时不再漏捕获结果 / 质量 / token 采样**：任务在 `tool.execute.after` 完成子会话绑定前先收到 `session.idle` 时，由 after 绑定后的有界核验兜底补齐结果捕获、质量回写与 token 采样，不因早到 idle 遗漏
+
+### 工程
+- **新增本包 CI 校验工作流**：`.github/workflows/opencode-check.yml`——PR / push 路径过滤本包与 workflow 自身、支持 `workflow_dispatch`；仅 `contents: read` 权限，不触发发布；Node 24 + Bun 对齐发布工作流，npm 缓存依赖本包 package-lock；工作目录本包；步骤 npm ci → `npm run build`（先生成提示词）→ `npm run test`（即 `bun test ./src`）→ `npx tsc --noEmit -p tsconfig.json`；Ubuntu / Windows 双平台；同分支重复 run 自动取消，不阻断发布工作流
+
+### 测试
+- 更新上下文 / 契约 / 入口 / 统计默认策略断言，对齐「默认 none、显式 opt-in」行为；追踪看板结果记录机制不受影响，继续按原有机制记录
+
 ## [1.18.6] - 2026-10-16
 
 ### 变更
