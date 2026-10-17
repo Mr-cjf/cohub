@@ -52,8 +52,8 @@ export function createCouncilTool(config: CouncilRuntimeConfig, ctx: any) {
     },
 
     output: {
-      schema: { type: "string" },
-      render: (_args: unknown, value: unknown) => [{ type: "text", text: String(value) }],
+      schema: { type: "string" as const },
+      render: (_args: unknown, value: unknown) => [{ type: "text" as const, text: String(value) }],
     },
 
     isConcurrencySafe: () => true,

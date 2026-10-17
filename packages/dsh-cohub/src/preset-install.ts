@@ -14,7 +14,7 @@
 //   - 当前哈希 = 台账哈希（或文件缺失）→ 未被改动 → 用包内新版本覆盖
 // 首次安装（无台账）直接全量复制；台账损坏或读写失败一律静默降级为「仅新增」的旧行为。
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, type Dirent } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 /** 安装台账文件名（位于 preset root 的上一级，避免被 roster 扫描为 preset） */
@@ -248,7 +248,7 @@ export function installShippedPresets(
 ): PresetInstallResult {
   const result: PresetInstallResult = { installed: [], updated: [], skipped: [], removed: [] };
 
-  let entries;
+  let entries: Dirent[];
   try {
     entries = readdirSync(shippedDir, { withFileTypes: true });
   } catch {
