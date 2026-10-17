@@ -192,10 +192,12 @@ const allFailed = lib.formatCouncillorResults('原题', [
 console.log('全失败兜底:', allFailed.includes('All councillors failed') && allFailed.includes('original prompt alone') ? 'PASS' : 'FAIL');
 
 // ⑤ 集成：fake provider 并行分发 + agentOptions 模型路由
+// 0.2 真实 SubagentRuntime 在 start 前 assertCapabilities：请求带 agentOptions 时
+// provider 必须声明 capabilities.agentOptions=true，否则拒绝（fail loud，不静默忽略）。
 const started: any[] = [];
 root.subagents.registerProvider({
   name: 'fake-council',
-  capabilities: { outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+  capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
   start(request: any) {
     started.push({ model: request.agentOptions, prompt: request.prompt[0].text, parentId: request.parent.id });
     return {

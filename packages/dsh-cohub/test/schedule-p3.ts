@@ -26,18 +26,20 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 // ---- 用例 1：schedule Config 缺省与非法值 ----
 {
   console.log("===== 用例 1：schedule Config 缺省与非法值 =====");
+  // DSH 0.2：Config 的 skills/schedule/delegateRetry 是 .volatile() 字段，
+  // 解析输出为 Volatile<T> 引用，需 .get() 取当前快照（见 runtime-0.2.ts）。
   const def = Config({});
-  check("缺省 maxParallelBatch=3", def.schedule.maxParallelBatch === 3);
-  check("缺省 wallClockBudgetMs=600000", def.schedule.wallClockBudgetMs === 600_000);
+  check("缺省 maxParallelBatch=3", def.schedule.get().maxParallelBatch === 3);
+  check("缺省 wallClockBudgetMs=600000", def.schedule.get().wallClockBudgetMs === 600_000);
   // useJobTracking / adaptiveBatch 已于 2026-09-03 从 ScheduleConfig 移除；以下反向断言验证不存在
-  check("useJobTracking 已移除 → undefined", def.schedule.useJobTracking === undefined);
-  check("adaptiveBatch 已移除 → undefined", def.schedule.adaptiveBatch === undefined);
+  check("useJobTracking 已移除 → undefined", def.schedule.get().useJobTracking === undefined);
+  check("adaptiveBatch 已移除 → undefined", def.schedule.get().adaptiveBatch === undefined);
   let ok1 = true; try { Config({ schedule: { useJobTracking: "bogus" } }); } catch { ok1 = false; }
   check("useJobTracking 已移除 → 传参不报错（schema 忽略未知 key）", ok1);
   let ok2 = true; try { Config({ schedule: { adaptiveBatch: "bogus" } }); } catch { ok2 = false; }
   check("adaptiveBatch 已移除 → 传参不报错（schema 忽略未知 key）", ok2);
   const over = Config({ schedule: { maxParallelBatch: 5 } });
-  check("部分覆盖保留其他缺省", over.schedule.maxParallelBatch === 5 && over.schedule.wallClockBudgetMs === 600_000);
+  check("部分覆盖保留其他缺省", over.schedule.get().maxParallelBatch === 5 && over.schedule.get().wallClockBudgetMs === 600_000);
 }
 
 // ---- 用例 2：注入段（systemPrompt.section）包含实际生效值 ----

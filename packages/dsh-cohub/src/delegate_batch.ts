@@ -61,7 +61,7 @@ export function createDelegateBatchTool(
 
   function resolveRuntimeConfig() {
     const settingsNow = getSettings ? (getSettings() ?? {}) : {};
-    const scheduleCfg = settingsNow.schedule ?? (config as any).schedule;
+    const scheduleCfg = settingsNow.schedule ?? config.schedule;
     // maxParallelBatch：从 settings 读取（默认 3），与硬上限 MAX_BATCH_SIZE 取小值；
     // 保留 MAX_BATCH_SIZE 作为绝对安全上限（防止配置错误导致超量并行）。
     const rawMaxParallel = Math.max(1, scheduleCfg?.maxParallelBatch ?? 3);

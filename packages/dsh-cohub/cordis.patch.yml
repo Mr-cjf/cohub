@@ -10,7 +10,8 @@
         councillors: []
         councilTimeoutMs: 180000
         # skills: delegate 委派路由，按 skill 名覆盖子代理的 provider/model/maxTokens。
-        # skills 现在可通过 DSH settings（settings.yaml 的 cohub.skills）配置，此处为默认值/组合层（base）；未配置则继承父模型。示例：
+        # DSH 0.2 起本字段是 volatile：设置页按 profile entry id（cohub）投影并实时提交
+        # （loader/volatile-update），无需重启；此处为组合层初始值。未配置则继承父模型。示例：
         # skills:
         #   - { name: co-fixer, provider: deepseek-official, model: deepseek-v4-flash }
         #   - { name: co-explorer, provider: deepseek-official, model: deepseek-v4-flash }

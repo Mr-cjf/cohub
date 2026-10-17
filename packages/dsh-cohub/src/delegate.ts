@@ -18,7 +18,7 @@
 // > DEFAULT_ENV_CONTRACT（探针式）；use="off" 不读不写；读写失败静默降级，行为不劣化。
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
-import { EnvSignatureLearner, envFingerprint, normalizeErrorSignature, pickEnvContractText, readEnvSignatures, writeEnvSignatures, type EnvFingerprint, type EnvSignaturesConfig } from "./env-signatures.ts";
+import { EnvSignatureLearner, envFingerprint, normalizeErrorSignature, pickEnvContractText, readEnvSignatures, writeEnvSignatures, type EnvContractFacts, type EnvFingerprint, type EnvSignaturesConfig } from "./env-signatures.ts";
 import { contentText } from "./text-utils.ts";
 import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 
@@ -69,6 +69,11 @@ export interface DelegateConfig {
   };
   /** P3-2（N1）环境契约持久化：默认 auto（无缓存时行为不变，回退探针式） */
   envSignatures?: EnvSignaturesConfig;
+  /** P3-3（N3）调度参数：maxParallelBatch / wallClockBudgetMs（settings 优先，config 为 fallback） */
+  schedule?: {
+    maxParallelBatch?: number;
+    wallClockBudgetMs?: number;
+  };
 }
 
 /**
@@ -100,8 +105,18 @@ export function createEnvContract(config: DelegateConfig): { enabled: boolean; t
   };
 }
 
+/** 归一化后的环境契约签名配置（createEnvSig 输出：use/ttlMs/confirmCount 已保证有值） */
+export interface NormalizedEnvSig {
+  use: "auto" | "off" | "manual";
+  ttlMs: number;
+  confirmCount: number;
+  contract?: EnvContractFacts;
+  errorCategories?: string[];
+  cachePath?: string;
+}
+
 /** 从 DelegateConfig 提取 envSig 归一配置 */
-export function createEnvSig(config: DelegateConfig): EnvSignaturesConfig {
+export function createEnvSig(config: DelegateConfig): NormalizedEnvSig {
   return {
     use: (config.envSignatures?.use ?? "auto") as "auto" | "off" | "manual",
     ttlMs: Math.max(0, config.envSignatures?.ttlMs ?? 604_800_000),
@@ -115,7 +130,7 @@ export function createEnvSig(config: DelegateConfig): EnvSignaturesConfig {
 /** delegate / delegate_batch 共用 output 配置 */
 export const DELEGATE_OUTPUT_CONFIG = {
   schema: { type: "string" as const },
-  render: (_args: unknown, value: unknown) => [{ type: "text", text: String(value) }],
+  render: (_args: unknown, value: unknown) => [{ type: "text" as const, text: String(value) }],
 } as const;
 
 /** 归一化工具参数（S4）：空白折叠 + 截断，用于「同工具名 + 同参数」比较 */
@@ -543,11 +558,13 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       //    stall.enabled=true 时每个 attempt 挂看门狗，提前中止并计入同一 maxRetries 预算。
       let lastReason = "unknown";
       let lastPartial = "";
-      let lastStall: StallInfo | null = null;
+      // 停滞信息经可变状态对象承载：直接 let 声明会在闭包/循环内被 TS 流分析收窄为 never
+      // （循环头声明值为 null 时，三元判断的真分支类型为 never），对象属性则保持 StallInfo | null。
+      const stallState: { last: StallInfo | null } = { last: null };
       let retries = 0;
 
       for (let attempt = 0; attempt <= retry.maxRetries; attempt++) {
-        const stallNote = lastStall ? "；停滞诊断：" + lastStall.diagnostics : "";
+        const stallNote = stallState.last ? "；停滞诊断：" + stallState.last.diagnostics : "";
         const retryNote = attempt > 0
           ? "\n\n[重试 #" + attempt + "] 上一次执行中止，原因：" + lastReason
             + "；已完成部分：" + (lastPartial || "（无）") + stallNote
@@ -618,7 +635,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           if (ac?.signal.aborted) {
             lastReason = "aborted";
             lastPartial = "";
-            lastStall = stallInfo;
+            stallState.last = stallInfo;
             if (!RETRYABLE.has(lastReason) || attempt >= retry.maxRetries) break;
             retries++;
             await new Promise(r => setTimeout(r, retry.retryDelayMs));
@@ -647,7 +664,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         if (outcome?.stopReason === "completed") return contentText(outcome.output);
         lastReason = String(outcome?.stopReason ?? "unknown");
         lastPartial = contentText(outcome?.output ?? []).slice(0, 500);
-        lastStall = stallInfo;
+        stallState.last = stallInfo;
         // N2：停滞触发的中止仅在 recoverable=true 时按可重试中止处理；否则直接失败
         if (stallInfo && !stall.recoverable) break;
         if (!RETRYABLE.has(lastReason) || attempt >= retry.maxRetries) break;
@@ -658,7 +675,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       // ⑧ 重试耗尽（或不可重试）：抛错并回传结构化 cause（通用，不依赖任何环境枚举）
       const err: any = new Error(
         'delegate: subagent stopped with reason "' + lastReason + '" after ' + retries + ' retry(ies)'
-        + (lastStall ? "; stalled: " + lastStall.diagnostics : "")
+        + (stallState.last ? "; stalled: " + stallState.last.diagnostics : "")
         + "; partial: " + lastPartial,
       );
       err.cause = {
@@ -666,7 +683,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         partial: lastPartial,
         skill: args.skill,
         retries,
-        ...(lastStall ? { stall: lastStall } : {}),
+        ...(stallState.last ? { stall: stallState.last } : {}),
       };
       throw err;
     },
