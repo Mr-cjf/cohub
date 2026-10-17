@@ -120,3 +120,60 @@ describe('Planner 两层计划', () => {
     expect(planner).toContain('不按文件数拆');
   });
 });
+
+describe('1.18.8 测试决策契约：验证范围与扩大条件', () => {
+  test('orchestrator 在委派指令中明确指定验证范围，fixer 只执行指定范围不自行扩大', () => {
+    expect(orchestrator).toContain('验证范围由 orchestrator 在委派指令中明确指定');
+    expect(orchestrator).toContain('fixer 只执行指定范围');
+    expect(orchestrator).toContain('不自行扩大全量');
+    expect(fixer).toContain('执行指定验证范围，不自行扩大全量');
+    expect(fixer).toContain('验证范围以 orchestrator 委派指令为准');
+  });
+
+  test('默认策略：已知失败先集中归因并修复，定向收敛后再按影响扩大', () => {
+    expect(orchestrator).toContain('集中归因');
+    expect(orchestrator).toContain('定向收敛');
+    expect(orchestrator).toContain('按影响范围扩大');
+  });
+
+  test('状态相同无新理由不重复验证：报告/复用已知结果（orchestrator 与 fixer 一致）', () => {
+    expect(orchestrator).toContain('没有新理由时不重复验证');
+    expect(orchestrator).toContain('报告/复用已知结果');
+    expect(fixer).toContain('无新理由时不重复验证');
+  });
+
+  test('状态相同判定不以 git diff 文件名为准，不自动忽略配置/docs', () => {
+    expect(orchestrator).toContain('git diff 文件名');
+    expect(orchestrator).toContain('不自动忽略配置/文档');
+  });
+
+  test('合理例外需说明目的与范围（复验/TDD/竞态/合并跨模块/诊断扩大）', () => {
+    expect(orchestrator).toContain('合理例外');
+    expect(orchestrator).toContain('说明目的与范围');
+    expect(orchestrator).toContain('明确诊断目的');
+    expect(planner).toContain('合理例外');
+  });
+
+  test('边界：不设全量一次上限、不把测试总次数当浪费、文本约束不承诺强制模型行为', () => {
+    expect(orchestrator).toContain('不设置"全量永远只跑一次"上限');
+    expect(orchestrator).toContain('不把测试总次数当浪费');
+    expect(orchestrator).toContain('不承诺能强制模型行为');
+  });
+
+  test('fixer 报告失败与复验理由：失败不截断、保留位置、回传归因', () => {
+    expect(fixer).toContain('报告失败与复验理由');
+    expect(fixer).toContain('不截断错误');
+    expect(fixer).toContain('失败归因');
+  });
+
+  test('planner 方案须写明验证范围（定向/全量）与扩大条件', () => {
+    expect(planner).toContain('验证范围与扩大条件（必须在方案中写明）');
+    expect(planner).toContain('定向测试集/全量');
+    expect(planner).toContain('扩大条件');
+  });
+
+  test('planner 验证任务放最后 Wave 时须注明范围，fixer 不自行扩大', () => {
+    expect(planner).toContain('验证任务须注明执行范围（定向/全量）与扩大条件');
+    expect(planner).toContain('fixer 只执行委派指定范围，不自行扩大');
+  });
+});

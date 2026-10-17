@@ -562,7 +562,7 @@ const CoHubPlugin: Plugin = async (input, options) => {
     seq: number;
   }): void {
     void contextEngine
-      .captureResult(opts.childSessionId, opts.alias, opts.agent, { notBefore: opts.createdAt })
+      .captureResult(opts.childSessionId, opts.alias, opts.agent, { notBefore: opts.createdAt, parentSessionId: opts.parentSessionId })
       .then((captured) => {
         // 代次守卫：已有更新的采样请求 → 本请求过期，不提交任何写回（未知亦遵守）
         if (samplingSeq.get(opts.alias) !== opts.seq) return;

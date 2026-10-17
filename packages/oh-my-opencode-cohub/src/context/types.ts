@@ -17,6 +17,8 @@ export interface DependencyResult {
   agent: string;         // 如 "co-explorer"
   keyOutput: string;     // 子代理结果中的关键信息
   capturedAt: number;    // Date.now()
+  /** 捕获时所在的父会话 ID（读端按此过滤，隔离跨父会话的摘要串注入） */
+  parentSessionId: string;
 }
 
 /**

@@ -1290,7 +1290,8 @@ describe('captureResult 依赖传播开关（默认关闭）', () => {
       ]),
     ]);
     const engine = new ContextEngine(client, { dependencyPropagation: true });
-    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer');
+    // 传播写入需带 parentSessionId（父会话隔离后：缺 parent 正常返回但不进入传播缓存）
+    const result = await engine.captureResult('ses_child', 'fix-1', 'co-fixer', { parentSessionId: 'ses_parent' });
     expect(result!.output).toContain('TypeScript 严格模式');
     const ctxId = engine.registerContext({ description: 'test' });
     await engine.fillContextAsync(ctxId, 'ses_parent', { strategy: 'relevant' });
@@ -1298,5 +1299,115 @@ describe('captureResult 依赖传播开关（默认关闭）', () => {
     expect(details).toContain('📦 依赖结果');
     expect(details).toContain('**co-fixer**');
     expect(details).toContain('TypeScript 严格模式');
+  });
+});
+
+// ===========================================================================
+// Wave1B：依赖摘要父会话隔离
+// 只修同 Instance 跨父会话风险：captureResult 仅当显式传播启用且 parent 存在（非空）时
+// 把带 parent 的条目写入传播缓存；fill 读取先按 parent 过滤再 slice 限额（先 filter 后 limit）。
+// 同父会话依然是近期任务摘要（不是真实任务依赖图）——不扩展到任务级相关性分析。
+// ===========================================================================
+describe('captureResult 依赖传播父会话隔离（Wave1B）', () => {
+  test('跨父会话隔离：A 的结果不进 B（显式传播 + 非 none 策略）', async () => {
+    const { client } = captureResultClient([
+      asstMsg({ time: { created: 300 }, id: 'msg-a' }, [{ type: 'text', text: 'A 父会话结论' }]),
+    ]);
+    const engine = new ContextEngine(client, { dependencyPropagation: true });
+    await engine.captureResult('ses_child', 'exp-1', 'co-explorer', { parentSessionId: 'ses_parent_a' });
+
+    // B 父会话 fill：filter 不匹配 → 不注入依赖
+    const ctxB = engine.registerContext({ description: 'B 任务' });
+    await engine.fillContextAsync(ctxB, 'ses_parent_b', { strategy: 'relevant' });
+    expect(engine.formatContextDetails(ctxB)).not.toContain('📦 依赖结果');
+
+    // A 父会话 fill：filter 匹配 → 注入
+    const ctxA = engine.registerContext({ description: 'A 新任务' });
+    await engine.fillContextAsync(ctxA, 'ses_parent_a', { strategy: 'relevant' });
+    const detailsA = engine.formatContextDetails(ctxA);
+    expect(detailsA).toContain('📦 依赖结果');
+    expect(detailsA).toContain('A 父会话结论');
+  });
+
+  test('同 parent 结果仍传播：同父多结果全部注入（顺序保持）', async () => {
+    const { client } = captureResultClient([
+      asstMsg({ time: { created: 300 }, id: 'msg-1' }, [{ type: 'text', text: '结论一' }]),
+    ]);
+    const engine = new ContextEngine(client, { dependencyPropagation: true });
+    // 同父两次捕获（mock 每次返回同一条消息，用 alias 区分条目）
+    await engine.captureResult('ses_c1', 'exp-1', 'co-explorer', { parentSessionId: 'ses_p' });
+    await engine.captureResult('ses_c2', 'exp-2', 'co-librarian', { parentSessionId: 'ses_p' });
+
+    const ctxId = engine.registerContext({ description: 'test' });
+    await engine.fillContextAsync(ctxId, 'ses_p', { strategy: 'relevant' });
+    const details = engine.formatContextDetails(ctxId);
+    expect(details).toContain('**co-explorer**');
+    expect(details).toContain('**co-librarian**');
+  });
+
+  test('多 parent 交错且其他 parent 超过限额：先 filter 后 limit', async () => {
+    const { client } = captureResultClient([
+      asstMsg({ time: { created: 300 }, id: 'msg-x' }, [{ type: 'text', text: '结论X' }]),
+    ]);
+    const engine = new ContextEngine(client, { dependencyPropagation: true, maxDependencies: 1 });
+    // parent B 两条（全局已超限额）+ parent A 一条
+    await engine.captureResult('ses_b1', 'b-1', 'co-explorer', { parentSessionId: 'ses_b' });
+    await engine.captureResult('ses_b2', 'b-2', 'co-librarian', { parentSessionId: 'ses_b' });
+    await engine.captureResult('ses_a1', 'a-1', 'co-fixer', { parentSessionId: 'ses_a' });
+
+    // A 先 filter 再 limit：B 的结果不占 A 的限额
+    const ctxA = engine.registerContext({ description: 'A 任务' });
+    await engine.fillContextAsync(ctxA, 'ses_a', { strategy: 'relevant' });
+    const detailsA = engine.formatContextDetails(ctxA);
+    expect(detailsA).toContain('**co-fixer**');
+    expect(detailsA).not.toContain('co-explorer');
+    expect(detailsA).not.toContain('co-librarian');
+
+    // B filter 后取最近 1 条（slice(-1) → b-2）
+    const ctxB = engine.registerContext({ description: 'B 任务' });
+    await engine.fillContextAsync(ctxB, 'ses_b', { strategy: 'relevant' });
+    const detailsB = engine.formatContextDetails(ctxB);
+    expect(detailsB).toContain('**co-librarian**');
+    expect(detailsB).not.toContain('**co-explorer**');
+    expect(detailsB).not.toContain('**co-fixer**');
+  });
+
+  test('parent 缺失/空：正常返回结果但不传播（绝不回退其他 parent/全局最近）', async () => {
+    const { client } = captureResultClient([
+      // 文本须同时满足：含决策关键词「决定」、长度 >10 且 <200（extractDecisions 阈值）、
+      // 且保留「结论P」子串供下方 output 断言——decisions 计数才为 1。
+      asstMsg({ time: { created: 300 }, id: 'msg-p' }, [{ type: 'text', text: '我们决定采用结论P并保留当前结果捕获行为' }]),
+    ]);
+    const engine = new ContextEngine(client, { dependencyPropagation: true });
+    // 缺 parent：正常捕获返回（output/decisions 不受影响）
+    const r1 = await engine.captureResult('ses_c1', 'p-1', 'co-explorer');
+    expect(r1!.output).toContain('结论P');
+    expect(r1!.decisions).toBe(1);
+    // 空 parent：同样正常返回但不传播
+    const r2 = await engine.captureResult('ses_c2', 'p-2', 'co-librarian', { parentSessionId: '' });
+    expect(r2!.output).toContain('结论P');
+
+    // 任意父会话 fill 均不注入（条目未进入传播缓存）
+    const ctxA = engine.registerContext({ description: 'A' });
+    await engine.fillContextAsync(ctxA, 'ses_a', { strategy: 'relevant' });
+    expect(engine.formatContextDetails(ctxA)).not.toContain('📦 依赖结果');
+
+    // 之后带有效 parent 捕获 → 可传播（写读两侧均按 parent 匹配）
+    await engine.captureResult('ses_c3', 'p-3', 'co-fixer', { parentSessionId: 'ses_a' });
+    const ctxB = engine.registerContext({ description: 'B' });
+    await engine.fillContextAsync(ctxB, 'ses_a', { strategy: 'relevant' });
+    expect(engine.formatContextDetails(ctxB)).toContain('**co-fixer**');
+  });
+
+  test('dependencyPropagation=false：即使传 parent 也不注入（disabled 不注入）', async () => {
+    const { client } = captureResultClient([
+      asstMsg({ time: { created: 300 }, id: 'msg-d' }, [{ type: 'text', text: '结论D' }]),
+    ]);
+    const engine = new ContextEngine(client); // 默认 dependencyPropagation=false
+    const result = await engine.captureResult('ses_child', 'd-1', 'co-fixer', { parentSessionId: 'ses_p' });
+    expect(result!.output).toContain('结论D'); // 捕获返回不受影响
+    const ctxId = engine.registerContext({ description: 'test' });
+    await engine.fillContextAsync(ctxId, 'ses_p', { strategy: 'relevant' });
+    expect(engine.formatContextDetails(ctxId)).not.toContain('📦 依赖结果');
   });
 });
