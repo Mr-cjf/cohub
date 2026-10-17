@@ -260,6 +260,8 @@ cp presets/co-orchestrator/* ~/.dsh/.agent-presets/co-orchestrator/
 
 所以 v0.4.10 起：**`tool-cordis` 全进程只由官方「创造模式」挂**。`dsh-cohub` 的 bundle patch 不再插入该行，`cohub-cordis` 也不挂它，而 cohub 插件行照常挂载。
 
+**v0.4.11 变更（orchestrator 技能瘦身，2026-10-17）**：`skills/orchestrator.md` 20587 → 15532 bytes（约 -24.6%）。主代理保持纯调度，两层并行/聚合、brief 300、planner 237、批次上限 3 均不变；不伪造 runtime 200K，不自动压缩/硬裁 delegate。规格细节见 [skills/orchestrator.md](skills/orchestrator.md)。
+
 > **`cohub-cordis` 因此不含 `cordis_*` 工具**（`cordis_define` / `cordis_run` / `cordis_mount` / `cordis_inspect_*`）。需要 Cordis 自指能力时，请用官方**创造模式**会话；本 preset 用于"标准能力 + cohub 委派纪律"的日常开发。
 >
 > 也**不要**在 profile 的 `cordis.patch.yml` 里 insert 同 id —— 那会重新制造同一个故障。
