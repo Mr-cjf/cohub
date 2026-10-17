@@ -20,22 +20,24 @@ import { createDelegateBatchTool } from "./delegate_batch.ts";
 import { COUNCIL_TIMEOUT_MS, WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 
 import { DEFAULT_ERROR_CATEGORIES } from "./env-signatures";
-import { installSettingsSection, settingsNamespace } from "@deepseek-ai/dsh-settings";
 
 /** 单个 councillor 配置（M4 council 工具使用） */
 const Councillor = z.object({
   name: z.string(),
   provider: z.string(),
   model: z.string(),
-  prompt: z.string().default(undefined),
+  // 字段可选：schemastery 3.18 的 default(value) 签名要求 T 或 Partial<S>，
+  // 不接受 undefined；object 内字段本就允许缺省（缺省时输出对象不含该键，
+  // 消费端按 undefined 处理），故去掉 default(undefined)，运行时语义不变。
+  prompt: z.string(),
 });
 
 /** 单个 skill 的路由配置（delegate 工具使用） */
 const SkillRoute = z.object({
   name: z.string(),
-  provider: z.string().default(undefined),
-  model: z.string().default(undefined),
-  maxTokens: z.number().default(undefined),
+  provider: z.string(),
+  model: z.string(),
+  maxTokens: z.number(),
 });
 
 /** delegate 执行器环境契约注入配置（P1-1）：默认开、可关闭、文本可覆盖 */
@@ -43,7 +45,7 @@ const EnvContractConfig = z.object({
   /** 是否在 delegate spawn prompt 前注入执行器环境契约；默认开 */
   enabled: z.boolean().default(true),
   /** 部署覆盖文本；缺省 = 通用探测式默认文本（DEFAULT_ENV_CONTRACT，不写死环境断言） */
-  text: z.string().default(undefined),
+  text: z.string(),
 }).default({});
 
 /** N2 停滞检测器配置（P3-1）：默认关闭（保守），跨环境三态（探测/配置/降级） */
@@ -86,7 +88,7 @@ const EnvContractFacts = z.object({
   wallClockLimitMs: z.number().default(600_000),
   /** 后台任务跟踪（job）是否可用（探测观测值；manual 模式部署可覆盖） */
   hasJobTracking: z.boolean().default(false),
-}).default(undefined);
+});
 
 /** P3-2（N1）环境契约持久化配置：默认 auto（无缓存时行为不变，回退探针式）；读写失败静默降级 */
 const EnvSignatures = z.object({
@@ -122,16 +124,20 @@ export const Config = z.object({
   councilTimeoutMs: z.number().default(COUNCIL_TIMEOUT_MS),
   /** 子代理 provider（spawn 为内置进程内后端） */
   councilProvider: z.string().default("spawn"),
-  /** skill 路由表（delegate 工具）：按 skill 名覆盖 provider/model/maxTokens，缺省继承父模型 */
-  skills: z.array(SkillRoute).default([]),
+  /** skill 路由表（delegate 工具）：按 skill 名覆盖 provider/model/maxTokens，缺省继承父模型。
+   *  volatile：DSH 0.2 起由 Loader 按活动 profile entry id 投影为设置页可编辑字段，
+   *  变更经 loader/volatile-update 提交到同一引用，无需重挂载（apply 内以 config.skills.get() 实时读取）。 */
+  skills: z.array(SkillRoute).default([]).volatile(),
   /** delegate 执行器环境契约注入（P1-1）：默认开，文本可覆盖 */
   delegateEnvContract: EnvContractConfig,
-  /** delegate 中止/失败自动重试（P1-2）：默认不重试 */
-  delegateRetry: DelegateRetry,
+  /** delegate 中止/失败自动重试（P1-2）：默认不重试。
+   *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
+  delegateRetry: DelegateRetry.volatile(),
   /** delegate 执行器环境契约持久化（P3-2/N1）：默认 auto（无缓存时行为不变） */
   envSignatures: EnvSignatures,
-  /** 调度参数（P3-3/N3）：批大小 / 墙钟预算 / job 跟踪 / 批间自适应；settings 可覆盖 */
-  schedule: ScheduleConfig,
+  /** 调度参数（P3-3/N3）：批大小 / 墙钟预算 / job 跟踪 / 批间自适应；settings 可覆盖。
+   *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
+  schedule: ScheduleConfig.volatile(),
   /** 是否把内置 agent preset 安装/升级到用户 preset root（~/.dsh/.agent-presets/）。
    *  默认 true。设为 false 后本插件不再动该目录（已安装的 preset 不会自动删除，
    *  需要时手动清理 ~/.dsh/.agent-presets/ 下对应目录）。 */
@@ -142,11 +148,17 @@ export { ScheduleConfig, CohubSettingsSchema };
 /** 兼容/测试导出：preset 安装台账与递归复制（实现位于 preset-install.ts） */
 export { copyTree, installShippedPresets, hashTree, removeInstallRecord } from "./preset-install";
 
-/** cohub 的 settings namespace（settings.yaml 的 cohub.* 段） */
-const COHUB_NS = settingsNamespace("cohub");
-
-/** cohub settings namespace schema：skills 路由表 + 调度参数 + delegate 重试。
- * 组合层（cordis.patch.yml）为 base，settings 用户段可覆盖；缺省保持与 Config 一致（行为不变）。 */
+/**
+ * 0.1 时代的 settings namespace 段 schema（settings.yaml 的 cohub.* 段）。
+ *
+ * DSH 0.2 起官方 settings 服务改为「按活动 profile entry id 投影 Config 的
+ * `.volatile()` 字段」（SettingsForms.volatileForm），不再注册任意 cohub
+ * namespace；本插件也不再调用 installSettingsSection/settingsNamespace。
+ * 该 schema 保留仅为对外类型/测试 fixture（与 Config 的 volatile 字段同形状），
+ * 不再参与运行时挂载。0.1 用户写在 settings.yaml 的 cohub.* 段不会被自动迁移。
+ *
+ * @deprecated 仅供测试/类型复用；运行时请读取 Config 的 volatile 字段（config.skills.get() 等）。
+ */
 const CohubSettingsSchema = z.object({
   skills: z.array(SkillRoute).default([]),
   schedule: ScheduleConfig,
@@ -175,11 +187,11 @@ function readPackageVersion(): string {
  *   - 无台账（首次或从旧版本升级上来）：退化为「仅新增」，不覆盖任何已存在目录。
  * 安装失败只告警，绝不拖垮插件挂载（preset 是可选增强，技能才是核心能力）。
  */
-function installAgentPresets(logger) {
+function installAgentPresets(logger: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void } | undefined) {
   return installShippedPresets(SHIPPED_PRESETS_DIR, dshHomePath(".agent-presets"), readPackageVersion(), logger);
 }
 
-export function apply(ctx, config) {
+export function apply(ctx: any, config: any) {
   // ① 中文语言指令 —— 注入到系统提示词（对应 OpenCode 的 experimental.chat.system.transform）
   ctx.effect(() => ctx.systemPrompt.section({
     name: "cohub:language",
@@ -211,24 +223,19 @@ export function apply(ctx, config) {
   }
 
 // ④ delegate 工具（核心）：按 skill 名路由到配置的 provider/model 并委派专职代理
-  //    始终注册，不依赖 councillors 是否配置。路由表可由 DSH settings（settings.yaml 的
-  //    cohub.skills）覆盖，组合层（cordis.patch.yml 的 skills）作为 base；settings 未挂载时回落组合层。
-  const entry = {
-    skills: config.skills ?? [],
-    schedule: config.schedule,
-    delegateRetry: config.delegateRetry,
-  };
-  // 当前生效 settings：返回整个 cohub section（schema 默认 + 组合层 base + 用户段）。
-  // 未挂载 settings 服务时回落 entry（= Config 值，行为与现状一致）。
-  let currentSettings = () => entry;
-  let currentSkills = () => entry.skills;
-  installSettingsSection(ctx, COHUB_NS, CohubSettingsSchema, entry, {
-    setSource: (src) => {
-      currentSettings = () => src() ?? {};
-      currentSkills = () => (src() ?? {}).skills ?? [];
-    },
-    onChange: () => {},
+  //    始终注册，不依赖 councillors 是否配置。路由表可由 DSH 0.2 设置页（按活动 profile entry
+  //    id 投影的 volatile 字段）实时修改，组合层（cordis.patch.yml 的 skills）作为初始值。
+  // DSH 0.2 语义：Config 的 skills/schedule/delegateRetry 是 .volatile() 字段，apply 收到的是
+  //    Volatile<T> 引用（stable reference）。Loader 在 loader/volatile-update 时把新值提交到
+  //    同一引用（无需重挂载）；这里每次调用 get() 取得当前快照，因此：
+  //      - 下一次工具 execute 即见设置更新；
+  //      - 正在执行的一次使用 execute 起始时读取的 snapshot（既有每次 execute 读 getter 的行为保持）。
+  const currentSettings = () => ({
+    skills: config.skills.get(),
+    schedule: config.schedule.get(),
+    delegateRetry: config.delegateRetry.get(),
   });
+  const currentSkills = () => config.skills.get();
 
   // 防御性 subagents 检测：使用 ctx.reflect.get('subagents', false) 而不是直接读 ctx.subagents。
   // 原因：宿主 loader（如 @cordisjs/plugin-loader 的 cordis:include）可能把本插件 wrap 成新的
@@ -282,7 +289,7 @@ export function apply(ctx, config) {
   //    监听 session/event 的 request/header 事件，读取 sessionProjections 的 contextBreakdown；
   //    effect 返回 off，插件卸载时自动撤销监听。
   ctx.effect(() => {
-    const off = ctx.on("session/event", (session, event) => {
+    const off = ctx.on("session/event", (session: any, event: any) => {
       if (event.type !== "request/header") return;
       const snap = ctx.sessionProjections.snapshot(session);
       const cb = snap.values.contextBreakdown;
