@@ -45,8 +45,7 @@ npm run build
 #   bun build src/index.ts --outdir lib --target node --format esm \
 #     --external @deepseek-ai/cordis --external @deepseek-ai/schemastery \
 #     --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-system-prompt \
-#     --external @deepseek-ai/dsh-skill --external @deepseek-ai/dsh-home-paths \
-#     --external @deepseek-ai/dsh-settings
+#     --external @deepseek-ai/dsh-skill --external @deepseek-ai/dsh-home-paths
 #   bun build src/co-cordis-plugin.ts --outdir lib --target node --format esm \
 #     --external @deepseek-ai/dsh-tools   # co-cordis 专用插件（第 13 个技能）
 #   bun run scripts/build-client.js       # src/client/index.js → lib/client.js
@@ -83,7 +82,7 @@ dsh plugin --profile web add <monorepo>/packages/dsh-cohub
   config:
     councillors: []          # 为空则不注册 council_session 工具
     councilTimeoutMs: 180000
-    skills: []               # delegate 委派路由（可用 settings.yaml 的 cohub.skills 覆盖）
+    skills: []               # delegate 委派路由（DSH 0.2 起由设置页按 profile entry id 投影此 volatile 字段，实时生效）
 ```
 
 **M4 启用 council**（councillors 非空时自动注册 council_session 工具）：
@@ -144,15 +143,41 @@ dsh plugin --profile web add <monorepo>/packages/dsh-cohub
 
 ### settings 卡片
 
-`npm run build` 后重启 DSH，打开设置 → **插件** 标签，可看到「CoHub 代理模型」卡片：
+**DSH 0.2 起**：本插件不再注入自定义设置卡片——官方 0.2 移除了 `settingsScope` 服务与
+`settings.plugin.item` slot，客户端模块（`src/client/index.js`）仅保留 locale 设置字典注册
+（`npm run build:client` 产物经 `npm run test:client` 验证只声明/访问 locale 服务）。
+官方设置页按活动 profile entry id 自动投影 Config 的 **volatile 字段**
+（`SettingsForms.describe()` 从真实 Loader entry 的 `fiber.runtime.Config` 投影），
+生成「CoHub」表单：12 个 skill 行 + 调度参数 + 委派重试（含停滞检测）+ 环境契约持久化——
+即原自定义卡片覆盖的全部字段，由官方表单实时提交。本包 0.5.0 仅面向 DSH 0.2，
+不支持 0.1，无旧卡片兼容分支。
 
-- **13 个 skill 行**（每个独立配置 provider / model）
-- **调度参数（可选）**：批大小 / 墙钟预算（`useJobTracking`、`adaptiveBatch` 两个控件已随死参数一并从 GUI 删除）
-- **委派重试 / 重试间隔**：maxRetries / retryDelayMs / 可重试原因（逗号分隔）
-- **停滞检测（可选）**：启用复选框 + 5 个阈值 + 可重试复选框（未启用时数字输入框 disabled）
-- **环境契约持久化（可选）**：契约模式（auto/off/manual）/ 缓存 TTL / 确认次数
+官方表单提交后无需重启即生效：Config 的 `skills` / `schedule` / `delegateRetry` 是 `.volatile()` 字段，
+官方设置页按**活动 profile entry id** 投影这些字段，改动经 `entry.update({config})` 写入 profile patch 后，
+由 Loader 以 `loader/volatile-update` 提交到运行中的同一 Volatile 引用（无需重挂载）；
+插件每次 delegate 工具 execute 时 `get()` 当前快照，因此下一次工具调用即见更新，正在执行的一次使用起始快照。
+`test/host-integration.ts` 用真实 Loader + `SettingsForms.describe()` 验证了这条链路（含提交后 describe 的 value 与 `config.get()` 一致）。
 
-改卡片后无需重启即生效（`text` 是函数，每次 prompt 装配时动态读取当前 settings）。
+## DSH 0.2 兼容说明
+
+本包自计划版本 0.5.0 起面向 **DSH 0.2.0-rc.2**（peer/dev 依赖已升 `0.2.0-rc.2`；`@deepseek-ai/cordis`
+peer `^4.0.1` / `schemastery` peer `^3.18.1` 保持合法 range，测试 devDependencies **精确固定**
+宿主实测 `4.0.4` / `3.18.4`——lock 解析到最新不代表宿主实测，以宿主为准）：
+
+- **0.1 的 settings namespace 机制已移除**：`installSettingsSection` / `settingsNamespace` 在
+  dsh-settings 0.2 已删除。本插件不再注册 `cohub` namespace，改为 Config 的三个动态字段标
+  `.volatile()`（见上节）。`settings.yaml` 的 `cohub.*` 段**不会被自动迁移**（旧 importer 是否
+  支持自定义 namespace 未证实，明确不触发），请通过设置页或 `cordis.patch.yml` 重新配置。
+- **不兼容 DSH 0.1**：peer 依赖锁定 `^0.2.0-rc.2`，在 0.1 宿主上无法安装（npm 会拒绝 peer 冲突），
+  属预期行为。
+- **验证入口**：`npm run test:runtime`（`test/runtime-0.2.ts`，真实 schemastery/Volatile/defineTool
+  契约 + 真实 cordis 挂载，离线 stub 子代理）、`npm run test:host`（`test/host-integration.ts`，
+  真实 Loader + entry.update volatile 提交 + SettingsForms.describe 投影 + 真实 subagents 服务
+  （正常/失败/capability/pre-aborted/运行中取消 + delegate 取消链） +
+  app-boot preflight 官方 helper）、`npm run typecheck:0.2`
+  （`test/types/runtime-0.2.ts`，strict 编译检查公共边界与真实 DSH 0.2 导出）。完整宿主链路
+  （真实 spawn/fork transport 的进程内实现、真实 LLM provider、preset 树真实挂载）由宿主集成验证覆盖，
+  单测不冒称完全覆盖。
 
 ### 环境契约持久化
 
@@ -262,6 +287,17 @@ cp presets/co-orchestrator/* ~/.dsh/.agent-presets/co-orchestrator/
 
 **v0.4.11 变更（orchestrator 技能瘦身，2026-10-17）**：`skills/orchestrator.md` 20587 → 15532 bytes（约 -24.6%）。主代理保持纯调度，两层并行/聚合、brief 300、planner 237、批次上限 3 均不变；不伪造 runtime 200K，不自动压缩/硬裁 delegate。规格细节见 [skills/orchestrator.md](skills/orchestrator.md)。
 
+**v0.5.0 变更（正式面向 DSH 0.2.0-rc.2，2026-10-17）**：本包正式锁定 DSH 0.2 契约（peer/dev 依赖升至 `0.2.0-rc.2`；`@deepseek-ai/cordis` peer `^4.0.1` / `schemastery` peer `^3.18.1` 保持合法 range），**不再支持 DSH 0.1**（0.1 宿主因 peer 冲突被 npm 拒绝安装，属预期）。设置改为 Config 的 `.volatile()` 动态字段，由官方设置页按活动 profile entry id 原生投影（`.volatile()` 取代并删除 0.1 的 `installSettingsSection` / `settingsNamespace` 自定义卡片机制）；**不自动迁移**旧 `cohub` settings namespace 与用户 preset（旧配置请经设置页或 `cordis.patch.yml` 重配；preset 由安装台账按「用户是否改过」逐文件保护）。`test/host-integration.ts` 新增运行中取消门禁：真实 SubagentRuntime + in-memory provider 验证 start 已发布后 mid-flight abort 的 result 停止/失败传播（signal 驱动受控 result settle 为 `stopReason=aborted`，非仅断言 `signal.aborted`）与 dispose 资源清理，并验证 delegate 工具 execution 的取消链（父 `exec.signal` → run.result 停止 → 结构化 cause）。
+**v0.5.0 收尾（客户端收敛 + session-projection peer）**：`src/client/index.js` 删除 0.1 `settingsScope` /
+`settings.plugin.item` 兼容死分支与不可达的自定义设置卡片（约 800 行，0.2 下该分支永不执行），
+仅保留 locale 设置字典注册；`dsh.client.inject` 收敛为仅 `@deepseek-ai/dsh-client-locale`，
+peer 移除不再使用的 `react` / `dsh-client-connection` / `dsh-client-ui-settings` /
+`dsh-client-ui-slots` / `dsh-api-remotes`；新增 peer `@deepseek-ai/dsh-session-projection ^0.2.0-rc.2`
+（required，tokenMeter 真实调用 `ctx.sessionProjections.snapshot`）。新增 `npm run test:client`
+（`test/client-runtime-0.2.ts`）：执行真实构建产物 `lib/client.js` 的 ModuleLoader 注册，断言
+module id / inject 仅 locale、apply 只访问声明服务、不触碰旧 settingsScope/slot/未声明 remote
+（locale 与 window 为内存 stub，非 React 真实浏览器 UI，浏览器实测留给宿主）。
+
 > **`cohub-cordis` 因此不含 `cordis_*` 工具**（`cordis_define` / `cordis_run` / `cordis_mount` / `cordis_inspect_*`）。需要 Cordis 自指能力时，请用官方**创造模式**会话；本 preset 用于"标准能力 + cohub 委派纪律"的日常开发。
 >
 > 也**不要**在 profile 的 `cordis.patch.yml` 里 insert 同 id —— 那会重新制造同一个故障。
@@ -308,6 +344,8 @@ node test/delegate-p1.ts   # P1：环境契约注入 + 重试
 node test/stall-p3.ts      # P3-1 N2 停滞检测（35 用例）
 node test/schedule-p3.ts   # P3-3 N3 调度参数（24 用例）
 node test/env-sig-p3.ts    # P3-2 N1 环境契约持久化（50 用例）
+npm run test:runtime      # DSH 0.2 运行期契约（真实 schemastery/Volatile/defineTool + cordis 挂载）
+npm run test:host         # DSH 0.2 宿主集成门禁（真实 Loader/SettingsForms/subagents/app-boot preflight）
 ```
 
 基线说明（2026-09-03 实测，`node` 直跑）：`unit` 全 PASS + `delegate-p1` 41 + `stall-p3` 35 + `schedule-p3` 24 + `env-sig-p3` 50 + `preset-copy` 13 + `preset-install` 35 + `preset-schema` 28 —— **8/8 全绿，全部 PASS**（node >= 24）。无需 LLM，单测纯本地模拟。
@@ -328,7 +366,7 @@ src/
   env-contract.ts       注入子代理的执行器环境契约文本（含「工具批处理」通用原则）
   env-signatures.ts     P3-2 环境契约持久化（EnvSignatureLearner + 缓存）
   skills.ts             generate-skills.ts 生成物（禁止手编）
-  client/index.js       settings 卡片（i18n + 13 个 P3 控件）
+  client/index.js       客户端模块（仅 locale 设置字典注册，无 UI 卡片）
 presets/co-orchestrator/  内置 agent preset（Phase 2，纯调度模式 + 委派工具面补全 + compaction）
 presets/cohub-cordis/     内置 agent preset（Phase 5，创造模式 + 中文身份 + 自包含组合创作技能，v0.4.7 新增）
 test/
@@ -343,4 +381,4 @@ test/
 cordis.patch.yml        bundle patch（含 P1/P3 全部 profile 字段示例）
 ```
 
-> DSH 处于 0.1.0-rc 阶段，本包 peerDependencies 锁定 rc.6。
+> DSH 0.2（0.2.0-rc.2）阶段，本包 peerDependencies 锁定 0.2.0-rc.2；0.1 支持情况见上文「DSH 0.2 兼容说明」（0.5.0 起明确不支持 0.1）。
