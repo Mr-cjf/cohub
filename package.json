@@ -4,6 +4,9 @@
   "description": "CoHub 中文智能体编排体系 monorepo：OpenCode / DSH 双平台插件",
   "scripts": {
     "build:opencode": "cd packages/oh-my-opencode-cohub && npm run build",
-    "build:dsh": "cd packages/dsh-cohub && npm run build"
+    "build:dsh": "cd packages/dsh-cohub && npm run build",
+    "build:codex": "npm --prefix packages/oh-my-codex-cohub run build",
+    "test:codex": "npm --prefix packages/oh-my-codex-cohub test",
+    "install:codex": "npm --prefix packages/oh-my-codex-cohub run install:local"
   }
 }

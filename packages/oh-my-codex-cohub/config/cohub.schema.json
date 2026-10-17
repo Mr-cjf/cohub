@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/cohub.schema.json",
+  "title": "CoHub config",
+  "type": "object",
+  "properties": {
+    "council": {
+      "type": "object",
+      "properties": {
+        "default_preset": {
+          "type": "string"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1000
+        },
+        "execution_mode": {
+          "enum": [
+            "parallel",
+            "serial"
+          ]
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "providers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "base_url": {
+                "type": "string"
+              },
+              "api_key_env": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "base_url"
+            ]
+          }
+        },
+        "chair": {
+          "$ref": "#/$defs/councillor"
+        },
+        "presets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/councillor"
+            }
+          }
+        }
+      },
+      "required": [
+        "presets"
+      ]
+    },
+    "agents": {
+      "type": "object",
+      "deprecated": true,
+      "description": "已弃用：旧 agents 配置不会执行。请改用 subagents 按角色配置模型与 reasoning_effort。",
+      "additionalProperties": {
+        "$ref": "#/$defs/councillor"
+      }
+    },
+    "subagents": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaults": { "$ref": "#/$defs/subagentSettings" },
+        "roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "co-orchestrator": { "$ref": "#/$defs/subagentSettings" },
+            "co-planner": { "$ref": "#/$defs/subagentSettings" },
+            "co-oracle": { "$ref": "#/$defs/subagentSettings" },
+            "co-librarian": { "$ref": "#/$defs/subagentSettings" },
+            "co-explorer": { "$ref": "#/$defs/subagentSettings" },
+            "co-designer": { "$ref": "#/$defs/subagentSettings" },
+            "co-fixer": { "$ref": "#/$defs/subagentSettings" },
+            "co-observer": { "$ref": "#/$defs/subagentSettings" },
+            "co-council": { "$ref": "#/$defs/subagentSettings" },
+            "co-rule-user": { "$ref": "#/$defs/subagentSettings" },
+            "co-rule-project": { "$ref": "#/$defs/subagentSettings" },
+            "co-rule-app": { "$ref": "#/$defs/subagentSettings" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "subagentSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "模型标识；null 或省略时继承。"
+        },
+        "reasoning_effort": {
+          "enum": [null, "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+          "description": "推理强度；null 或省略时继承。实际支持值由运行时能力校验。"
+        }
+      }
+    },
+    "councillor": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "base_url": {
+          "type": "string"
+        },
+        "api_key_env": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "variant": {
+          "enum": [
+            "max",
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1000
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "model"
+      ]
+    }
+  }
+}

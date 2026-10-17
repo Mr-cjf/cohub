@@ -1,0 +1,7 @@
+interface:
+  display_name: CoHub Orchestrator
+  short_description: 中文智能体编排：规划→委派→验证（六步工作流）
+  brand_color: "#0F766E"
+  default_prompt: 用 CoHub 指导模式处理工程任务：先准备任务包，再委派 worker 执行搜索、命令和修改，最后由主代理统一验证和汇总。
+policy:
+  allow_implicit_invocation: true
