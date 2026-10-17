@@ -132,10 +132,20 @@ const results = [
     assert.strictEqual(DEFAULT_CONTEXT_CONFIG.summarizeMaxTokens, 2000);
     assert.strictEqual(DEFAULT_CONTEXT_CONFIG.maxDecisions, 10);
     assert.strictEqual(DEFAULT_CONTEXT_CONFIG.maxErrors, 5);
-    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.dependencyPropagation, true);
+    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.dependencyPropagation, false); // 默认关闭依赖传播（显式 opt-in）
     assert.strictEqual(DEFAULT_CONTEXT_CONFIG.summaryReadMode, 'bounded'); // Wave3 新增，默认有界读
-    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-fixer'], 'relevant');
+    // 默认全部 none：历史上下文默认不注入（显式 context_override / 配置 context.strategy opt-in）
+    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-fixer'], 'none');
+    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-designer'], 'none');
+    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-planner'], 'none');
+    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-oracle'], 'none');
+    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-council'], 'none');
     assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-explorer'], 'none');
+    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-librarian'], 'none');
+    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-observer'], 'none');
+    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-rule-user'], 'none');
+    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-rule-project'], 'none');
+    assert.strictEqual(DEFAULT_CONTEXT_CONFIG.strategy['co-rule-app'], 'none');
   }),
 
   scenario('新配置项 summaryReadMode 可选：缺省无键、项目可覆盖为 full', () => {

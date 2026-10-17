@@ -1,0 +1,50 @@
+# 本包（oh-my-opencode-cohub）独立 CI 校验——只验证本包，不触发任何发布。
+# PR / push 路径过滤：仅本包源码与本文档自身变更时运行；支持手动 workflow_dispatch。
+# 权限仅 contents: read（无 id-token、无 npm 凭据），不可能执行发布。
+# Node/Bun 版本对齐根 publish.yml（Node 24 + setup-bun@v2）。
+
+name: Check oh-my-opencode-cohub
+
+on:
+  push:
+    paths:
+      - 'packages/oh-my-opencode-cohub/**'
+      - '.github/workflows/opencode-check.yml'
+  pull_request:
+    paths:
+      - 'packages/oh-my-opencode-cohub/**'
+      - '.github/workflows/opencode-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    concurrency:
+      group: opencode-check-${{ matrix.os }}-${{ github.ref }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: packages/oh-my-opencode-cohub
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/oh-my-opencode-cohub/package-lock.json
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - name: 构建（含提示词生成）
+        run: npm run build
+      - name: 测试
+        run: npm run test
+      - name: 类型检查
+        run: npx tsc --noEmit -p tsconfig.json

@@ -271,6 +271,60 @@ describe('extractRelevantFiles', () => {
     expect(result[0].summary).toContain('编辑:');
     expect(result[0].summary).not.toContain('unrelated');
   });
+
+  // -----------------------------------------------------------------------
+  // Windows 8.3 短路径（目录段含 ~，如 RUNNER~1）
+  // 回归：FILE_PATH_RE 路径段字符类缺 ~ → 含 ~ 路径在 ~ 处断裂，
+  // 字符串扫描从 ~ 后后缀（如 1\AppData\...）截出伪路径，与结构化完整
+  // 路径并存 → 同一文件两条目 → summary 预算按 2 文件均摊减半。
+  // 修复：路径段与相对路径首段接受 ~，完整匹配与结构化路径精确同键去重。
+  // -----------------------------------------------------------------------
+  describe('8.3 短路径（含 ~ 段）只精确一个完整路径', () => {
+    const shortPathCases = [
+      { label: '反斜杠绝对路径', path: 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\app.ts' },
+      { label: '正斜杠绝对路径', path: 'C:/Users/RUNNER~1/AppData/Local/Temp/app.ts' },
+      { label: '相对路径首段含 ~', path: 'RUNNER~1\\src\\app.ts' },
+    ];
+    for (const c of shortPathCases) {
+      test(`${c.label}：结构化 filePath + input 自然语言 + output + text 同写法重复引用 → 只精确一个完整路径`, () => {
+        const messages = [
+          msg('user', [
+            toolPart({
+              input: {
+                filePath: c.path,
+                description: `请读取 ${c.path} 文件`,
+              },
+              output: `文件 ${c.path} 内容摘要`,
+            }),
+          ]),
+          msg('assistant', [
+            textPart(`已分析 ${c.path}`),
+          ]),
+        ];
+        const result = extractRelevantFiles(messages, maxFiles, win);
+        const paths = result.map((r) => r.path);
+        // 只精确一个完整路径，无 ~ 截断后的后缀伪路径
+        expect(paths).toEqual([c.path]);
+      });
+    }
+
+    test('普通目录名（无 ~）不受影响：同样去重为单个完整路径', () => {
+      const path = 'C:\\Users\\test\\src\\app.ts';
+      const messages = [
+        msg('user', [
+          toolPart({
+            input: { filePath: path, description: `请读取 ${path} 文件` },
+            output: `文件 ${path} 内容摘要`,
+          }),
+        ]),
+        msg('assistant', [
+          textPart(`已分析 ${path}`),
+        ]),
+      ];
+      const result = extractRelevantFiles(messages, maxFiles, win);
+      expect(result.map((r) => r.path)).toEqual([path]);
+    });
+  });
 });
 
 // ===========================================================================

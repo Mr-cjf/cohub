@@ -23,22 +23,21 @@ OpenCode 中文智能体编排插件 CoHub——纯调度模式、全中文提�
 ### 前置条件
 
 - [OpenCode](https://opencode.ai) 已安装
-- [Bun](https://bun.sh) 已安装（CLI 安装和源码构建均需要）
+- [Bun](https://bun.sh) 已安装（隔离 HOME 检验与源码构建需要；官方插件安装不需要）
 
-### 方式一：CLI 一键安装（推荐）
+### 方式一：官方插件安装（推荐，真实 HOME）
 
 ```bash
-bunx oh-my-opencode-cohub install
+opencode plugin oh-my-opencode-cohub@<精确版本号> --global --force
 ```
 
-CLI 会自动完成以下操作：
+> 安装前先对 `~/.config/opencode/opencode.json` 与 `~/.config/opencode/tui.json` 做**时间戳备份**；命令只写入插件相关条目，**保留其他配置**。
 
-1. 将 `oh-my-opencode-cohub` 注册到 `~/.config/opencode/opencode.json` 的 `plugin` 数组
-2. 将插件注册到 TUI 配置 `~/.config/opencode/tui.json`
-3. 在 `opencode.json` 的 `agent` 字段中注册全部 12 个 `co-*` 代理
-4. 写入默认配置文件 `~/.config/opencode/oh-my-opencode-cohub.json`
+1. 将 `oh-my-opencode-cohub@<精确版本号>` 注册到全局 `plugin` 配置（`--global --force` 覆盖为指定精确版本）
+2. 插件运行时写入默认配置文件 `~/.config/opencode/oh-my-opencode-cohub.json`
+3. **重启 OpenCode 后生效**——已运行的会话不会热切加载新版本，需用户重启
 
-重启 OpenCode 即可生效。
+> **bunx 包 CLI 仅用于隔离 HOME 检验**：`bunx oh-my-opencode-cohub install/uninstall` 等包自带 CLI 只在隔离 HOME 环境中验证安装/卸载流程，**不要在真实 HOME 上整文件重写配置**。
 
 ### 方式二：npm 安装 + 手动配置
 
@@ -328,14 +327,19 @@ CoHub 内置轻量编排引擎（`src/orchestration/`，6 模块），**诚实�
 
 ### 上下文共享
 
-ContextEngine（`src/context/`）按四种策略自动向子代理注入上下文：
+ContextEngine（`src/context/`）默认**不注入**历史上下文——所有代理默认策略为 `none`，每次委派不会自动读取父会话历史（避免无谓的上下文膨胀与 token 消耗）。需要历史上下文时由调度者显式 opt-in：
 
-| 策略 | 适用代理 | 注入内容 |
-|------|---------|---------|
-| `none` | explorer / librarian / observer / rule-* | 不注入上下文，减少干扰 |
-| `relevant` | fixer / designer / planner | 相关文件路径 + 前置决策 + 近期错误 |
-| `summary` | oracle / council | 同上，且文件正文按 token 预算（2000）截断后注入 |
-| `full` | （预留） | 完整正文，目前未分配代理 |
+- **任务级 opt-in**：`task` 调用传 `context_override` 参数（如 `context_override="relevant"`）；
+- **配置级 opt-in**：在 `oh-my-opencode-cohub.json` 的 `context.strategy` 中为指定代理显式配置非 `none` 策略。
+
+| 策略 | 注入内容 |
+|------|---------|
+| `none` | 不注入上下文（默认） |
+| `relevant` | 相关文件路径 + 前置决策 + 近期错误 |
+| `summary` | 同上，且文件正文按 token 预算（2000）截断后注入 |
+| `full` | 完整正文（预留） |
+
+**依赖传播（`context.dependencyPropagation`，默认 `false`）**：子代理结果默认不自动传播到后续子代理；需要依赖历史摘要时显式配置 `"context": { "dependencyPropagation": true }`。关闭时 `captureResult` 仍照常返回结果与质量/复用预算采样（任务追踪、质量回送不受影响），仅不做依赖缓存写入与注入。
 
 **summary 文件读取模式（`context.summaryReadMode`，默认 `bounded`）**：控制 `summary` 策略下**文件正文的读取方式**，与上面的上下文策略 `full` 是**两个不同维度**，不要混淆：
 
@@ -346,7 +350,11 @@ ContextEngine（`src/context/`）按四种策略自动向子代理注入上下�
 
 ```json
 {
-  "context": { "summaryReadMode": "bounded" }
+  "context": {
+    "strategy": { "co-fixer": "relevant", "co-oracle": "summary" },
+    "dependencyPropagation": true,
+    "summaryReadMode": "bounded"
+  }
 }
 ```
 
@@ -370,7 +378,7 @@ ContextEngine（`src/context/`）按四种策略自动向子代理注入上下�
 ### 注入膨胀防护
 
 - **prompt 预算兜底**：拼接超 12,000 token 时降级为裸用户 prompt，防止 JSON 超长截断
-- **CONTRACT 去重**：`stripExistingContracts` 清理历史残留契约块
+- **CONTRACT 去重**：`stripExistingContracts` 仅清理插件自生成的 goal-only 空壳契约块，含约束/前置/其他内容的契约块（含用户手写）保守保留；新契约非空才追加且不重复追加
 - **错误截断**：单条 ≤200 字符 + 渲染总量 ≤600
 - **Job Board 折叠**：展示上限 15 条 + `pruneTerminalJobs` 每 30 分钟清理终态任务
 

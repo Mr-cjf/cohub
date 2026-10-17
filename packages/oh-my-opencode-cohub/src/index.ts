@@ -480,15 +480,18 @@ const CoHubPlugin: Plugin = async (input, options) => {
    * 竞态复核后落真实终态。保证：
    * - 正常 after 时 child 尚未产生终态消息（messages=[]）→ 'unknown' → 保持 running，零副作用；
    * - 已明确 completed 的任务重复核验 → finalizeByCall 幂等（stats 只记一次）；
-   * - await 读取期间绑定对象变更 / job 已被 cancel / 已新开调用 → 不更新新调用。
-   * 不新增轮询 timer、不缓存事件、不启动第二次 task。
-   */
-  async function reconcileJobTerminal(job: JobRecord): Promise<void> {
+    * - await 读取期间绑定对象变更 / job 已被 cancel / 已新开调用 → 不更新新调用。
+    * 不新增轮询 timer、不缓存事件、不启动第二次 task。
+    * 返回值契约：仅"本次实际完成 running→completed"返回 true（after 据此决定是否补捕获）；
+    * 失败 / 无终态证据保持 running / 非 completed 终态 / 竞态拦截（含已被其他调用者收尾）→ false。
+    * 其他调用者可忽略返回值；调用方不得以本返回替代自身对 job 终态的复核。
+    */
+  async function reconcileJobTerminal(job: JobRecord): Promise<boolean> {
     const parentAtCall = job.parentSessionId;
     const callAtCall = job.callID;
     const aliasAtCall = job.alias;
     const childId = job.sessionId;
-    if (!childId) return; // 未绑定 childID 无法做有界核验
+    if (!childId) return false; // 未绑定 childID 无法做有界核验
 
     const verdict = await verifyChildTerminal(pluginClient, childId, job.createdAt);
 
@@ -496,7 +499,7 @@ const CoHubPlugin: Plugin = async (input, options) => {
     const nowJob = callAtCall ? tracker.getJobByCall(parentAtCall, callAtCall) : tracker.getJobBySessionId(childId);
     if (!nowJob || nowJob.alias !== aliasAtCall || nowJob.sessionId !== childId || nowJob.status !== 'running') {
       appendSafeLog('event', `收尾竞态：候选已变更，不更新新调用 (session=${childId.slice(0, 20)})`);
-      return;
+      return false; // 未由本次收尾：候选已变更 / job 已被 cancel / 已被其他调用者收尾为终态
     }
 
     if (verdict === 'completed' || verdict === 'errored' || verdict === 'cancelled') {
@@ -518,6 +521,10 @@ const CoHubPlugin: Plugin = async (input, options) => {
         durationMs: Date.now() - job.createdAt,
         lastActivityAt: Date.now(),
       });
+      // 返回值契约：仅本次实际完成 running→completed 为 true；finalize 失败（up.ok=false，
+      // 含幂等/ambiguous/no-match）/ 非 completed 终态（cancelled/errored）→ false
+      // （不触发补捕获、不空耗采样代次）。
+      return verdict === 'completed' && up.ok;
     } else {
       // 无终态证据（中间轮 / 未知 finish / 读失败）：保持 running + 诊断，绝不假成功
       appendSafeLog('event', `无终态证据，保持 running (session=${childId.slice(0, 20)})`);
@@ -529,7 +536,79 @@ const CoHubPlugin: Plugin = async (input, options) => {
         status: 'running',
         lastActivityAt: Date.now(),
       });
+      return false; // 无终态证据保持 running：未完成，不触发补捕获
     }
+  }
+
+  /**
+   * 捕获子代理结果并写回质量/复用预算采样（session.idle 与 after 首次绑定补核验共用）。
+   * 调用方须在第一个 await 前固定快照（alias/parent/call/child/createdAt/agent）并持有
+   * 已分配的采样代次 seq；本函数内部沿用：
+   * - 代次守卫：发起捕获后 samplingSeq 已被更新的采样请求推进 → 本请求过期，不写回
+   *   （未知亦遵守，旧采样迟到不覆盖新结果）；
+   * - 快照复核：捕获返回后候选 job 已变更（alias/sessionId 不匹配）→ 不写回新调用；
+   * - 新鲜度边界：采样消息创建时间早于本轮调用开始（notBefore=createdAt）→ 标未知，
+   *   不回填旧 low/high（与 captureResult 内 notBefore 写回层双保险）。
+   * 不改变任务终态（终态由调用方 reconcile 决定，绝不凭猜测）；质量与复用预算开关独立
+   * （captureResult 仍承载显式 dependencyPropagation，不受两开关影响）。
+   */
+  function captureAndWriteBack(opts: {
+    alias: string;
+    parentSessionId: string;
+    callID: string | undefined;
+    childSessionId: string;
+    agent: string;
+    createdAt: number;
+    seq: number;
+  }): void {
+    void contextEngine
+      .captureResult(opts.childSessionId, opts.alias, opts.agent, { notBefore: opts.createdAt })
+      .then((captured) => {
+        // 代次守卫：已有更新的采样请求 → 本请求过期，不提交任何写回（未知亦遵守）
+        if (samplingSeq.get(opts.alias) !== opts.seq) return;
+        if (!captured) return;
+        // 质量评分与复用预算开关独立：quality 关闭不阻止预算采样写回；
+        // 两者皆关闭 → 不回写（captureResult 仍承载依赖传播，不受影响）。
+        const wantQuality = isQualityEnabled(userConfig.quality);
+        const wantReuse = reuseBudget.enabled;
+        if (!wantQuality && !wantReuse) return;
+        // 快照复核：仍同一 job（允许 terminal completed 后回写自己——不检查 status==='running'）
+        const now = opts.callID ? tracker.getJobByCall(opts.parentSessionId, opts.callID) : tracker.getJobBySessionId(opts.childSessionId);
+        if (!now || now.alias !== opts.alias || now.sessionId !== opts.childSessionId) {
+          appendSafeLog('event', '质量回送竞态：候选已变更，不写回复用/新调用');
+          return;
+        }
+        // 采样新鲜度边界（写回层双保险，与 captureResult 内 notBefore 一致）：
+        // sampledAt 早于本轮调用边界（createdAt）→ 旧会话历史，标未知，不回填旧 low/high。
+        const freshSample =
+          wantReuse && captured.reuseInput && captured.reuseInput.sampledAt >= opts.createdAt
+            ? captured.reuseInput
+            : undefined;
+        if (wantQuality) {
+          const quality = assessQuality({
+            output: captured.output,
+            decisions: captured.decisions,
+            latencyMs: Date.now() - opts.createdAt,
+            tokens: captured.tokens,
+          });
+          tracker.updateQualityByAlias(opts.alias, {
+            score: quality.score,
+            ...(quality.failureCategory ? { failureCategory: quality.failureCategory } : {}),
+            ...(quality.latencyMs !== undefined ? { latencyMs: quality.latencyMs } : {}),
+            ...(quality.tokens ? { tokens: quality.tokens } : {}),
+            // 复用预算采样：仅启用时写回（随既有 idle/quality 更新路径采样，
+            // 不另建缓存；关闭策略时字段保持未采样 → Board 不显示建议）
+            ...(freshSample ? { reuseInput: freshSample } : {}),
+          });
+        } else if (wantReuse) {
+          // 质量评分关闭但预算开启：写回采样（fresh → 新样本；最新未知 → 提交清空
+          // reuseInput，不保留旧样本、不虚构 score，其余既有质量字段保留）。
+          const prev = tracker.getJobByAlias(opts.alias)?.quality;
+          tracker.updateQualityByAlias(opts.alias, { ...(prev ?? {}), reuseInput: freshSample });
+        }
+        syncTrackerState(tracker.currentParentSessionId);
+      })
+      .catch((err) => appendSafeLog('event', '质量回送失败', err));
   }
 
   // ===== 兜底：定时清理过期背景任务（30 分钟超时，阈值来自共享层 STALE_TASK_MS） =====
@@ -705,16 +784,20 @@ const CoHubPlugin: Plugin = async (input, options) => {
                   [], // deps — 由 orchestrator 通过 prompt 指定
                 );
               }
-              // 注入契约上下文到 prompt
+              // 注入契约上下文到 prompt：
+              // 仅清理插件自生成的 goal-only 空壳契约块（含其他内容的契约块保守保留），
+              // 新契约非空才追加，且文本中已保留契约块时不重复追加（简单保守去重）
               const targetField = output.args?.prompt ? 'prompt' : 'description';
               if (output.args?.[targetField] && typeof output.args[targetField] === 'string') {
-                // 先清除历史残留的 CONTRACT 块，再追加唯一新块（防重复膨胀 30~80 次）
                 output.args[targetField] = stripExistingContracts(output.args[targetField]);
-                output.args[targetField] += '\n' + orchestrationLayer.contractMgr.buildPrompt({
+                const contractText = orchestrationLayer.contractMgr.buildPrompt({
                   goal: description,
                   prerequisites: [],
                   constraints: [],
                 });
+                if (contractText && !output.args[targetField].includes('<!-- CONTRACT_BEGIN -->')) {
+                  output.args[targetField] += '\n' + contractText;
+                }
               }
               // 原生 task 调用已被接受并启动：ready → running（异常情况结构化记录，不吞错、不假 started；
               // 未接线 DAG 依赖时 deps 为空正常 ready→running，pending 仅理论上存在）
@@ -746,7 +829,9 @@ const CoHubPlugin: Plugin = async (input, options) => {
             }
           }
 
-          // 新增：构建上下文
+          // 新增：构建上下文（默认不注入——所有代理默认策略均为 none，不注册/
+          // 填充/读取父历史；仅显式 context_override 或用户配置 context.strategy
+          // opt-in 后才会注册并注入历史详情）
           if (subagentType) {
             const strategy = typeof args.context_override === 'string'
               ? (args.context_override as ContextStrategy)
@@ -754,22 +839,19 @@ const CoHubPlugin: Plugin = async (input, options) => {
             if (strategy !== 'none') {
               const contextId = contextEngine.registerContext({ description });
               output.args ??= {};
-              const contextBlock = '\n\n### 📋 任务上下文 (CoHub 自动注入)\n' +
-                '**当前任务**: ' + description + '\n';
               // prompt 是子代理实际看到的消息，description 只是 session 标题
               const targetField = typeof output.args.prompt === 'string' ? 'prompt' : 'description';
-              output.args[targetField] = ((targetField === 'prompt' ? output.args.prompt : description) ?? '') + contextBlock;
-
 
               // 填充上下文（同步等待完成，确保子代理启动前上下文已就绪）
               await contextEngine.fillContextAsync(contextId, input.sessionID, {
                 strategy,
               });
 
-              // 追加详细上下文（文件、决策、错误等）
+              // 追加详细上下文（文件、决策、错误、依赖）；详情非空才附加——
+              // 不再重复输出任务目标（目标已在本任务 prompt/契约中，避免重复膨胀）
               const details = contextEngine.formatContextDetails(contextId);
               if (details) {
-                output.args[targetField] += details;
+                output.args[targetField] = ((targetField === 'prompt' ? output.args.prompt : description) ?? '') + details;
               }
               // 注入即消费完毕：显式释放 registry 条目（本 contextId 不会再被读取——
               // 标记消费路径 consumeMarkedContext 全仓库零调用，注入走的就是上面这次 formatContextDetails）
@@ -915,6 +997,16 @@ const CoHubPlugin: Plugin = async (input, options) => {
                 // 后台：after 只确认"调用已派发"，不证明子会话完成——先绑定 childID 保持 running，
                 // 再补一次有界终态核验（P1-2：首次 child 绑定前 idle 可能已丢失，这里兜底收尾）。
                 // 正常情况 child 尚无终态消息（messages=[]）→ reconcile 返回 'unknown' → 仍 running。
+                // P2-2 早到 idle 结果捕获补回：快照（alias/parent/call/child/createdAt/agent）与
+                // 本次调用身份（wasRunningAtAfter）须在第一个 await（reconcileJobTerminal）前固定，
+                // 确认 completed 后补捕获（质量/token/复用预算/显式依赖传播随 idle 共用路径写回）。
+                const snapAlias = job0.alias;
+                const snapParent = job0.parentSessionId;
+                const snapCall = job0.callID;
+                const snapChild = childSessionId ?? job0.sessionId;
+                const snapCreatedAt = job0.createdAt;
+                const snapAgent = job0.agent;
+                const wasRunningAtAfter = job0.status === 'running';
                 taskDiag({
                   t: 'task',
                   callID: input.callID,
@@ -924,7 +1016,41 @@ const CoHubPlugin: Plugin = async (input, options) => {
                   status: 'running',
                   lastActivityAt: Date.now(),
                 });
-                await reconcileJobTerminal(job0);
+                // 第一个 await（reconcile）前仅观察当前采样代次、不递增：await 期间并发 idle
+                // 若已收尾 completed 并分配新代次，本 after 不得借用其 completed 状态额外捕获
+                // （递增代次会使 idle 有效采样失效，Board 变输入未知）。
+                const seqAtAfter = samplingSeq.get(snapAlias) ?? 0;
+                // reconcile 返回"本次实际完成 running→completed"才补捕获：
+                // 由并发 idle 收尾（竞态复核拦截，本次未实际收尾）/ 无终态证据保持 running /
+                // finalize 失败 / 非 completed 终态 → false → 不补捕获、不递增代次。
+                const finalizedByThis = await reconcileJobTerminal(job0);
+                // 仅本次 after 负责收尾（wasRunningAtAfter 防重复 after 重复捕获）且确认 completed、
+                // 已绑定 childID 时才补捕获；failed/权限终态/仍 running 不捕获、不虚构质量数据。
+                if (finalizedByThis && wasRunningAtAfter && snapChild) {
+                  // 代次未变：await 期间无更新的采样请求 → 本捕获仍为最新；已变 → 过期不采样
+                  // （首次 after 时 Map 尚无条目：左侧必须与 await 前初始化一致用 ??0，
+                  // 否则 undefined !== seqAtAfter(0) 会让早到 idle 补捕获全部失效）
+                  if ((samplingSeq.get(snapAlias) ?? 0) === seqAtAfter) {
+                    const nowJob = snapCall
+                      ? tracker.getJobByCall(snapParent, snapCall)
+                      : tracker.getJobBySessionId(snapChild);
+                    if (nowJob && nowJob.status === 'completed' && nowJob.alias === snapAlias && nowJob.sessionId === snapChild) {
+                      // 代次在确认后分配：本捕获为最新采样请求（先于本 after 的并发 idle 捕获将被拦截），
+                      // 与 idle 共用同一 samplingSeq 守卫——旧请求迟到不覆盖新结果。
+                      const seq = seqAtAfter + 1;
+                      samplingSeq.set(snapAlias, seq);
+                      captureAndWriteBack({
+                        alias: snapAlias,
+                        parentSessionId: snapParent,
+                        callID: snapCall,
+                        childSessionId: snapChild,
+                        agent: snapAgent,
+                        createdAt: snapCreatedAt,
+                        seq,
+                      });
+                    }
+                  }
+                }
               }
             } catch (e) {
               appendSafeLog('orchestration', 'afterTask engine 同步失败', e);
@@ -967,8 +1093,8 @@ const CoHubPlugin: Plugin = async (input, options) => {
           const qAlias = job.alias;
           const qParent = job.parentSessionId;
           const qCall = job.callID;
-          const qChild = sessionId;
           const qCreatedAt = job.createdAt;
+          const qAgent = job.agent;
           const seq = (samplingSeq.get(qAlias) ?? 0) + 1;
           samplingSeq.set(qAlias, seq);
 
@@ -981,54 +1107,15 @@ const CoHubPlugin: Plugin = async (input, options) => {
           // 捕获子代理结果用于依赖传播 + 质量回送（P0-1 负反馈闭环）。
           // 必须持有 alias+parent+call+child+createdAt 快照，异步 then 回来复核仍同一 job 再写回
           // （两次同 child 复用输出不同 quality：旧记录不能被新结果覆盖，且不按 sessionId 首条匹配）。
-          void contextEngine
-            .captureResult(sessionId, qAlias, job.agent, { notBefore: qCreatedAt })
-            .then((captured) => {
-              // 代次守卫：已有更新的采样请求 → 本请求过期，不提交任何写回（未知亦遵守）
-              if (samplingSeq.get(qAlias) !== seq) return;
-              if (!captured) return;
-              // 质量评分与复用预算开关独立：quality 关闭不阻止预算采样写回；
-              // 两者皆关闭 → 不回写（captureResult 仍承载依赖传播，不受影响）。
-              const wantQuality = isQualityEnabled(userConfig.quality);
-              const wantReuse = reuseBudget.enabled;
-              if (!wantQuality && !wantReuse) return;
-              // 快照复核：仍同一 job（允许 terminal completed 后回写自己——不检查 status==='running'）
-              const now = qCall ? tracker.getJobByCall(qParent, qCall) : tracker.getJobBySessionId(qChild);
-              if (!now || now.alias !== qAlias || now.sessionId !== qChild) {
-                appendSafeLog('event', '质量回送竞态：候选已变更，不写回复用/新调用');
-                return;
-              }
-              // 采样新鲜度边界（写回层双保险，与 captureResult 内 notBefore 一致）：
-              // sampledAt 早于本轮调用边界（job.createdAt）→ 旧会话历史，标未知，不回填旧 low/high。
-              const freshSample =
-                wantReuse && captured.reuseInput && captured.reuseInput.sampledAt >= qCreatedAt
-                  ? captured.reuseInput
-                  : undefined;
-              if (wantQuality) {
-                const quality = assessQuality({
-                  output: captured.output,
-                  decisions: captured.decisions,
-                  latencyMs: Date.now() - qCreatedAt,
-                  tokens: captured.tokens,
-                });
-                tracker.updateQualityByAlias(qAlias, {
-                  score: quality.score,
-                  ...(quality.failureCategory ? { failureCategory: quality.failureCategory } : {}),
-                  ...(quality.latencyMs !== undefined ? { latencyMs: quality.latencyMs } : {}),
-                  ...(quality.tokens ? { tokens: quality.tokens } : {}),
-                  // 复用预算采样：仅启用时写回（随既有 idle/quality 更新路径采样，
-                  // 不另建缓存；关闭策略时字段保持未采样 → Board 不显示建议）
-                  ...(freshSample ? { reuseInput: freshSample } : {}),
-                });
-              } else if (wantReuse) {
-                // 质量评分关闭但预算开启：写回采样（fresh → 新样本；最新未知 → 提交清空
-                // reuseInput，不保留旧样本、不虚构 score，其余既有质量字段保留）。
-                const prev = tracker.getJobByAlias(qAlias)?.quality;
-                tracker.updateQualityByAlias(qAlias, { ...(prev ?? {}), reuseInput: freshSample });
-              }
-              syncTrackerState(tracker.currentParentSessionId);
-            })
-            .catch((err) => appendSafeLog('event', '质量回送失败', err));
+          captureAndWriteBack({
+            alias: qAlias,
+            parentSessionId: qParent,
+            callID: qCall,
+            childSessionId: sessionId,
+            agent: qAgent,
+            createdAt: qCreatedAt,
+            seq,
+          });
         } else if (e.type === 'session.deleted') {
           if (!sessionId) return;
           // 明确结局（宿主删除/中断会话）：按真实结局收尾，不自动重试、不假成功。

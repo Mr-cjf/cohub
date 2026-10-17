@@ -72,8 +72,8 @@ describe('computeStats', () => {
 
 describe('defaultStrategyFor', () => {
   test('已知代理返回默认策略', () => {
-    expect(defaultStrategyFor('co-fixer')).toBe('relevant');
-    expect(defaultStrategyFor('co-oracle')).toBe('summary');
+    expect(defaultStrategyFor('co-fixer')).toBe('none');
+    expect(defaultStrategyFor('co-oracle')).toBe('none');
     expect(defaultStrategyFor('co-explorer')).toBe('none');
   });
 

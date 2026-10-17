@@ -53,7 +53,7 @@ describe('ContractManager', () => {
   });
 
   // buildPrompt
-  it('should build prompt with goal and prerequisites', () => {
+  it('should build prompt with constraints and prerequisites（不再重复输出目标）', () => {
     const mgr = new ContractManager();
     const prompt = mgr.buildPrompt({
       goal: '实现登录功能',
@@ -62,11 +62,37 @@ describe('ContractManager', () => {
       ],
       constraints: ['必须兼容 IE11'],
     });
-    expect(prompt).toContain('实现登录功能');
+    // 目标不再重复输出（避免与任务 prompt 中的目标重复膨胀）
+    expect(prompt).not.toContain('实现登录功能');
+    expect(prompt).not.toContain('- 目标:');
+    // 真正约束与显式依赖交接保留
     expect(prompt).toContain('必须兼容 IE11');
     expect(prompt).toContain('exp-1');
     expect(prompt).toContain('找到 AuthService');
     expect(prompt).toContain('CONTRACT_END');
+  });
+
+  it('should build prompt with only constraints（真正约束保留）', () => {
+    const mgr = new ContractManager();
+    const prompt = mgr.buildPrompt({
+      goal: '目标A',
+      prerequisites: [],
+      constraints: ['验收标准：测试通过'],
+    });
+    expect(prompt).toContain('验收标准：测试通过');
+    expect(prompt).not.toContain('目标A');
+    expect(prompt).toContain('CONTRACT_BEGIN');
+  });
+
+  it('should return empty string when only goal / empty constraints and prerequisites', () => {
+    const mgr = new ContractManager();
+    const prompt = mgr.buildPrompt({
+      goal: '测试目标',
+      prerequisites: [],
+      constraints: [],
+    });
+    // 仅目标/空白约束/空前序：无实质内容 → 空字符串（入口仅追加非空契约，防空壳堆积）
+    expect(prompt).toBe('');
   });
 
   // summarize
@@ -84,19 +110,31 @@ describe('ContractManager', () => {
 
 describe('stripExistingContracts', () => {
   const block = '<!-- CONTRACT_BEGIN -->\n- 关键结果: 测试\n<!-- CONTRACT_END -->';
+  const goalOnlyBlock = '<!-- CONTRACT_BEGIN -->\n## 本任务前置上下文\n- 目标: 旧目标\n<!-- CONTRACT_END -->';
 
-  it('should remove a single CONTRACT block', () => {
+  it('should preserve non-goal-only CONTRACT block（含内容的契约块保守保留）', () => {
     const text = `前置内容\n${block}\n后置内容`;
+    const result = stripExistingContracts(text);
+    // 非空壳契约块（含关键结果等用户/子代理内容）不得被无差别删除
+    expect(result).toContain('CONTRACT_BEGIN');
+    expect(result).toContain('关键结果: 测试');
+    expect(result).toContain('前置内容');
+    expect(result).toContain('后置内容');
+  });
+
+  it('should remove goal-only shell block（插件自生成空壳被清理）', () => {
+    const text = `前置内容\n${goalOnlyBlock}\n后置内容`;
     const result = stripExistingContracts(text);
     expect(result).not.toContain('CONTRACT_BEGIN');
     expect(result).not.toContain('CONTRACT_END');
+    expect(result).not.toContain('- 目标: 旧目标');
+    // 用户原文保留
     expect(result).toContain('前置内容');
     expect(result).toContain('后置内容');
-    expect(result).toBe('前置内容\n\n后置内容');
   });
 
-  it('should remove 30 CONTRACT blocks (g flag)', () => {
-    const text = Array.from({ length: 30 }, () => block).join('\n');
+  it('should remove 30 goal-only shell blocks (g flag)', () => {
+    const text = Array.from({ length: 30 }, () => goalOnlyBlock).join('\n');
     const result = stripExistingContracts(text);
     expect(result).not.toContain('CONTRACT_BEGIN');
     expect(result).not.toContain('CONTRACT_END');
@@ -118,9 +156,11 @@ describe('stripExistingContracts', () => {
       prerequisites: [],
       constraints: [],
     });
-    const beginCount = (prompt.match(/CONTRACT_BEGIN/g) || []).length;
-    const endCount = (prompt.match(/CONTRACT_END/g) || []).length;
-    expect(beginCount).toBe(1);
-    expect(endCount).toBe(1);
+    const beginCount = (prompt.match(/CONTRACT_BEGIN/g) ?? []).length;
+    const endCount = (prompt.match(/CONTRACT_END/g) ?? []).length;
+    // 空参契约：buildPrompt 返回空字符串（不产生任何 CONTRACT 标记）
+    expect(beginCount).toBe(0);
+    expect(endCount).toBe(0);
+    expect(prompt).toBe('');
   });
 });
