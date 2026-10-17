@@ -20,8 +20,10 @@ const KNOWN_EXTENSIONS = new Set([
  *   - 显式相对路径: ./path/to/file.ts, ../path/to/file.ts
  *   - Home 路径: ~/path/to/file.ts
  *   - 裸相对路径: path/to/file.ts (fix #)
+ *   - 含 ~ 的目录段（Windows 8.3 短名，如 C:\Users\RUNNER~1\...）
+ *     路径段字符类与相对路径首段均接受 ~，避免在 ~ 处断裂截出后缀伪路径。
  */
-const FILE_PATH_RE = /`?((?:[A-Za-z]:[\\\/]|\.{1,2}[\\\/]|~\/|\/|[\w-]+[\\\/])[\w\-\.\\\/]+\.\w{1,10})`?/g;
+const FILE_PATH_RE = /`?((?:[A-Za-z]:[\\\/]|\.{1,2}[\\\/]|~\/|\/|[\w\-~]+[\\\/])[\w\-\.\\\/~]+\.\w{1,10})`?/g;
 
 /** SDK v2 Part 格式（简化） */
 interface SdkPart {

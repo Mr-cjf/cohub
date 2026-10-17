@@ -8,6 +8,7 @@
 
 ### 修复
 - **后台任务 idle 早于 after 绑定时不再漏捕获结果 / 质量 / token 采样**：任务在 `tool.execute.after` 完成子会话绑定前先收到 `session.idle` 时，由 after 绑定后的有界核验兜底补齐结果捕获、质量回写与 token 采样，不因早到 idle 遗漏
+- **修复 Windows 8.3 短路径（`RUNNER~1` 等含 `~` 目录段）被路径正则截断为伪文件**：路径提取正则的路径段字符类与相对路径首段接受 `~`，结构化路径与正则完整匹配以精确原字符串同键去重——不再出现「完整路径 + `~` 截断伪路径」两个文件条目导致 summary 预算按 2 个文件均摊减半（默认预算 2000 时单文件累计读取从 8004 恢复为 16004）
 
 ### 工程
 - **新增本包 CI 校验工作流**：`.github/workflows/opencode-check.yml`——PR / push 路径过滤本包与 workflow 自身、支持 `workflow_dispatch`；仅 `contents: read` 权限，不触发发布；Node 24 + Bun 对齐发布工作流，npm 缓存依赖本包 package-lock；工作目录本包；步骤 npm ci → `npm run build`（先生成提示词）→ `npm run test`（即 `bun test ./src`）→ `npx tsc --noEmit -p tsconfig.json`；Ubuntu / Windows 双平台；同分支重复 run 自动取消，不阻断发布工作流

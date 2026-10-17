@@ -13,6 +13,8 @@
 //     避免仅 engine 链完整、合并运行其他依赖 fs 的测试文件时缺导出；
 //   - J 用例按独立实测证据修正（纯 emoji 预算 1999 时旧 full 截断点 cut=4×预算 恒为偶数 codeunit、
 //     恒落在字符边界，本就不产生孤立 surrogate；不再声称 bounded 修复了本不存在的缺陷）。
+// Wave7 追加：目录名含 ~（8.3 短名风格）真实夹具——结构化 + 文本同路径引用去重为单文件，
+// 回归验证预算不因 ~ 截断伪路径条目减半（单文件累计 read 16004 而非 8004）。
 // @ts-nocheck — Bun 测试在运行时执行，类型由 bun:test 全局提供
 
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
@@ -397,9 +399,9 @@ function hasLoneSurrogate(text: string): boolean {
   return false;
 }
 
-/** 创建临时目录 fixture（仅测试内使用，不触碰真实用户路径） */
-function createTempFileFixture(): { dir: string; cleanup: () => void } {
-  const dir = realMkdtempSync(path.join(realOs.tmpdir(), 'cohub-ctx-'));
+/** 创建临时目录 fixture（仅测试内使用，不触碰真实用户路径）；prefix 可含 ~ 模拟 8.3 短名风格目录名 */
+function createTempFileFixture(prefix = 'cohub-ctx-'): { dir: string; cleanup: () => void } {
+  const dir = realMkdtempSync(path.join(realOs.tmpdir(), prefix));
   return {
     dir,
     cleanup: () => {
@@ -917,6 +919,59 @@ describe('Wave1 上下文优化基线', () => {
       expect(result).toContain('eof.ts');
       expect(result).not.toContain('```text');
       expect(result).toContain('large file');
+    } finally {
+      cleanup();
+    }
+  });
+
+  // ── O. 目录名含 ~（8.3 短名风格，不依赖 Windows 真短名）：结构化 + 文本同路径引用去重为单文件，
+  // 预算不因 ~ 截断伪路径条目减半（修复前 text/output 扫描在 ~ 处断裂截出伪路径 → 2 文件
+  // → 预算 2000/2=1000 → 累计 read 8004；修复后完整匹配同键去重 → 1 文件 → 累计 read 16004）──
+  test('目录名含 ~（8.3 短名风格）：同路径引用去重为单文件，累计 read 16004（非 8004）、open/close 一次', async () => {
+    const { dir, cleanup } = createTempFileFixture('cohub~ctx-');
+    try {
+      const shortNameFile = path.join(dir, 'big.ts');
+      realWriteFileSync(shortNameFile, BIG_FILE_CONTENT, 'utf-8');
+      // 同一路径三处引用：结构化 input.filePath + tool output 文本 + text part
+      const client = {
+        session: {
+          messages: async () => ({
+            data: [
+              {
+                info: { role: 'assistant' },
+                parts: [
+                  { type: 'tool', tool: 'read', state: { status: 'completed', input: { filePath: shortNameFile }, output: `读取 ${shortNameFile} 完成` } },
+                  { type: 'text', text: `已分析 ${shortNameFile} 文件` },
+                ],
+              },
+            ],
+          }),
+        },
+      };
+      const engine = new ContextEngine(client, {
+        strategy: { t: 'summary' },
+        summarizeMaxTokens: FIXTURE_BASELINE.summaryBudgetTokens,
+      });
+      const ctxId = engine.registerContext({ description: 'test' });
+
+      await engine.fillContextAsync(ctxId, 'ses_parent', { strategy: 'summary' });
+      const result = engine.formatContextDetails(ctxId);
+
+      // 路径锚点只精确一个完整路径（无 ~ 截断后的后缀伪路径条目）
+      const anchors = Array.from(result.matchAll(/^- `([^`]*)`:/gm), (m) => m[1]);
+      expect(anchors).toEqual([shortNameFile]);
+      // 单文件一次正文
+      expect((result.match(/```text/g) ?? []).length).toBe(1);
+      // 预算 2000 → 单文件 byteLimit 16000 + lookahead 4 = 16004（修复前 2 文件均摊 → 8004）
+      const reads = fsOps.filter((o) => o.op === 'read' && o.path === shortNameFile);
+      const totalRead = reads.reduce((s, o) => s + (o.bytes ?? 0), 0);
+      expect(reads.length).toBeGreaterThan(0);
+      expect(totalRead).toBe(FIXTURE_BASELINE.defaultByteLimit + 4);
+      // open/close 各一次（单文件只读一次）
+      const opens = fsOps.filter((o) => o.op === 'open' && o.path === shortNameFile);
+      const closes = fsOps.filter((o) => o.op === 'close' && o.path === shortNameFile);
+      expect(opens.length).toBe(1);
+      expect(closes.length).toBe(1);
     } finally {
       cleanup();
     }
