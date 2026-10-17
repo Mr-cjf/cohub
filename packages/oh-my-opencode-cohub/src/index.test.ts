@@ -1467,6 +1467,28 @@ const runs: Array<{ name: string; fn: (hooks: any, ctx: any) => Promise<void>; c
       assert.strictEqual(out3again.args.prompt, '原文', '重复 before 不累积任何内容');
     },
   },
+  {
+    name: '父会话隔离：idle 捕获透传 parent，A 的结果只进 A、不进 B（显式传播）',
+    config: { context: { dependencyPropagation: true } },
+    fn: async (hooks, ctx) => {
+      // A 派生子任务，绑定 child，idle 终态 → 捕获（parent=ses_A 透传进 dependencyCache）
+      await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: '任务X', background: true, callID: 'call-1' });
+      await afterTask(hooks, 'ses_A', 'call-1', { childSessionId: 'ses_b1' });
+      ctx.setMessages([{
+        info: { role: 'assistant', sessionID: 'ses_b1', time: { created: Date.now(), completed: Date.now() }, finish: 'finish' },
+        parts: [{ type: 'text', text: 'A 会话关键结论' }],
+      }]);
+      await emitEvent(hooks, 'session.idle', 'ses_b1');
+      await sleepMs(200); // 等待 capture 异步写回 dependencyCache
+      // B 会话 fill relevant：不注入 A 的依赖（跨父会话隔离，绝不回退全局最近）
+      const outB = await registerTask(hooks, 'ses_B', { subagent_type: 'co-fixer', description: 'B 任务', background: true, callID: 'call-2', context_override: 'relevant' });
+      assert.ok(!outB.args.prompt.includes('依赖结果'), 'B 不应注入 A 的依赖结果');
+      // A 会话 fill relevant：注入自己的依赖
+      const outA = await registerTask(hooks, 'ses_A', { subagent_type: 'co-fixer', description: 'A 新任务', background: true, callID: 'call-3', context_override: 'relevant' });
+      assert.ok(outA.args.prompt.includes('依赖结果'), 'A 应注入自己的依赖结果');
+      assert.ok(outA.args.prompt.includes('A 会话关键结论'), 'A 的结论应传播到同父新调用');
+    },
+  },
 ];
 
 async function main() {
@@ -1544,6 +1566,7 @@ const CASES = [
   '默认省略 context_override：不注入任务上下文块、不追加契约、不读父历史',
   '显式 context_override=relevant：父历史有内容才注入详情，无内容不注入',
   '契约：用户手写契约块与原文保留、goal-only 空壳被清理、重复 before 不累积',
+  '父会话隔离：idle 捕获透传 parent，A 的结果只进 A、不进 B（显式传播）',
 ];
 
 /**

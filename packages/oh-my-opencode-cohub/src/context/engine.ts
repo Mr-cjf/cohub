@@ -32,6 +32,9 @@ export class ContextEngine {
    */
   private registryTouchedAt = new Map<string, number>();
   /** alias → 前置子代理结果 */
+  // 缓存语义（诚实边界）：本缓存是「同 Instance 内各父会话的近期任务摘要」，不是真实任务
+  // 依赖图——alias 实例级全局唯一，跨父会话不碰撞；读端按 parentSessionId 过滤，只隔离
+  // 同 Instance 跨父会话的摘要串注入，不扩展到任务级相关性分析，也不虚构 task deps 参数。
   private dependencyCache = new Map<string, DependencyResult>();
   /**
    * In-flight promise 去重 map：key = `${parentSessionId}::${windowSize}`。
@@ -127,7 +130,11 @@ export class ContextEngine {
       }
 
       if (this.config.dependencyPropagation && this.dependencyCache.size > 0) {
+        // 父会话隔离：先按 parentSessionId 过滤出本父会话的结果，再取最近 maxDependencies 条。
+        // 先 filter 后 limit——其他父会话的结果不占用本父会话的注入限额；
+        // 同 parent 内顺序 / TTL / 截断等既有行为保持不变。
         context.dependencies = Array.from(this.dependencyCache.values())
+          .filter((dep) => dep.parentSessionId === parentSessionId)
           .slice(-this.config.maxDependencies);
       }
     } catch {
@@ -324,7 +331,7 @@ export class ContextEngine {
     childSessionId: string,
     alias: string,
     agent: string,
-    opts?: { notBefore?: number },
+    opts?: { notBefore?: number; parentSessionId?: string },
   ): Promise<{ output: string; decisions: number; tokens?: { input: number; output: number }; reuseInput?: ReuseInputSample } | null> {
     try {
       const messagesResult = await this.client.session.messages({
@@ -473,13 +480,17 @@ export class ContextEngine {
       const decisions = extractDecisions(messages, this.config.maxDecisions, this.config.relevantMessageWindow);
 
       // P2-1: dependencyPropagation 关闭时不写 dependencyCache（避免多余缓存污染）；
-      // fillContextAsync 读取侧已有 gate，恢复后无用户可见回归
-      if (keyOutput && this.config.dependencyPropagation) {
+      // fillContextAsync 读取侧已有 gate，恢复后无用户可见回归。
+      // 父会话隔离：仅当显式传播启用且 parentSessionId 存在（非空）时才把带 parent 的条目
+      // 写入传播缓存；parent 缺失时正常捕获/返回/原有回写结果，但不进入传播缓存——
+      // 绝不回退到其他 parent / 全局最近（避免跨父会话摘要串注入）。
+      if (keyOutput && this.config.dependencyPropagation && opts?.parentSessionId) {
         this.dependencyCache.set(alias, {
           alias,
           agent,
           keyOutput,
           capturedAt: Date.now(),
+          parentSessionId: opts.parentSessionId,
         });
       }
 
