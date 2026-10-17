@@ -1,6 +1,6 @@
 {
   "name": "dsh-cohub",
-  "version": "0.4.11",
+  "version": "0.5.0",
   "description": "DeepSeek Harness 版 CoHub：中文智能体编排——双 preset 模式（co-orchestrator 纯调度 + cohub-cordis 创造模式）/ 12 技能（11 专职代理 + orchestrator）/ 多模型共识",
   "type": "module",
   "main": "lib/index.js",
