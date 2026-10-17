@@ -371,8 +371,10 @@ async function buildHost() {
   for (const preset of ["co-orchestrator", "cohub-cordis"]) {
     const file = join(process.cwd(), "presets", preset, "agent.cordis.yml");
     const text = readFileSync(file, "utf8");
-    const hasPersonaPrefix = /\n\s*- id: persona\n[\s\S]*?\n(\s*config:)?\s*prefix:/.test(text);
-    const hasPersonaTextField = /\n\s*- id: persona\n[\s\S]*?^\s*text:/m.test(text);
+    // 行尾兼容：core.autocrlf=true 的 checkout 会把 preset 文件转成 CRLF，
+    // 正则里 persona 行后的换行须兼容 \r\n（否则 CRLF worktree 下误判为缺失 prefix）。
+    const hasPersonaPrefix = /\n\s*- id: persona\r?\n[\s\S]*?\r?\n(\s*config:)?\s*prefix:/.test(text);
+    const hasPersonaTextField = /\n\s*- id: persona\r?\n[\s\S]*?^\s*text:/m.test(text);
     const hasToolCordis = /name:\s*['"]?@deepseek-ai\/dsh-tool-cordis/.test(text);
     check(`${preset}: 组合非空且含 persona 行`, text.includes("- id: persona"));
     check(`${preset}: persona 用 prefix（无 text: 字段）`, hasPersonaPrefix && !hasPersonaTextField);
