@@ -1,0 +1,21 @@
+{
+  "name": "oh-my-codex-cohub",
+  "version": "1.6.2",
+  "private": true,
+  "description": "CoHub Codex plugin: Chinese orchestration skills and Council MCP",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/validate.mjs",
+    "test": "node --test",
+    "resolve:agents": "node scripts/resolve-agents.mjs",
+    "orchestrator:status": "node scripts/orchestrator-policy.mjs status",
+    "orchestrator:enable": "node scripts/orchestrator-policy.mjs enable",
+    "orchestrator:disable": "node scripts/orchestrator-policy.mjs disable",
+    "install:local": "node scripts/install-local.mjs",
+    "init:config": "node scripts/init-config.mjs"
+  }
+}

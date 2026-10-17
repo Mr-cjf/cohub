@@ -1,0 +1,46 @@
+{
+  "name": "oh-my-codex-cohub",
+  "version": "1.6.2",
+  "description": "Codex \u4e2d\u6587\u667a\u80fd\u4f53\u7f16\u6392\u63d2\u4ef6 CoHub\uff1a\u7eaf\u8c03\u5ea6 Orchestrator + 12 \u4e2a\u4e2d\u6587\u4ee3\u7406 + \u516d\u6b65\u5de5\u4f5c\u6d41 + Council \u591a\u6a21\u578b\u5171\u8bc6\u3002",
+  "author": {
+    "name": "CoHub"
+  },
+  "homepage": "https://github.com/Mr-cjf/cohub/tree/main/packages/oh-my-codex-cohub",
+  "repository": "https://github.com/Mr-cjf/cohub",
+  "license": "MIT",
+  "keywords": [
+    "cohub",
+    "orchestration",
+    "agents",
+    "workflow",
+    "chinese",
+    "council",
+    "multi-agent"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "CoHub \u4e2d\u6587\u667a\u80fd\u4f53\u7f16\u6392",
+    "shortDescription": "\u89c4\u5212\u2192\u59d4\u6d3e\u2192\u9a8c\u8bc1\uff1a12 \u4e2a\u4e2d\u6587\u4ee3\u7406 + \u516d\u6b65\u5de5\u4f5c\u6d41",
+    "longDescription": "CoHub monorepo 的 Codex 原生插件。内置 12 个中文代理技能、六步工作流、ContextGuard 和任务看板；启用指导模式后，普通工程任务默认先委派 worker，再由主代理汇总验证。",
+    "developerName": "CoHub",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/Mr-cjf/cohub",
+    "privacyPolicyURL": "https://github.com/Mr-cjf/cohub/blob/main/packages/oh-my-codex-cohub/README.md",
+    "termsOfServiceURL": "https://github.com/Mr-cjf/cohub/blob/main/packages/oh-my-codex-cohub/LICENSE",
+    "defaultPrompt": [
+      "\u7528 CoHub \u516d\u6b65\u5de5\u4f5c\u6d41\u5e2e\u6211\u5b8c\u6210\u8fd9\u4e2a\u5f00\u53d1\u4efb\u52a1\u3002",
+      "\u8ba9 co-oracle \u5ba1\u67e5\u8fd9\u6bb5\u4ee3\u7801\u7684\u67b6\u6784\u4e0e\u5b89\u5168\u6027\u3002",
+      "\u7528 co-council \u5bf9\u8fd9\u4e2a\u65b9\u6848\u505a\u591a\u6a21\u578b\u5171\u8bc6\u5206\u6790\u3002"
+    ],
+    "brandColor": "#0F766E",
+    "screenshots": [],
+    "composerIcon": "./assets/logo.png",
+    "logo": "./assets/logo.png"
+  }
+}

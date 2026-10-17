@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "cohub-council": {
+      "command": "node",
+      "args": [
+        "./mcp/council_server.mjs"
+      ],
+      "cwd": ".",
+      "env_vars": [
+        "COHUB_CONFIG",
+        "COHUB_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "OPENAI_API_KEY",
+        "MINIMAX_API_KEY"
+      ],
+      "tool_timeout_sec": 600
+    }
+  }
+}

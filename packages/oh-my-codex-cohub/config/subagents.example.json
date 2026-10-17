@@ -1,0 +1,24 @@
+{
+  "$schema": "./cohub.schema.json",
+  "title": "Subagent model override example",
+  "subagents": {
+    "defaults": {
+      "model": null,
+      "reasoning_effort": null
+    },
+    "roles": {
+      "co-orchestrator": { "model": null, "reasoning_effort": null },
+      "co-planner": { "model": null, "reasoning_effort": null },
+      "co-oracle": { "model": "gpt-6.1-sol", "reasoning_effort": "high" },
+      "co-librarian": { "model": null, "reasoning_effort": null },
+      "co-explorer": { "model": "gpt-6-luna", "reasoning_effort": "medium" },
+      "co-designer": { "model": null, "reasoning_effort": null },
+      "co-fixer": { "model": null, "reasoning_effort": null },
+      "co-observer": { "model": null, "reasoning_effort": null },
+      "co-council": { "model": null, "reasoning_effort": null },
+      "co-rule-user": { "model": null, "reasoning_effort": null },
+      "co-rule-project": { "model": null, "reasoning_effort": null },
+      "co-rule-app": { "model": null, "reasoning_effort": null }
+    }
+  }
+}

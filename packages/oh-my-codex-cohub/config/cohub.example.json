@@ -1,0 +1,101 @@
+{
+  "$schema": "./cohub.schema.json",
+  "council": {
+    "default_preset": "default",
+    "timeout_ms": 180000,
+    "execution_mode": "parallel",
+    "retries": 3,
+    "providers": {
+      "deepseek": {
+        "base_url": "https://api.deepseek.com",
+        "api_key_env": "DEEPSEEK_API_KEY"
+      },
+      "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "api_key_env": "OPENAI_API_KEY"
+      },
+      "minimax": {
+        "base_url": "https://api.minimax.io/v1",
+        "api_key_env": "MINIMAX_API_KEY"
+      }
+    },
+    "chair": {
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "variant": "high"
+    },
+    "presets": {
+      "default": {
+        "alpha": {
+          "provider": "deepseek",
+          "model": "deepseek-chat",
+          "variant": "high"
+        },
+        "beta": {
+          "provider": "openai",
+          "model": "gpt-4.1-mini",
+          "variant": "medium"
+        },
+        "gamma": {
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "variant": "medium"
+        }
+      },
+      "quick": {
+        "alpha": {
+          "provider": "deepseek",
+          "model": "deepseek-chat",
+          "variant": "high"
+        },
+        "beta": {
+          "provider": "openai",
+          "model": "gpt-4.1-mini",
+          "variant": "low"
+        }
+      },
+      "deep": {
+        "alpha": {
+          "provider": "deepseek",
+          "model": "deepseek-chat",
+          "variant": "max"
+        },
+        "beta": {
+          "provider": "openai",
+          "model": "gpt-4.1",
+          "variant": "high"
+        },
+        "gamma": {
+          "provider": "minimax",
+          "model": "MiniMax-M3",
+          "variant": "medium"
+        },
+        "delta": {
+          "provider": "deepseek",
+          "model": "deepseek-reasoner",
+          "variant": "high"
+        }
+      }
+    }
+  },
+  "subagents": {
+    "defaults": {
+      "model": null,
+      "reasoning_effort": null
+    },
+    "roles": {
+      "co-orchestrator": { "model": null, "reasoning_effort": null },
+      "co-planner": { "model": null, "reasoning_effort": null },
+      "co-oracle": { "model": null, "reasoning_effort": null },
+      "co-librarian": { "model": null, "reasoning_effort": null },
+      "co-explorer": { "model": null, "reasoning_effort": null },
+      "co-designer": { "model": null, "reasoning_effort": null },
+      "co-fixer": { "model": null, "reasoning_effort": null },
+      "co-observer": { "model": null, "reasoning_effort": null },
+      "co-council": { "model": null, "reasoning_effort": null },
+      "co-rule-user": { "model": null, "reasoning_effort": null },
+      "co-rule-project": { "model": null, "reasoning_effort": null },
+      "co-rule-app": { "model": null, "reasoning_effort": null }
+    }
+  }
+}
