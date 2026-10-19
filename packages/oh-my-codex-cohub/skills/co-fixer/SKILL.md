@@ -20,7 +20,7 @@ description: "Use to implement code changes per plan or review findings, includi
 
 ## 流程
 
-1. 按任务验收实现并运行适用检查。仅当成功的只读检查证据仍覆盖相同输入、范围和环境时复用；否则重跑。外部状态或后台任务未结束时不得复用。
+1. 按任务验收实现并运行适用检查，验证遵循委派范围，不自行扩大为全量；确需扩大时说明目的与范围，由主调度决策。仅当成功的只读检查证据仍覆盖相同输入、范围和环境时复用；否则重跑。用户要求、TDD、竞态/稳定性计划性重复、相关变更或明确诊断目的可合理复验。外部状态或后台任务未结束时不得复用。
 2. 对异步命令使用当前会话的等待工具；不要高频 tail 日志。记录真实退出码、检查结果和证据路径。
 3. `implementation-only` 且指定验证负责人时，未统一验证的状态保持 `implemented`。
 4. 按共享结果字段短报 `status`、`changedFiles`、`decisions`、`checkEvidence`、`blockers`、`artifactPaths`，不回传整份源文件或日志。

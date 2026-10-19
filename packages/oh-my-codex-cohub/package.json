@@ -1,6 +1,6 @@
 {
   "name": "oh-my-codex-cohub",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "private": true,
   "description": "CoHub Codex plugin: Chinese orchestration skills and Council MCP",
   "type": "module",

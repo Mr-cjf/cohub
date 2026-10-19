@@ -308,6 +308,8 @@ module id / inject 仅 locale、apply 只访问声明服务、不触碰旧 setti
 
 > 升级注意：安装台账按「用户是否改过」逐文件保护。若某个 preset 文件**既被用户改过、又需要跟随上游改名**，台账会判为用户改动而跳过自动更新 —— 此时需手动同步（或删除该 preset 目录让插件重新安装）。本次就是这种情况，已在该机器上手动修正。
 
+**v0.5.1 变更（验证范围与证据复用契约化，2026-10-17）**：新增 `test/skills-contract.ts` 契约测试——直接读取 `skills/*.md` 磁盘正文（不依赖生成物 `src/skills.ts`，build 前后均可运行，与调用时 cwd 无关，`node test/skills-contract.ts` 即可），断言四角色验证纪律：orchestrator 验证节（范围 / 负责人 / 扩大条件 / 修改 Wave 不自测、批量改完统一验证）、planner 验证步骤、fixer 委派范围纪律、oracle 成功证据复用安全条件。同步收紧验证纪律：多代理并行修改的 Wave 本轮只改不验证，批量修改全部完成后统一验证；失败先集中归因（真实退出码/错误消息/日志位置）→ 定向修复最小范围 → 验证通过后再按影响面扩大，诊断/交互类问题说明理由可作例外；证据复用仅限成功完成的只读检查且仍覆盖当前输入/源码与测试/配置/范围/环境状态，证据不足就必要重验，失败不是通过证据，无新变更/目标时不机械重跑已知失败。**本版本仅收敛验证范围/证据复用规则并新增对应契约测试，不含新的 API 适配**——0.5.0 的 DSH 0.2 适配与 0.1 不兼容说明见上文，保持有效。
+
 ### 关于 `cohub-standard`（v0.4.7 移除）
 
 原先的 `cohub-standard`（标准模式 + cohub 身份）其 29 行工具面是 `cohub-cordis` 的**真子集**——只少了 `tool-cordis`、`present`、`command-goal`，而两者的 delegate 能力完全相同。因此 v0.4.7 删除该 preset，统一指向 **cohub-cordis**（标准模式全部能力 + 自改运行时）。
@@ -344,6 +346,7 @@ node test/delegate-p1.ts   # P1：环境契约注入 + 重试
 node test/stall-p3.ts      # P3-1 N2 停滞检测（35 用例）
 node test/schedule-p3.ts   # P3-3 N3 调度参数（24 用例）
 node test/env-sig-p3.ts    # P3-2 N1 环境契约持久化（50 用例）
+node test/skills-contract.ts # 技能契约：四角色验证纪律 + 证据复用 + 扩大条件（直接读 skills/*.md）
 npm run test:runtime      # DSH 0.2 运行期契约（真实 schemastery/Volatile/defineTool + cordis 挂载）
 npm run test:host         # DSH 0.2 宿主集成门禁（真实 Loader/SettingsForms/subagents/app-boot preflight）
 ```

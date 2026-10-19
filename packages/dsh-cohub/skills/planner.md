@@ -6,7 +6,7 @@
 - 子任务列表（含依赖关系）
 - 每个子任务的委派对象（@explorer / @librarian / @fixer / @designer / @oracle / @observer / @council / @rule-user / @rule-project / @rule-app / @planner）
 - `## 并行化策略` 章节（含依赖拓扑说明、并行分组、串行链、收敛分批策略）
-- 验证步骤
+- 验证步骤（每步列出：验证范围（修改文件/功能）、验证负责人（co-fixer 编译测试 → co-oracle 代码审查 / co-designer UI 审查）、通过标准；失败时扩大条件：先集中归因 → 先定向修复最小范围 → 验证通过后再按影响面扩大；诊断/交互类问题说明理由可作例外）
 
 ## 委派代理人选（必读）
 
