@@ -239,7 +239,7 @@ export function registerCoHubAgents(): { success: boolean; message: string } {
     }
   }
 
-  // 写入 12 个 co-* 代理发现条目到 opencode.json（仅 mode + description）
+  // 写入 13 个 co-* 代理发现条目到 opencode.json（仅 mode + description）
   // OpenCode 1.17.20 仅从 opencode.json 静态发现代理
   // model/variant/prompt 由 config hook 从 oh-my-opencode-cohub.json 注入，不写入此处
   const TEMPLATE_AGENTS: Array<{ name: string; mode: string; description: string }> = [
@@ -255,6 +255,7 @@ export function registerCoHubAgents(): { success: boolean; message: string } {
     { name: 'co-rule-user', mode: 'subagent', description: '用户规范分析——用户级AGENTS.md' },
     { name: 'co-rule-project', mode: 'subagent', description: '项目规范分析——项目AGENTS.md' },
     { name: 'co-rule-app', mode: 'subagent', description: '应用规则分析——.opencode/rules/*.md' },
+    { name: 'co-orchestrator-gpt', mode: 'primary', description: '纯调度者（GPT 变体）——编排任务、委派执行' },
   ];
 
   config.agent = config.agent ?? {};
@@ -403,6 +404,7 @@ export function writeDefaultConfig(): { success: boolean; message: string } {
     { name: 'co-rule-project', keywords: LIGHT_KEYWORDS, agentType: 'rule-project' },
     { name: 'co-rule-app', keywords: LIGHT_KEYWORDS, agentType: 'rule-app' },
     { name: 'co-planner', keywords: LIGHT_KEYWORDS, agentType: 'planner' },
+    { name: 'co-orchestrator-gpt', keywords: HEAVY_KEYWORDS, agentType: 'orchestrator' },
   ];
 
   const agents: Record<string, { model: string; variant?: string }> = {};
@@ -465,7 +467,7 @@ export function writeDefaultConfig(): { success: boolean; message: string } {
 
   try {
     writeJsonFileAtomic(COHUB_CONFIG_PATH, defaultConfig);
-    return { success: true, message: `✓ 已智能匹配 ${matched}/12 个代理的模型，生成 oh-my-opencode-cohub.json` };
+    return { success: true, message: `✓ 已智能匹配 ${matched}/13 个代理的模型，生成 oh-my-opencode-cohub.json` };
   } catch {
     return { success: false, message: '⚠ 无法创建配置文件' };
   }

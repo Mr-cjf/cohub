@@ -39,6 +39,7 @@ function loadAgentConfig(): AgentInfo[] {
 function DEFAULT_AGENTS(): AgentInfo[] {
   const list: [string, string][] = [
     ['co-orchestrator', 'deepseek/deepseek-v4-pro'],
+    ['co-orchestrator-gpt', 'deepseek/deepseek-v4-pro'],
     ['co-oracle', 'deepseek/deepseek-v4-flash'],
     ['co-librarian', 'deepseek/deepseek-v4-flash'],
     ['co-explorer', 'deepseek/deepseek-v4-flash'],

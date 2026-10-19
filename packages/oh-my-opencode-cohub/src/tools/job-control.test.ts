@@ -58,13 +58,13 @@ function makeCtx(abort: () => Promise<{ data?: unknown; error?: unknown }>) {
   return { client: { session: { abort } } };
 }
 
-function makeToolContext() {
-  return { sessionID: 'ses_parent', agent: 'co-orchestrator' };
+function makeToolContext(agent = 'co-orchestrator') {
+  return { sessionID: 'ses_parent', agent };
 }
 
 /** 执行 close_job 并解析 JSON 返回 */
-async function runClose(jobTools: ReturnType<typeof createCloseJobTool>, taskId: string) {
-  return JSON.parse(await jobTools.close_job.execute({ task_id: taskId }, makeToolContext()));
+async function runClose(jobTools: ReturnType<typeof createCloseJobTool>, taskId: string, agent = 'co-orchestrator') {
+  return JSON.parse(await jobTools.close_job.execute({ task_id: taskId }, makeToolContext(agent)));
 }
 
 /** 注册一个后台任务（携带 sessionId 与 callID） */
@@ -294,6 +294,19 @@ describe('close_job：精确取消（不中止真实复用 session / 不假成�
     const jobTools = createCloseJobTool(makeCtx(async () => ({ data: {}, error: undefined })), tracker);
 
     await expect(jobTools.close_job.execute({ task_id: alias }, { sessionID: 'ses_parent', agent: 'co-council' })).rejects.toThrow();
+  });
+
+  test('权限放行：co-orchestrator-gpt 调用 close_job 不被权限拒绝', async () => {
+    const tracker = new TaskTracker();
+    const alias = registerBg(tracker, 'ses_perm_gpt');
+    const jobTools = createCloseJobTool(makeCtx(async () => ({ data: {}, error: undefined })), tracker);
+
+    const result = await runClose(jobTools, alias, 'co-orchestrator-gpt');
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe('cancelled');
+    expect(result.session_aborted).toBe(true);
+    expect(tracker.getJobByAlias(alias)!.status).toBe('cancelled');
   });
 
   test('onCancelled 回调抛错：不影响取消结果、不引发二次 abort', async () => {

@@ -1,6 +1,7 @@
 import type { Plugin } from '@opencode-ai/plugin';
 import type { AgentConfig } from '@opencode-ai/sdk';
 import { ORCHESTRATOR_PROMPT } from './prompts/orchestrator';
+import { ORCHESTRATOR_GPT_PROMPT } from './prompts/orchestrator-gpt';
 import { ORACLE_PROMPT } from './prompts/oracle';
 import { LIBRARIAN_PROMPT } from './prompts/librarian';
 import { EXPLORER_PROMPT } from './prompts/explorer';
@@ -40,6 +41,7 @@ const DEFAULT_PROMPT_MAX_TOKENS = 12_000;
 /** 中文提示词映射表 */
 const CHINESE_PROMPTS: Record<string, string> = {
   'co-orchestrator': ORCHESTRATOR_PROMPT,
+  'co-orchestrator-gpt': ORCHESTRATOR_GPT_PROMPT,
   'co-oracle': ORACLE_PROMPT,
   'co-librarian': LIBRARIAN_PROMPT,
   'co-explorer': EXPLORER_PROMPT,
@@ -68,7 +70,7 @@ interface PromptOverrides {
 function loadFileOverrides(projectDir?: string): PromptOverrides {
   const overrides: PromptOverrides = {};
   const agentNames = [
-    'co-orchestrator', 'co-oracle', 'co-librarian', 'co-explorer',
+    'co-orchestrator', 'co-orchestrator-gpt', 'co-oracle', 'co-librarian', 'co-explorer',
     'co-designer', 'co-fixer', 'co-observer', 'co-council',
     'co-rule-user', 'co-rule-project', 'co-rule-app', 'co-planner',
   ];
@@ -200,6 +202,10 @@ const CoHubPlugin: Plugin = async (input, options) => {
     {
       name: 'co-orchestrator',
       config: { mode: 'primary', prompt: ORCHESTRATOR_PROMPT },
+    },
+    {
+      name: 'co-orchestrator-gpt',
+      config: { mode: 'primary', prompt: ORCHESTRATOR_GPT_PROMPT },
     },
     {
       name: 'co-oracle',
@@ -651,7 +657,7 @@ const CoHubPlugin: Plugin = async (input, options) => {
   // ===== 构建 agent 对象（供直接返回 + config hook 双重注册） =====
   const agentConfigs: Record<string, unknown> = {};
   const COUNCIL_ONLY_TOOLS = { council_session: 'deny' as const };
-  // close_job 仅 co-orchestrator 可用；co-council 不可调用（co-council 用 council_session）
+  // close_job 仅 co-orchestrator / co-orchestrator-gpt 可用；co-council 不可调用（co-council 用 council_session）
   const ORCHESTRATOR_ONLY_TOOLS = { close_job: 'deny' as const };
   for (const agent of agents) {
     const base = {
@@ -661,16 +667,16 @@ const CoHubPlugin: Plugin = async (input, options) => {
     } as Record<string, unknown>;
     // 权限管控：
     // - council_session 仅 co-council 可用，非 co-council 显式 deny
-    // - close_job 仅 co-orchestrator 可用，非 co-orchestrator 显式 deny
+    // - close_job 仅 co-orchestrator / co-orchestrator-gpt 可用，其余显式 deny
     // 若 config 已有 permission 则合并（保留已有键）。
     const existingPermission = (base.permission as Record<string, unknown> | undefined) ?? {};
     if (agent.name !== 'co-council') {
       base.permission = { ...existingPermission, ...COUNCIL_ONLY_TOOLS };
     }
-    if (agent.name !== 'co-orchestrator') {
+    if (!['co-orchestrator', 'co-orchestrator-gpt'].includes(agent.name)) {
       base.permission = { ...(base.permission as Record<string, unknown>), ...ORCHESTRATOR_ONLY_TOOLS };
     } else {
-      // co-orchestrator 显式写回 allow：不依赖"无条目默认放行"，防未来全局权限策略收紧时误拦
+      // co-orchestrator / co-orchestrator-gpt 显式写回 allow：不依赖"无条目默认放行"，防未来全局权限策略收紧时误拦
       base.permission = { ...(base.permission as Record<string, unknown>), close_job: 'allow' as const };
     }
     agentConfigs[agent.name] = base;
@@ -710,13 +716,13 @@ const CoHubPlugin: Plugin = async (input, options) => {
         if (pc.variant) merged.variant = pc.variant;
         // permission 键级合并：保留用户对具体工具（如 bash）的授权，
         // 但 council_session / close_job 按代理身份键级强制修正（防浅合并误覆盖）：
-        // - co-orchestrator：council_session deny、close_job allow
+        // - co-orchestrator / co-orchestrator-gpt：council_session deny、close_job allow
         // - co-council：council_session allow、close_job deny
         // - 其余代理：双 deny
         const existingPerm0 = (merged.permission as Record<string, unknown>) ?? {};
         if (name === 'co-council') {
           merged.permission = { ...existingPerm0, council_session: 'allow' as const, ...ORCHESTRATOR_ONLY_TOOLS };
-        } else if (name === 'co-orchestrator') {
+        } else if (['co-orchestrator', 'co-orchestrator-gpt'].includes(name)) {
           merged.permission = {
             ...existingPerm0,
             ...COUNCIL_ONLY_TOOLS,

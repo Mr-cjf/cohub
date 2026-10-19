@@ -14,6 +14,7 @@ interface AgentDef {
 
 const AGENTS: AgentDef[] = [
   { file: 'orchestrator', exportName: 'ORCHESTRATOR_PROMPT' },
+  { file: 'orchestrator-gpt', exportName: 'ORCHESTRATOR_GPT_PROMPT' },
   { file: 'oracle', exportName: 'ORACLE_PROMPT' },
   { file: 'librarian', exportName: 'LIBRARIAN_PROMPT' },
   { file: 'explorer', exportName: 'EXPLORER_PROMPT' },

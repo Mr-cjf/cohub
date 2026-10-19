@@ -9,6 +9,8 @@
 | `packages/dsh-cohub` | DeepSeek Harness | Cordis Plugin（runtime skills + preset） | **当前主力** |
 | `packages/oh-my-opencode-cohub` | OpenCode | `@opencode-ai/plugin` SDK（agent + hook + TUI） | 原版（已归档到本 monorepo） |
 
+> OpenCode 侧 orchestrator 提供 GPT 专用变体 `co-orchestrator-gpt`（纯调度，专为 GPT 系用户）；DS 侧默认路径不变，继续用 `co-orchestrator`。
+
 ## 包边界纪律
 
 两个包各自绑定自己的平台路径体系，**改一个包时不要串改其他包**：

@@ -67,10 +67,10 @@ export function createCloseJobTool(
       args: { task_id: string },
       toolContext: { sessionID: string; agent: string },
     ): Promise<string> {
-      // 权限校验（纵深防御）：仅 co-orchestrator；缺失身份视为拒绝
-      if (toolContext.agent !== 'co-orchestrator') {
+      // 权限校验（纵深防御）：仅 co-orchestrator / co-orchestrator-gpt；缺失身份视为拒绝
+      if (!['co-orchestrator', 'co-orchestrator-gpt'].includes(toolContext.agent)) {
         throw new Error(
-          `[oh-my-opencode-cohub] close_job can only be invoked by co-orchestrator. Current agent: ${toolContext.agent}`,
+          `[oh-my-opencode-cohub] close_job can only be invoked by co-orchestrator/co-orchestrator-gpt. Current agent: ${toolContext.agent}`,
         );
       }
 
