@@ -102,10 +102,10 @@ v1 Hooks 共计 **21 个属性**：18 个函数式 hook + 3 个对象槽。
 ### 5. 权限策略：反向 deny + 少数 allow
 
 - `co-council` → `council_session: 'allow'`，其余（含 `close_job`）deny。
-- `co-orchestrator` → `close_job: 'allow'`，其余（含 `council_session`）deny。
+- `co-orchestrator` / `co-orchestrator-gpt` → `close_job: 'allow'`，其余（含 `council_session`）deny。
 - 其他代理两者都 deny。
 
-证据：`src/index.ts:372-396`，按代理名自动处理，无需手动同步。
+证据：`src/index.ts:659-682`（运行时权限分支）+ `src/tools/job-control.ts:70-73`（工具层纵深防御），权限由显式白名单维护；新增同角色变体必须同步。
 
 ### 6. dispose 必须清理定时器
 
@@ -133,17 +133,19 @@ v1 Hooks 共计 **21 个属性**：18 个函数式 hook + 3 个对象槽。
 | `src/prompts/*.ts` | 自动生成，源头是 `src/prompts/*.md` + `scripts/generate-prompts.ts` | 包级 `.gitignore:10`；生成器文件头含「自动生成，请勿手动编辑」 |
 | `dist/` | `bun build` + `tsc` 编译产物 | 包级 `.gitignore:12` |
 
-## 新增代理：必须同步 5 处
+## 新增代理：必须同步 7 处
 
 每处缺一不可，已核实行号：
 
 1. **新建 `src/prompts/<name>.md`**（提示词源）
-2. **`scripts/generate-prompts.ts:15-28`** 的 `AGENTS` 数组
-3. **`src/index.ts` 四处**：`import`（`:3-14`）、`CHINESE_PROMPTS`（`:39-52`）、`agents` 数组（`:192-253`）、`loadFileOverrides` 的 `agentNames`（`:68-72`）
-4. **`src/tui.ts:40-53`** 的 `DEFAULT_AGENTS()`
+2. **`scripts/generate-prompts.ts:15-29`** 的 `AGENTS` 数组
+3. **`src/index.ts` 四处**：`import`（`:3-15`）、`CHINESE_PROMPTS`（`:42-56`）、`agents` 数组（`:201-266`）、`loadFileOverrides` 的 `agentNames`（`:72-76`）
+4. **`src/tui.ts:41-54`** 的 `DEFAULT_AGENTS()`
 5. **运行构建**（`npm run build`）
+6. **权限白名单**：`src/index.ts:659-682`（运行时权限分支）+ `src/tools/job-control.ts:70-73`（工具层纵深防御）
+7. **CLI 模板**：`src/cli/config-io.ts:245-259`（`TEMPLATE_AGENTS`）+ `:394-408`（`agentSpecs`）
 
-权限约束**无需单独同步**——由 `src/index.ts:375-396` 按代理名自动处理。
+权限由显式白名单维护，**新增同角色变体（如 `co-orchestrator-gpt`）必须同步**上述第 6、7 处，不能依赖"按代理名自动处理"。
 
 ## 陷阱速查表
 

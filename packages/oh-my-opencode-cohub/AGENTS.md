@@ -1,12 +1,13 @@
 # oh-my-opencode-cohub
 
-OpenCode 中文智能体编排插件。TypeScript ESM，通过 `@opencode-ai/plugin` SDK 注册 12 个代理 + 中文注入 + TUI 面板。
+OpenCode 中文智能体编排插件。TypeScript ESM，通过 `@opencode-ai/plugin` SDK 注册 13 个 agent（12 专职 + co-orchestrator-gpt 变体）+ 中文注入 + TUI 面板。
 
 ## 代理清单
 
 | Agent | 角色 |
 |-------|------|
 | `co-orchestrator` | 纯调度——分析需求→委派→审核 |
+| `co-orchestrator-gpt` | GPT 专用纯调度变体（mode: primary，DS 用户继续用 co-orchestrator） |
 | `co-oracle` | 架构审查 / 代码审查 / YAGNI 简化 / 复杂调试 |
 | `co-librarian` | 官方文档 / API / GitHub 研究（只读+Web） |
 | `co-explorer` | 代码库搜索定位——grep / glob / AST（只读） |
@@ -52,7 +53,7 @@ npm run build
 |--------|--------|
 | 插件入口（agent 注册、hook、消息转换） | `src/index.ts` |
 | TUI 侧边栏面板 | `src/tui.ts` |
-| 12 个代理提示词源文件（人工编辑） | `src/prompts/*.md` |
+| 13 个 agent 提示词源文件（人工编辑） | `src/prompts/*.md` |
 | 提示词自动生成文件（勿手动编辑） | `src/prompts/*.ts` |
 | 提示词生成脚本 | `scripts/generate-prompts.ts` |
 | 上下文共享系统 | `src/context/`（types / strategy / extractor / formatter / engine / diag-log） |
@@ -94,6 +95,8 @@ npm run build
 | 3 | 注册到插件入口（**4 处**）：import、`CHINESE_PROMPTS`、`agents` 数组、`loadFileOverrides` 的 `agentNames` | `src/index.ts` |
 | 4 | 注册到 TUI 兜底列表 | `src/tui.ts` → `DEFAULT_AGENTS()` |
 | 5 | 构建 | `npm run build`（自动执行 generate-prompts） |
+
+> **同角色变体（如 `co-orchestrator-gpt`）额外必须同步**：权限白名单（`src/index.ts` 权限分支与 config hook 权限键级合并**两处** + `src/tools/job-control.ts` 工具层纵深防御）与 CLI 模板（`src/cli/config-io.ts` 的 `TEMPLATE_AGENTS` / `agentSpecs`），缺一不可。
 
 ### 运行测试
 

@@ -7,10 +7,10 @@ OpenCode 中文智能体编排插件 CoHub——纯调度模式、全中文提�
 ## 特性
 
 - 🚀 **独立运行**：纯 OpenCode Plugin，依赖 `@opencode-ai/plugin` SDK，零外部插件依赖
-- 🤖 **12 个内置代理**：8 个通用代理（orchestrator/oracle/librarian/explorer/designer/fixer/observer/council）+ 4 个规范/方案代理（rule-user/rule-project/rule-app/planner）
-- 🪝 **自动注入**：通过 `experimental.chat.system.transform` 钩子在每次 LLM 调用时统一注入中文语言要求与并行工具调用总则（覆盖全部 12 个代理）
+- 🤖 **12 个专职代理 + 1 个 GPT 专用变体（co-orchestrator-gpt）**：8 个通用代理（orchestrator/oracle/librarian/explorer/designer/fixer/observer/council）+ 4 个规范/方案代理（rule-user/rule-project/rule-app/planner）+ 1 个 GPT 专用 orchestrator 纯调度变体
+- 🪝 **自动注入**：通过 `experimental.chat.system.transform` 钩子在每次 LLM 调用时统一注入中文语言要求与并行工具调用总则（覆盖全部 13 个 agent）
 - 🧠 **纯调度 Orchestrator**：不碰任何文件工具，只负责规划、委派、验证
-- 🇨🇳 **全中文提示词**：12 个代理全部使用中文提示词
+- 🇨🇳 **全中文提示词**：13 个 agent 全部使用中文提示词
 - 📋 **规范分析代理**：rule-user（用户级 AGENTS.md）、rule-project（从项目根逐级发现 AGENTS.md / CLAUDE.md / AGENTS.local.md / CLAUDE.local.md 及 `.rules/*.md`）、rule-app（定向分析 `.opencode/rules/*.md`）
 - 🎯 **方案制定代理**：planner 综合所有输入输出结构化任务分解
 - 🔗 **编排引擎（Orchestration Engine）**：六状态 DAG 状态机（pending→ready→running→completed/failed→cancelled），诚实镜像原生 task 生命周期（观测/内部状态同步，不激活自动调度/自动重试）；级联取消仅同步引擎内部状态，不会自动 abort 其他运行会话
@@ -90,6 +90,7 @@ npm install oh-my-opencode-cohub
   "$schema": "https://unpkg.com/oh-my-opencode-cohub@latest/oh-my-opencode-cohub.schema.json",
   "agents": {
     "co-orchestrator": { "model": "provider/model", "variant": "max" },
+    "co-orchestrator-gpt": { "model": "provider/model", "variant": "max" },
     ...
   },
   "council": {
@@ -108,11 +109,12 @@ npm install oh-my-opencode-cohub
 }
 ```
 
-## 12 个代理配置规则
+## 13 个 agent 配置规则（12 专职 + 1 GPT 变体）
 
 | 代理 | 角色 | 推理强度 | variant 建议 | 模型偏好 |
 |------|------|---------|-------------|---------|
 | co-orchestrator | 纯调度者，编排任务、委派执行 | **重型** | max / xhigh | pro、max、sonnet、opus 等强推理模型 |
+| co-orchestrator-gpt | GPT 专用纯调度变体（DS 用户仍用 co-orchestrator） | **重型** | max / xhigh | gpt-5 等 GPT 系强推理模型 |
 | co-oracle | 战略顾问，架构审查、复杂调试 | **轻型** | low / medium | flash、mini、haiku 等轻量快速模型 |
 | co-planner | 方案制定，综合信息输出任务分解 | **轻型** | low / medium | 同上 |
 | co-council | 多模型共识，跨多个 LLM 综合 | **轻型** | low / medium | 同上 |
@@ -165,14 +167,15 @@ council 是内置的多模型共识机制，会将同一个问题发给 3 个 co
 
 - 从 opencode.json 读取已配置的 provider，按上表规则为每个代理分配 model 和 variant
 - 只有 1 个 provider：所有代理都用它，variant 按表格建议选不同档位
-- 有多个 provider：co-orchestrator 优先选最强推理 provider，其余代理选最快 provider
+- 有多个 provider：co-orchestrator / co-orchestrator-gpt 优先选最强推理 provider，其余代理选最快 provider
+- 主控代理选择：GPT 系用户选 `co-orchestrator-gpt`，DS 系用户选 `co-orchestrator`；两者权限一致（均可调用 `close_job`）
 - council 的 alpha/beta/gamma 优先选 3 个不同 provider；不够 3 个时用同一 provider 的不同 model
 - opencode.json 无任何 provider 时，生成占位配置并在 `_comment` 字段提示用户先配置
 
 ## 注意
 
 - 只写入 `oh-my-opencode-cohub.json`，不要修改 `opencode.json`
-- agent 名必须用 `co-` 前缀（共 12 个），不要遗漏
+- agent 名必须用 `co-` 前缀（共 13 个），不要遗漏
 ````
 
 ### 卸载
@@ -190,7 +193,7 @@ CLI 会精确清理所有 `co-*` 代理和相关配置，不影响其他插件�
 安装并重启 OpenCode 后，确认以下效果：
 
 - 对话中自动出现 **中文语言要求**（如 "你必须始终使用中文进行思考、推理和回复"）
-- 可用代理列表中出现 12 个 `co-*` 前缀代理（`co-orchestrator`、`co-oracle`、`co-librarian`、`co-explorer`、`co-designer`、`co-fixer`、`co-observer`、`co-council`、`co-rule-user`、`co-rule-project`、`co-rule-app`、`co-planner`）
+- 可用代理列表中出现 13 个 `co-*` 前缀 agent（12 专职 + 1 GPT 变体：`co-orchestrator`、`co-orchestrator-gpt`、`co-oracle`、`co-librarian`、`co-explorer`、`co-designer`、`co-fixer`、`co-observer`、`co-council`、`co-rule-user`、`co-rule-project`、`co-rule-app`、`co-planner`）
 - Orchestrator 自动进入纯调度模式（只做规划、委派、验证，不直接操作文件）
 
 ### 故障排查：代理模型未生效？
@@ -208,8 +211,8 @@ CLI 会精确清理所有 `co-*` 代理和相关配置，不影响其他插件�
 
 ### 第一步：检查 opencode.json 的 agent 条目
 
-读取 `~/.config/opencode/opencode.json`，检查 `agent` 字段中是否存在以下 12 个条目：
-- co-orchestrator (mode: primary) + 其余 11 个 (mode: subagent)
+读取 `~/.config/opencode/opencode.json`，检查 `agent` 字段中是否存在以下 13 个条目：
+- co-orchestrator、co-orchestrator-gpt (mode: primary) + 其余 11 个 (mode: subagent)
 
 如果缺少某些条目，说明插件未正确安装，运行以下命令重新安装：
 ```bash
@@ -232,7 +235,7 @@ bun pm cache rm && bunx oh-my-opencode-cohub@latest install
 
 ### 第三步：验证 config hook（仅诊断）
 
-检查 `~/.local/share/opencode/storage/oh-my-opencode-cohub/config-hook-ran.json` 是否存在且 `count` 为 12。如果不存在或 count < 12，说明插件未正常加载，检查：
+检查 `~/.local/share/opencode/storage/oh-my-opencode-cohub/config-hook-ran.json` 是否存在且 `count` 为 13。如果不存在或 count < 13，说明插件未正常加载，检查：
 - opencode.json 的 `plugin` 数组是否包含 `"oh-my-opencode-cohub"`
 - OpenCode 版本是否 >= 1.17
 
@@ -282,11 +285,12 @@ bunx oh-my-opencode-cohub install
 
 ## 代理一览
 
-### 代理（12 个，全中文提示词）
+### 代理（13 个，全中文提示词）
 
 | 代理 | 默认模型 | 职责 | 读取源 |
 |------|----------|------|--------|
 | co-orchestrator | `deepseek/deepseek-v4-pro` | 纯调度：规划→委派→验证 | — |
+| co-orchestrator-gpt | `deepseek/deepseek-v4-pro` | GPT 专用纯调度变体：规划→委派→验证（DS 用户仍用 co-orchestrator） | — |
 | co-oracle | `deepseek/deepseek-v4-flash` | 架构审查/代码审查 | — |
 | co-librarian | `deepseek/deepseek-v4-flash` | 外部文档/API 研究 | — |
 | co-explorer | `deepseek/deepseek-v4-flash` | 代码库搜索定位 | — |
@@ -301,7 +305,7 @@ bunx oh-my-opencode-cohub install
 
 > **注意**：上表模型为内置兜底值。安装时 CLI 会根据 `opencode.json` 中已配置的 provider 智能匹配并写入 `oh-my-opencode-cohub.json`；若 `opencode.json` 无 provider 则生成占位配置。最终生效模型以 `oh-my-opencode-cohub.json` 为准，也可通过下文「配置文件」或「自定义模型」章节手动覆盖。
 >
-> **工具权限**：`close_job` 仅 co-orchestrator 可调用；`council_session` 仅 co-council 可调用；其余代理配置层 deny，纵深防御。
+> **工具权限**：`close_job` 仅 co-orchestrator 与 co-orchestrator-gpt 可调用；`council_session` 仅 co-council 可调用；其余代理配置层 deny，纵深防御。
 
 ## 编排引擎
 
@@ -322,7 +326,7 @@ CoHub 内置轻量编排引擎（`src/orchestration/`，6 模块），**诚实�
 
 | 工具 | 可用代理 | 功能 |
 |------|---------|------|
-| `close_job` | 仅 co-orchestrator | 按 Session ID 或任务别名定位后台任务：**已绑定子会话**时执行真实 `session.abort()`（是否真实中止以返回的 `session_aborted` 为准），仅作用于指定目标会话；**未绑定子会话**仅本地取消（状态落 cancelled、`session_aborted=false`，不中止任何会话）；未知/歧义目标幂等拒绝，不假成功 |
+| `close_job` | 仅 co-orchestrator / co-orchestrator-gpt | 按 Session ID 或任务别名定位后台任务：**已绑定子会话**时执行真实 `session.abort()`（是否真实中止以返回的 `session_aborted` 为准），仅作用于指定目标会话；**未绑定子会话**仅本地取消（状态落 cancelled、`session_aborted=false`，不中止任何会话）；未知/歧义目标幂等拒绝，不假成功 |
 | `council_session` | 仅 co-council | 多模型并行/串行共识：共识检测、空响应重试、质量门禁、退避降级 |
 
 ### 上下文共享
@@ -402,6 +406,7 @@ CLI 安装后自动创建 `~/.config/opencode/oh-my-opencode-cohub.json`，这�
   "$schema": "https://unpkg.com/oh-my-opencode-cohub@latest/oh-my-opencode-cohub.schema.json",
   "agents": {
     "co-orchestrator": { "model": "deepseek/deepseek-v4-pro", "variant": "max" },
+    "co-orchestrator-gpt": { "model": "deepseek/deepseek-v4-pro", "variant": "max" },
     "co-oracle":      { "model": "deepseek/deepseek-v4-flash", "variant": "low" },
     "co-librarian":   { "model": "deepseek/deepseek-v4-flash", "variant": "low" },
     "co-explorer":    { "model": "deepseek/deepseek-v4-flash", "variant": "low" },
@@ -548,7 +553,7 @@ CoHub 采用 Wave 波次分组并行模式。并行与推进由**主代理显式
 }
 ```
 
-支持覆盖的代理名称：`orchestrator`、`oracle`、`librarian`、`explorer`、`designer`、`fixer`、`observer`、`council`、`rule-user`、`rule-project`、`rule-app`、`planner`
+支持覆盖的代理名称：`orchestrator`、`orchestrator-gpt`、`oracle`、`librarian`、`explorer`、`designer`、`fixer`、`observer`、`council`、`rule-user`、`rule-project`、`rule-app`、`planner`
 
 ### 方式二：文件覆盖（类 oh-my-opencode-slim 机制）
 
@@ -558,6 +563,7 @@ CoHub 采用 Wave 波次分组并行模式。并行与推进由**主代理显式
 oh-my-opencode-cohub/
 ├── oracle.md          ← 完全替换 oracle 提示词
 ├── fixer_append.md    ← 追加到 fixer 提示词末尾
+├── co-orchestrator-gpt_append.md  ← 追加到 co-orchestrator-gpt 提示词末尾
 └── planner.md         ← 完全替换 planner 提示词
 ```
 
@@ -584,6 +590,7 @@ npm run build
 
 | 版本 | 日期 | 主要变更 |
 |------|------|---------|
+| 1.19.0 | 2026-10-19 | 新增 `co-orchestrator-gpt`（GPT 专用 orchestrator 纯调度变体，独立 agent，mode: primary）；DS 的 `co-orchestrator` 提示词与行为保持不变。GPT 变体采用「先最小修复 → 先定向验证 → 再查漏补缺」节奏；`close_job` 权限扩展至 co-orchestrator-gpt（运行时权限分支 + job-control 纵深防御）；CLI 安装模板同步 13 个代理，TUI 兜底列表加入 GPT 变体；文档同步（包 README / 包 AGENTS / .rules/05 / 根 README / 根 AGENTS） |
 | 1.18.4 | 2026-10-16 | README 文档跟进：版本历史补齐 1.18.3 与当前编排语义（诚实镜像原生 task 生命周期，**不激活自动调度/自动重试**）；上下文 `summaryReadMode`（`bounded`/`full`）与 opt-in 诊断日志说明；`close_job` 取消边界（已绑定子会话真实 abort / 未绑定仅本地取消）与后台超时清理例外（30 秒检查、30 分钟超时标记 errored）。无运行时代码变更 |
 | 1.18.3 | 2026-10-16 | 编排提示词并发语义修正：移除默认 2-3 / 固定数量 / 强制分批限制，无依赖、无共享可变状态冲突的任务同一条消息同时派发，不以任务/文件数量或猜测容量预限；Wave 仅展示依赖层次不构成等待屏障，已就绪任务同时启动不等无关慢任务；同文件独立只读可并行，仅真实写冲突或要求特定文件版本/读取结果的读写任务按实际冲突与依赖串行；保留 429/TPM 限流反馈（尊重 retry.next / Retry-After）、有限重试、后台已启动任务不重复派发、定向规则分析与已核实事实复用。仅提示词文案调整，无运行时 API / TUI / MCP 变更 |
 | 1.18.2 | 2026-10-16 | 任务生命周期按 `(parentSessionID, callID)` 精确关联与真实收尾；后台任务终态不再仅凭 `session.idle` 判定（有界读取验证明确终态，读失败/无终态信号保持 running 不假成功）；`close_job` 真实取消与质量回写；内部状态机诚实镜像原生 task 生命周期（**不激活自动调度/自动重试**）；`context.summaryReadMode` 支持 `bounded`（默认）/`full`；限流分类器 + opt-in 任务生命周期诊断 |

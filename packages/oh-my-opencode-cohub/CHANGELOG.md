@@ -1,4 +1,20 @@
 # CHANGELOG
+## [1.19.0] - 2026-10-19
+
+### 新增
+- **co-orchestrator-gpt**：GPT 专用 orchestrator 变体，独立 agent；DS 的 co-orchestrator 提示词与行为保持不变。
+- GPT 变体采用"先最小修复 → 先定向验证 → 再查漏补缺"的节奏；分诊、阶段划分、验证级别由 co-planner 输出，orchestrator 保持纯调度。
+- CLI 安装模板同步 13 个代理，为 co-orchestrator-gpt 分配重型模型/variant。
+
+### 变更
+- `close_job` 权限扩展至 co-orchestrator-gpt（运行时权限分支与 job-control 纵深防御同步）。
+- TUI 兜底代理列表加入 co-orchestrator-gpt。
+- 文档同步：包 README、包 AGENTS、.rules/05、根 README、根 AGENTS。
+
+### 测试
+- `routing.test.ts` 新增 GPT 变体断言（分诊归属、阶段性修复、批准语义、验证分级、纯调度约束）。
+- `job-control.test.ts` 新增 co-orchestrator-gpt 调用 close_job 的权限放行用例。
+
 ## [1.18.8] - 2026-10-17
 
 ### 变更（⚠️ 行为变更）
