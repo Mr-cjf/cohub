@@ -6,13 +6,17 @@
  * 采用 src/tracker.ts 的完整版语义：出错 re-throw、finally 清理。
  * 调用方（如 tracker.ts persist、grep-counter.ts writeGrepCounterState）外层
  * 均有 try/catch 兜底，re-throw 不会改变外部可观测行为。
+ *
+ * 临时文件名带 pid + 随机后缀：同进程/跨进程并发写同一目标文件时，
+ * 两个写者各自使用唯一 .tmp 名，rename 是原子的，后完成者整体覆盖先完成者，
+ * 不再互相覆盖对方未写完的临时文件。
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 export function writeFileAtomic(filePath: string, data: string): void {
-  const tmpPath = filePath + ".tmp";
+  const tmpPath = filePath + "." + process.pid + "." + Math.random().toString(36).slice(2, 8) + ".tmp";
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true });
   try {

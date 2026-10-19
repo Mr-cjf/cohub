@@ -8,7 +8,7 @@
 
 | 包路径 | 描述 | 版本 | 状态 |
 |--------|------|------|------|
-| `packages/oh-my-opencode-cohub` | OpenCode 插件 | v1.19.0 | 已迁入，可构建 |
+| `packages/oh-my-opencode-cohub` | OpenCode 插件 | v1.19.1 | 已迁入，可构建 |
 | `packages/dsh-cohub` | DeepSeek Harness 插件 | v0.5.1 | 已迁入，可构建 |
 
 ## 目录结构
@@ -28,7 +28,7 @@
 
 1. **先构建再测试**：`packages/dsh-cohub` 的 `lib/` 与生成的 `src/skills.ts` 都在 `.gitignore` 中，干净 clone 后**必须先 `npm run build`** 才能运行测试。同理，opencode 包的 `src/prompts/*.ts` 为生成物。
 2. **独立构建**：各子包拥有独立的 `package.json`，各自 `npm install`、各自构建，依赖各自平台 SDK。不使用 npm workspaces。
-3. **独立版本**：两个包的版本号彼此无关（当前 0.5.1 / 1.19.0），各自按语义化版本推进。
+3. **独立版本**：两个包的版本号彼此无关（当前 0.5.1 / 1.19.1），各自按语义化版本推进。
 4. **发版标签**：发布时 Git tag 带平台前缀，例如 `dsh-v0.4.11`、`opencode-v1.18.0`。
 5. **CI/CD 注意事项**：GitHub Actions 只识别仓库根 `.github/workflows/` 目录下的 workflow 文件，各子包内的 workflow 不会被自动加载。如需启用发布流水线，须在仓库根重建 workflow 文件并通过 `working-directory` 配置子包路径。
 6. **TypeScript 配置自治**：各子包独立维护 `tsconfig.json`，不共享 `tsconfig.base.json`，避免因配置差异破坏构建。

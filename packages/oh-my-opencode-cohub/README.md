@@ -17,6 +17,7 @@ OpenCode 中文智能体编排插件 CoHub——纯调度模式、全中文提�
 - ⚡ **Wave 波次并行工作流**：理解→收集→规范分析→制定方案（按依赖分 Wave）→按波次并行调度（区分修改/验证 Wave）→验证，并行与失败处理由主代理显式推进。Wave 仅展示依赖层次，不构成整体等待屏障：任务实际前置依赖完成且无共享可变状态冲突即可派发，同次所有已就绪任务同一消息同时启动，不等无关任务
 - 📜 **AGENTS.md 专用分析代理**：co-rule-user / co-rule-project / co-rule-app 三个专用代理分别分析用户级/项目级 AGENTS.md 与 .opencode/rules，orchestrator 在方案制定前自动委派，分析结果注入执行上下文
 - 📖 **架构借鉴**：插件架构和代理编排理念借鉴了 oh-my-opencode-slim，但完全独立实现、无运行时依赖
+- 🔒 **同工作树构建互斥**：同一 projectDir 下多个 OpenCode 会话并行时，构建类命令（npm/bun/pnpm/yarn build、bun build、tsc、generate-prompts）自动串行加锁；不同 worktree 并行不受影响；建议独立特性使用 `git worktree` 隔离
 
 ## 安装
 
@@ -254,6 +255,10 @@ bunx oh-my-opencode-cohub uninstall && bun pm cache rm && bunx oh-my-opencode-co
 - `@` 输入时能看到至少 11 个子代理名称
 - 随便 @ 某个子代理（如 `@co-explorer 搜索src目录`），确认它能正常工作
 ````
+
+### 构建互斥与锁目录
+
+同一 projectDir 下多个 OpenCode 会话并行构建时，插件自动加互斥锁。锁文件位于 `~/.local/share/opencode/storage/oh-my-opencode-cohub/build-locks/`，由插件自动管理（30 分钟 TTL + 进程陈旧检测），**不要手动删除锁文件**；不同 worktree 的构建互不影响。
 
 ### 从源码安装（本地开发）
 

@@ -1,4 +1,17 @@
 # CHANGELOG
+## [1.19.1] - 2026-10-19
+
+### 新增
+- **同工作树构建互斥**：bash hook 自动识别构建命令并加互斥锁；同一 worktree 串行，不同 worktree 并行无干扰。
+- **构建锁模块**：`src/task-manager/build-lock.ts`，基于 `fs.openSync('wx')` 原子创建 + pid 陈旧检测 + 30 分钟 TTL 兜底。
+
+### 修复
+- **状态文件并发竞争**：`cohub-shared/src/fs-atomic.ts` 临时文件名由固定 `.tmp` 改为 pid+随机数后缀，避免多会话互相覆盖。
+
+### 文档
+- `orchestrator-gpt.md` / `fixer.md`：新增构建互斥行为说明。
+- `README.md`：新增构建互斥特性与独立 worktree 建议。
+
 ## [1.19.0] - 2026-10-19
 
 ### 新增

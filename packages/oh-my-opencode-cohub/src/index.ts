@@ -15,6 +15,7 @@ import { RULE_APP_PROMPT } from './prompts/rule-app';
 import { PLANNER_PROMPT } from './prompts/planner';
 import { CHINESE_LANGUAGE_INSTRUCTION, PARALLEL_TOOL_INSTRUCTION } from './instructions/chinese';
 import { TaskTracker } from './task-manager/tracker';
+import { acquireBuildLock, releaseBuildLock, isBuildCommand, BuildLockError } from './task-manager/build-lock';
 import type { JobRecord } from './task-manager/types';
 import { assessQuality, isQualityEnabled } from './task-manager/quality';
 import { ContextEngine } from './context/engine';
@@ -754,6 +755,20 @@ const CoHubPlugin: Plugin = async (input, options) => {
 
     'tool.execute.before': async (input, output) => {
       try {
+        // 构建互斥：同一 worktree 上并发的构建命令在 before 抢占锁，
+        // 冲突抛 BuildLockError（由下方 catch 上抛，不静默），防并行写坏 src/prompts/*.ts 与 dist/
+        if (input.tool === 'bash') {
+          const cmd = typeof output.args?.command === 'string' ? output.args.command : '';
+          if (cmd && isBuildCommand(cmd)) {
+            acquireBuildLock({
+              stateDir: STATE_DIR,
+              projectDir,
+              sessionID: input.sessionID,
+              callID: input.callID,
+              command: cmd,
+            });
+          }
+        }
         if (input.tool === 'task') {
           // 在一切注入前捕获原始用户 prompt（用于后续预算兜底降级）
           const rawPrompt = typeof output.args?.prompt === 'string' ? output.args.prompt : '';
@@ -889,6 +904,8 @@ const CoHubPlugin: Plugin = async (input, options) => {
           }
         }
       } catch (err) {
+        // 构建锁冲突：上抛让宿主/会话感知（提示等待或换 worktree），其余 hook 错误静默
+        if (err instanceof BuildLockError) throw err;
         appendLog('tool.execute.before', 'hook 失败', err);
       }
     },
@@ -896,6 +913,13 @@ const CoHubPlugin: Plugin = async (input, options) => {
     // 🆕 拦截 task 工具执行后 — 更新任务状态
     'tool.execute.after': async (input, output) => {
       try {
+        // 构建互斥释放：bash 构建命令执行结束后按 (sessionID, callID) 精确释放锁
+        if (input.tool === 'bash') {
+          const cmd = typeof input.args?.command === 'string' ? input.args.command : '';
+          if (cmd && isBuildCommand(cmd)) {
+            releaseBuildLock({ stateDir: STATE_DIR, projectDir, sessionID: input.sessionID, callID: input.callID });
+          }
+        }
         // cancel_task 集成：按 alias 或 sessionId 定位任务并中止（幂等守卫在 abortJob 内）
         if (input.tool === 'cancel_task') {
           const args = input.args as Record<string, unknown> | undefined;

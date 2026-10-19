@@ -1489,6 +1489,88 @@ const runs: Array<{ name: string; fn: (hooks: any, ctx: any) => Promise<void>; c
       assert.ok(outA.args.prompt.includes('A 会话关键结论'), 'A 的结论应传播到同父新调用');
     },
   },
+  // ===== build-lock：真实 tool.execute.before / tool.execute.after 接线回归 =====
+  // 构建互斥由 src/index.ts 的 before（bash + isBuildCommand → acquireBuildLock）与
+  // after（bash + isBuildCommand → releaseBuildLock）接线；锁文件落在隔离 HOME 的
+  // STATE_DIR/build-locks/ 下（runCase 的 projectDir 位于 os.homedir() 内，零触碰真实用户目录）。
+  // 冲突抛 BuildLockError 由 before 的 catch 重新上抛（不被静默吞掉）。
+  {
+    name: 'build-lock：tool.execute.before 获取构建锁（bash + npm run build）',
+    fn: async (hooks) => {
+      await hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: 'ses_test_a', callID: 'call_a' },
+        { args: { command: 'npm run build' } },
+      );
+      const locksDir = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'build-locks');
+      assert.ok(fs.existsSync(locksDir), 'build-locks 目录应存在');
+      const files = fs.readdirSync(locksDir).filter((f) => f.endsWith('.lock'));
+      assert.strictEqual(files.length, 1, '应恰有一个锁文件');
+      const rec = JSON.parse(fs.readFileSync(path.join(locksDir, files[0]), 'utf-8'));
+      assert.strictEqual(rec.pid, process.pid, '锁记录应含持有进程 pid');
+      assert.strictEqual(rec.sessionID, 'ses_test_a', '锁记录应含 sessionID');
+      assert.strictEqual(rec.callID, 'call_a', '锁记录应含 callID');
+      assert.strictEqual(rec.command, 'npm run build', '锁记录应含 command');
+      assert.ok(typeof rec.acquiredAt === 'number', '锁记录应含 acquiredAt');
+    },
+  },
+  {
+    name: 'build-lock：同一 worktree 第二 session 并发 build 抛 BuildLockError（传播不被吞）',
+    fn: async (hooks) => {
+      await hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: 'ses_test_a', callID: 'call_a' },
+        { args: { command: 'npm run build' } },
+      );
+      let thrown: unknown;
+      try {
+        await hooks['tool.execute.before'](
+          { tool: 'bash', sessionID: 'ses_test_b', callID: 'call_b' },
+          { args: { command: 'npm run build:cli' } },
+        );
+      } catch (err) {
+        thrown = err;
+      }
+      assert.ok(thrown instanceof Error, '并发 build 应抛错（BuildLockError 不被静默吞掉）');
+      const msg = (thrown as Error).message;
+      assert.ok(msg.includes('构建互斥'), '错误应标识构建互斥');
+      assert.ok(msg.includes('ses_test_a'), '错误应含持有 sessionID');
+      assert.ok(msg.includes('call_a'), '错误应含持有 callID');
+      assert.ok(msg.includes('npm run build'), '错误应含持有 command');
+      assert.ok(msg.includes('acquiredAt='), '错误应含持有时间');
+    },
+  },
+  {
+    name: 'build-lock：非构建命令（bun test）不创建锁',
+    fn: async (hooks) => {
+      await hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: 'ses_test_a', callID: 'call_a' },
+        { args: { command: 'bun test ./src' } },
+      );
+      const locksDir = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'build-locks');
+      assert.ok(!fs.existsSync(locksDir) || fs.readdirSync(locksDir).length === 0, '非构建命令不应创建锁');
+    },
+  },
+  {
+    name: 'build-lock：tool.execute.after 同 session/callID 释放锁',
+    fn: async (hooks) => {
+      await hooks['tool.execute.before'](
+        { tool: 'bash', sessionID: 'ses_test_a', callID: 'call_a' },
+        { args: { command: 'npm run build' } },
+      );
+      const locksDir = path.join(os.homedir(), '.local', 'share', 'opencode', 'storage', 'oh-my-opencode-cohub', 'build-locks');
+      const lockFiles = () => fs.readdirSync(locksDir).filter((f) => f.endsWith('.lock'));
+      assert.strictEqual(lockFiles().length, 1, 'before 后应有锁');
+      await hooks['tool.execute.after'](
+        { tool: 'bash', sessionID: 'ses_test_a', callID: 'call_a', args: { command: 'npm run build' } },
+        {},
+      );
+      assert.strictEqual(lockFiles().length, 0, 'after 后锁应释放');
+      // 重复释放幂等：不抛错、不误删（release 不匹配返回 false，不外抛）
+      await hooks['tool.execute.after'](
+        { tool: 'bash', sessionID: 'ses_test_a', callID: 'call_a', args: { command: 'npm run build' } },
+        {},
+      );
+    },
+  },
 ];
 
 async function main() {
@@ -1567,6 +1649,10 @@ const CASES = [
   '显式 context_override=relevant：父历史有内容才注入详情，无内容不注入',
   '契约：用户手写契约块与原文保留、goal-only 空壳被清理、重复 before 不累积',
   '父会话隔离：idle 捕获透传 parent，A 的结果只进 A、不进 B（显式传播）',
+  'build-lock：tool.execute.before 获取构建锁（bash + npm run build）',
+  'build-lock：同一 worktree 第二 session 并发 build 抛 BuildLockError（传播不被吞）',
+  'build-lock：非构建命令（bun test）不创建锁',
+  'build-lock：tool.execute.after 同 session/callID 释放锁',
 ];
 
 /**
