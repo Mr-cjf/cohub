@@ -25,7 +25,7 @@ async function main() {
     const r2 = addPluginToTuiConfig();
     console.log(r2.message);
 
-    // 3. 注册所有 12 个 co-* 代理到 opencode.json 的 agent 字段
+    // 3. 注册所有 13 个 co-* 代理到 opencode.json 的 agent 字段
     const r3 = registerCoHubAgents();
     console.log(r3.message);
 
@@ -34,8 +34,8 @@ async function main() {
     console.log(r4.message);
 
     console.log('\n✅ CoHub 安装完成！');
-    console.log('   重启 OpenCode 后，TAB 选择 "co-orchestrator" 主控代理。');
-    console.log('   12 个 co-* 子代理可在对话中通过 @名称 或 task() 派发调用。');
+    console.log('   重启 OpenCode 后，TAB 选择 "co-orchestrator" 主控代理（GPT 用户可选 "co-orchestrator-gpt"）。');
+    console.log('   13 个 co-* 代理（12 个专职 + 1 个 GPT 变体）可在对话中通过 @名称 或 task() 派发调用。');
     console.log('   模型和 variant 配置通过 config hook 从 oh-my-opencode-cohub.json 注入。');
 
     console.log(`\n${'='.repeat(60)}`);
@@ -88,11 +88,12 @@ async function main() {
 }
 \`\`\`
 
-## 12 个代理配置规则
+## 13 个代理配置规则
 
 | 代理 | 角色 | 推理强度 | variant 建议 | 模型偏好 |
 |------|------|---------|-------------|---------|
 | co-orchestrator | 纯调度者，编排任务、委派执行 | **重型** | max / xhigh | pro、max、sonnet、opus 等强推理模型 |
+| co-orchestrator-gpt | 纯调度者（GPT 变体），与 co-orchestrator 同属主控、GPT 模型专用 | **重型** | max / xhigh | 同上 |
 | co-oracle | 战略顾问，架构审查、复杂调试 | **重型** | max / xhigh | 同上 |
 | co-planner | 方案制定，综合信息输出任务分解 | **重型** | max / xhigh | 同上 |
 | co-council | 多模型共识，跨多个 LLM 综合 | **重型** | high / xhigh | 同上 |
@@ -152,7 +153,7 @@ council 是内置的多模型共识机制，会将同一个问题发给 3 个 co
 ## 注意
 
 - 只写入 \`oh-my-opencode-cohub.json\`，不要修改 \`opencode.json\`
-- agent 名必须用 \`co-\` 前缀（共 12 个），不要遗漏
+- agent 名必须用 \`co-\` 前缀（共 13 个），不要遗漏
 `;
 
     // 去掉首尾空白行，逐行输出（保持 console 输出的可读性）

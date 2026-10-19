@@ -17,6 +17,7 @@ function readPrompt(name: string): string {
 }
 
 const orchestrator = readPrompt('orchestrator');
+const orchestratorGpt = readPrompt('orchestrator-gpt');
 const planner = readPrompt('planner');
 const explorer = readPrompt('explorer');
 const fixer = readPrompt('fixer');
@@ -175,5 +176,46 @@ describe('1.18.8 测试决策契约：验证范围与扩大条件', () => {
   test('planner 验证任务放最后 Wave 时须注明范围，fixer 不自行扩大', () => {
     expect(planner).toContain('验证任务须注明执行范围（定向/全量）与扩大条件');
     expect(planner).toContain('fixer 只执行委派指定范围，不自行扩大');
+  });
+});
+
+describe('GPT 专用 orchestrator 变体（co-orchestrator-gpt）', () => {
+  test('分诊交给 co-planner：方案须输出任务级别/阶段划分/验证级别/Wave 分组', () => {
+    expect(orchestratorGpt).toContain('分诊交给 @co-planner');
+    expect(orchestratorGpt).toContain('co-planner');
+    expect(orchestratorGpt).toContain('[trivial]');
+    expect(orchestratorGpt).toContain('[standard]');
+    expect(orchestratorGpt).toContain('[complex]');
+    expect(orchestratorGpt).toContain('Wave 分组');
+  });
+
+  test('orchestrator 不自行判定或修改任务级别/阶段/验证级别', () => {
+    expect(orchestratorGpt).toContain('不自行判定');
+  });
+
+  test('阶段性修复：按阶段验收，失败归因定向重验', () => {
+    expect(orchestratorGpt).toContain('阶段性修复');
+    expect(orchestratorGpt).toContain('该阶段验收标准');
+    expect(orchestratorGpt).toContain('定向修正最小范围');
+  });
+
+  test('批准语义：获批后不再逐波等待批准，trivial 直接派发', () => {
+    expect(orchestratorGpt).toContain('不再逐波');
+    expect(orchestratorGpt).toContain('直接派发');
+  });
+
+  test('验证分级：定向/扩大/全面', () => {
+    expect(orchestratorGpt).toContain('定向');
+    expect(orchestratorGpt).toContain('扩大');
+    expect(orchestratorGpt).toContain('全面');
+  });
+
+  test('纯调度约束：绝不亲自使用任何文件/代码操作工具，仅用调度工具', () => {
+    expect(orchestratorGpt).toContain('绝不亲自使用任何文件/代码操作工具');
+    expect(orchestratorGpt).toContain('调度工具');
+  });
+
+  test('原 DS orchestrator 不含 GPT 专属短语（分诊交给 co-planner）', () => {
+    expect(orchestrator).not.toContain('分诊交给 co-planner');
   });
 });
