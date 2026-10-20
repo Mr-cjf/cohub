@@ -15,12 +15,12 @@
     },
     "roles": {
       "co-explorer": {
-        "model": "gpt-6-luna",
-        "reasoning_effort": "medium"
+        "model": null,
+        "reasoning_effort": null
       },
       "co-oracle": {
-        "model": "gpt-6.1-sol",
-        "reasoning_effort": "high"
+        "model": null,
+        "reasoning_effort": null
       }
     }
   }
@@ -28,6 +28,25 @@
 ```
 
 模型选择必须通过当前原生工具能力校验；没有有效覆盖时保留原生继承。完整约束以[效率规范](efficiency.md)为准。
+
+## 部署映射（参考）
+
+每个模型一律使用其自身支持的最高档推理强度（`ultra` 或 `max`），不存在跨模型统一的最高档；`ccs-minimax/MiniMax-M3` 无 `medium` 档。
+
+| 角色 | model | effort |
+|------|-------|--------|
+| co-orchestrator | gpt-6.1-sol | ultra |
+| co-planner | gpt-6-astra | ultra |
+| co-oracle | gpt-6-astra | ultra |
+| co-librarian | gpt-6-luna | max |
+| co-explorer | gpt-6-luna | max |
+| co-designer | gpt-6-luna | max |
+| co-fixer | gpt-6-luna | max |
+| co-observer | gpt-6-luna | max |
+| co-council | gpt-6-astra | ultra |
+| co-rule-user | ccs-minimax/MiniMax-M3.1-Flash | max |
+| co-rule-project | ccs-minimax/MiniMax-M3 | ultra |
+| co-rule-app | ccs-minimax/MiniMax-M3 | ultra |
 
 ## Resolver
 

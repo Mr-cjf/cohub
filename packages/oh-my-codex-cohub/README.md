@@ -139,8 +139,8 @@ node scripts/check-evidence.mjs check --spec ../.task/check.json --evidence ../.
 {
   "subagents": {
     "roles": {
-      "co-explorer": { "model": "gpt-6-luna", "reasoning_effort": "medium" },
-      "co-oracle": { "model": "gpt-6.1-sol", "reasoning_effort": "high" }
+      "co-explorer": { "model": null, "reasoning_effort": null },
+      "co-oracle": { "model": null, "reasoning_effort": null }
     }
   }
 }
@@ -153,6 +153,32 @@ npm run resolve:agents -- --roles co-explorer,co-oracle --cwd . --capabilities r
 ```
 
 解析结果中的 `spawnArgs` 供原生子代理工具使用。CLI 不执行任务或启动子代理。配置示例见 [`config/cohub.example.json`](config/cohub.example.json) 和 [`config/subagents.example.json`](config/subagents.example.json)。
+
+### 部署映射示例（CC Switch 聚合模式）
+
+以下为用户级实际部署映射，仅作参考；示例配置遵守 `null`/继承约定，不内联具体模型。每个模型一律使用其自身支持的最高档推理强度（`ultra` 或 `max`），不存在跨模型统一的最高档。
+
+| 角色 | model | effort |
+|------|-------|--------|
+| co-orchestrator | gpt-6.1-sol | ultra |
+| co-planner | gpt-6-astra | ultra |
+| co-oracle | gpt-6-astra | ultra |
+| co-librarian | gpt-6-luna | max |
+| co-explorer | gpt-6-luna | max |
+| co-designer | gpt-6-luna | max |
+| co-fixer | gpt-6-luna | max |
+| co-observer | gpt-6-luna | max |
+| co-council | gpt-6-astra | ultra |
+| co-rule-user | ccs-minimax/MiniMax-M3.1-Flash | max |
+| co-rule-project | ccs-minimax/MiniMax-M3 | ultra |
+| co-rule-app | ccs-minimax/MiniMax-M3 | ultra |
+
+注意事项：
+
+- `ccs-minimax/` 前缀由 CC Switch 聚合模式生成，`ccs-minimax` 这个 key 与供应商永久绑定。
+- MiniMax 不支持 search tool、无 `apply_patch_tool_type`；`ccs-minimax/MiniMax-M3` 缺 `medium` 档。
+- 跨供应商 subagent 若出现 `Encrypted function output content could not be decrypted`，需启用 Classic sub-agent tools 并确认 `multi_agent_v2` 未开启。
+- catalog 由 CC Switch 生成，手工修改会被覆盖；模型列表变更后需重启 Codex。
 
 ## Council 配置
 

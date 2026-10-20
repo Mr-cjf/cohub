@@ -9,9 +9,9 @@
     "roles": {
       "co-orchestrator": { "model": null, "reasoning_effort": null },
       "co-planner": { "model": null, "reasoning_effort": null },
-      "co-oracle": { "model": "gpt-6.1-sol", "reasoning_effort": "high" },
+      "co-oracle": { "model": null, "reasoning_effort": null },
       "co-librarian": { "model": null, "reasoning_effort": null },
-      "co-explorer": { "model": "gpt-6-luna", "reasoning_effort": "medium" },
+      "co-explorer": { "model": null, "reasoning_effort": null },
       "co-designer": { "model": null, "reasoning_effort": null },
       "co-fixer": { "model": null, "reasoning_effort": null },
       "co-observer": { "model": null, "reasoning_effort": null },
