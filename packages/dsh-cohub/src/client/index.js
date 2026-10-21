@@ -33,7 +33,9 @@ window.__ModuleLoader__.load({
      *        scope.subscribe(fn) → () => void
      *      数组字段整体替换，所以一次 mutate 提交完整 skills 数组。
      *   3. 模型目录走 ctx.remote.session.modelCatalog()（{ ok, value }），
-     *      value.groups = [{ id, name, models: [{ id, name }] }]；必须判 .ok。
+     *      value.groups = [{ id, name, models: [{ id, name, reasoning? }] }]；必须判 .ok。
+     *      reasoning = { efforts: [{ id, name }], defaultEffort? }（dsh-llm LlmModelReasoningInfo），
+     *      不支持的模型整个 reasoning 字段缺失（不是空数组）→ 推理强度下拉禁用。
      *      目录变化订阅 ctx.remote.$on("llm/adapters-updated", fn)。
      *   4. slot 的 inject 返回 { hooks: { <name>: <observable> }, ...props }，
      *      渲染器把 observable 绑成 props.use<Name>(selector)；
@@ -95,6 +97,11 @@ window.__ModuleLoader__.load({
       loadProvidersFailed: "模型供应商列表加载失败",
       emptyModel: "该供应商未提供模型目录",
       unavailableOption: "{value}（不可用）",
+      reasoningEffort: "推理强度",
+      effortInherit: "（继承父会话）",
+      effortSelectModelFirst: "请先选择模型",
+      effortUnsupported: "该模型不支持",
+      effortUnsupportedOption: "{value}（当前模型不支持）",
       "skill.co-orchestrator": "调度编排",
       "skill.co-planner": "方案制定",
       "skill.co-oracle": "架构/代码审查",
@@ -137,6 +144,11 @@ window.__ModuleLoader__.load({
       loadProvidersFailed: "Failed to load the provider catalog",
       emptyModel: "This provider publishes no model catalog",
       unavailableOption: "{value} (unavailable)",
+      reasoningEffort: "Reasoning effort",
+      effortInherit: "(inherit from parent session)",
+      effortSelectModelFirst: "Select a model first",
+      effortUnsupported: "Not supported by this model",
+      effortUnsupportedOption: "{value} (unsupported by this model)",
       "skill.co-orchestrator": "Orchestrator",
       "skill.co-planner": "Planner",
       "skill.co-oracle": "Architecture/code review",
@@ -180,10 +192,42 @@ window.__ModuleLoader__.load({
       return name !== "" && name !== id ? name + " (" + id + ")" : id;
     }
 
+    /**
+     * 从模型目录条目里抽出可选推理档位。
+     * 契约（dsh-llm LlmModelReasoningInfo）：
+     *   model.reasoning = { efforts: [{ id, name }], defaultEffort? }
+     * 不支持的模型**整个 reasoning 字段缺失**（不是空数组）→ 返回空数组，调用方据此禁用控件。
+     * @param model - modelCatalog() 的 groups[].models[] 单项（任意形状，逐项校验）。
+     * @returns [{ id, label }]；label 优先取 effort.name，缺失时退回 id。
+     */
+    function reasoningEffortsOf(model) {
+      var reasoning = model && typeof model === "object" ? model.reasoning : undefined;
+      if (!reasoning || typeof reasoning !== "object") return [];
+      var list = Array.isArray(reasoning.efforts) ? reasoning.efforts : [];
+      var out = [];
+      for (var i = 0; i < list.length; i += 1) {
+        var effort = list[i];
+        if (!effort || typeof effort !== "object") continue;
+        var id = typeof effort.id === "string" ? effort.id : "";
+        if (id === "") continue;
+        var name = typeof effort.name === "string" ? effort.name : "";
+        out.push({ id: id, label: name !== "" ? name : id });
+      }
+      return out;
+    }
+
+    /**
+     * 行的推理强度归一为字符串（缺字段 / 非字符串都当空串 = 不配置，继承父会话）。
+     * 注意不能用 row.reasoningEffort !== "" 直接判断：老数据没有该键，undefined !== "" 为真。
+     */
+    function effortOf(row) {
+      return row && typeof row.reasoningEffort === "string" ? row.reasoningEffort : "";
+    }
+
     /* ── 纯数据层：settings value.skills ↔ 编辑行 ─────────────────── */
 
     function emptyRow(name) {
-      return { name: name, provider: "", model: "", extra: {} };
+      return { name: name, provider: "", model: "", reasoningEffort: "", extra: {} };
     }
 
     function copyRow(row) {
@@ -191,12 +235,18 @@ window.__ModuleLoader__.load({
       for (var key in row.extra) {
         if (Object.prototype.hasOwnProperty.call(row.extra, key)) extra[key] = row.extra[key];
       }
-      return { name: row.name, provider: row.provider, model: row.model, extra: extra };
+      return {
+        name: row.name,
+        provider: row.provider,
+        model: row.model,
+        reasoningEffort: effortOf(row),
+        extra: extra
+      };
     }
 
     /**
      * 把 settings 里的 skills 数组转成编辑行。
-     * 除 name/provider/model 之外的字段（maxTokens 等）原样收进 extra，写回时保留。
+     * 除 name/provider/model/reasoningEffort 之外的字段（maxTokens 等）原样收进 extra，写回时保留。
      * @param skills - configForms 快照里的 value.skills（任意形状，逐项校验）。
      * @returns 编辑行数组（顺序与存储顺序一致）。
      */
@@ -209,13 +259,15 @@ window.__ModuleLoader__.load({
         var extra = {};
         for (var key in entry) {
           if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
-          if (key === "name" || key === "provider" || key === "model") continue;
+          // reasoningEffort 已提升为一等字段，不能再进 extra，否则写回时会重复/冲突。
+          if (key === "name" || key === "provider" || key === "model" || key === "reasoningEffort") continue;
           extra[key] = entry[key];
         }
         rows.push({
           name: entry.name,
           provider: typeof entry.provider === "string" ? entry.provider : "",
           model: typeof entry.model === "string" ? entry.model : "",
+          reasoningEffort: typeof entry.reasoningEffort === "string" ? entry.reasoningEffort : "",
           extra: extra
         });
       }
@@ -227,7 +279,8 @@ window.__ModuleLoader__.load({
      * 规则（第 1 条是正确性关键）：
      *   1. provider 为空 → 整行不写入（= 继承父模型）；否则 delegate 会拿空 provider 建路由。
      *   2. model 为空 → 不写 model 键（供应商默认模型），绝不写空字符串（否则 UNKNOWN_MODEL）。
-     *   3. extra（maxTokens 等）与未知 skill 名原样保留，不静默丢配置。
+     *   3. reasoningEffort 为空 → 不写该键（绝不写空串），继承父会话的推理强度。
+     *   4. extra（maxTokens 等）与未知 skill 名原样保留，不静默丢配置。
      * @param rows - 编辑行数组。
      * @returns 可提交给 configForms.mutate 的 skills 数组。
      */
@@ -242,12 +295,15 @@ window.__ModuleLoader__.load({
         var item = {};
         for (var key in row.extra) {
           if (!Object.prototype.hasOwnProperty.call(row.extra, key)) continue;
+          if (key === "reasoningEffort") continue; // 以一等字段为准，不让 extra 覆盖/重复
           item[key] = row.extra[key];
         }
         item.name = row.name;
         item.provider = provider;
         var model = typeof row.model === "string" ? row.model : "";
         if (model !== "") item.model = model;
+        var effort = effortOf(row);
+        if (effort !== "") item.reasoningEffort = effort;
         out.push(item);
       }
       return out;
@@ -312,6 +368,8 @@ window.__ModuleLoader__.load({
       rows: [],
       providers: [],
       modelsByProvider: {},
+      // effortsByModel[provider][modelId] = [{ id, label }]；模型不支持推理强度时该键缺失。
+      effortsByModel: {},
       catalogStatus: "loading",
       catalogError: ""
     });
@@ -336,6 +394,8 @@ window.__ModuleLoader__.load({
       var catalogError = "";
       var catalogProviders = [];
       var catalogByProvider = {};
+      // effortsByModel[provider][modelId] = [{ id, label }]，与 modelsByProvider 同批构建。
+      var catalogEfforts = {};
       var catalogGeneration = 0;
 
       var lastValue;
@@ -376,6 +436,7 @@ window.__ModuleLoader__.load({
           rows: draft !== null ? draft.rows : currentRows(),
           providers: catalogProviders,
           modelsByProvider: catalogByProvider,
+          effortsByModel: catalogEfforts,
           catalogStatus: catalogStatus,
           catalogError: catalogError
         };
@@ -393,6 +454,7 @@ window.__ModuleLoader__.load({
           && left.rows === right.rows
           && left.providers === right.providers
           && left.modelsByProvider === right.modelsByProvider
+          && left.effortsByModel === right.effortsByModel
           && left.catalogStatus === right.catalogStatus
           && left.catalogError === right.catalogError;
       }
@@ -431,8 +493,31 @@ window.__ModuleLoader__.load({
         return snapshot.status === "ready" && snapshot.writable === true;
       }
 
+      /** 某 provider+model 支持的推理档位 id 列表（目录未就绪或模型不支持时为空数组）。 */
+      function effortIdsFor(provider, model) {
+        if (provider === "" || model === "") return [];
+        var byModel = catalogEfforts[provider];
+        if (!byModel) return [];
+        var list = byModel[model];
+        if (!Array.isArray(list)) return [];
+        var ids = [];
+        for (var i = 0; i < list.length; i += 1) ids.push(list[i].id);
+        return ids;
+      }
+
+      /**
+       * 换供应商/模型后，已选强度若不在新模型的档位里就清空（避免写出必然被宿主拒的配置：
+       * delegate 侧对不支持的档位会 UNSUPPORTED_REASONING_EFFORT）。
+       * 档位未知（目录未就绪 / 手填 model / 模型不支持）时也清空——此时无法证明该强度仍有效。
+       */
+      function reconcileEffort(provider, model, effort) {
+        if (effort === "") return "";
+        var ids = effortIdsFor(provider, model);
+        return ids.indexOf(effort) >= 0 ? effort : "";
+      }
+
       function editRow(name, field, value) {
-        if (field !== "provider" && field !== "model") return;
+        if (field !== "provider" && field !== "model" && field !== "reasoningEffort") return;
         if (!canEdit()) return;
         var current = beginDraft();
         var next = [];
@@ -448,15 +533,41 @@ window.__ModuleLoader__.load({
               next.push(row);
               continue;
             }
-            // 换供应商后旧 model 一定属于旧目录，留着只会写出失效路由。
-            next.push({ name: row.name, provider: value, model: "", extra: row.extra });
+            // 换供应商后旧 model 一定属于旧目录，留着只会写出失效路由；
+            // 推理档位属于「供应商+模型」这一对，也一并清空。
+            next.push({
+              name: row.name,
+              provider: value,
+              model: "",
+              reasoningEffort: "",
+              extra: row.extra
+            });
             changed = true;
-          } else {
+          } else if (field === "model") {
             if (row.model === value) {
               next.push(row);
               continue;
             }
-            next.push({ name: row.name, provider: row.provider, model: value, extra: row.extra });
+            next.push({
+              name: row.name,
+              provider: row.provider,
+              model: value,
+              reasoningEffort: reconcileEffort(row.provider, value, effortOf(row)),
+              extra: row.extra
+            });
+            changed = true;
+          } else {
+            if (effortOf(row) === value) {
+              next.push(row);
+              continue;
+            }
+            next.push({
+              name: row.name,
+              provider: row.provider,
+              model: row.model,
+              reasoningEffort: value,
+              extra: row.extra
+            });
             changed = true;
           }
         }
@@ -478,12 +589,19 @@ window.__ModuleLoader__.load({
             next.push(row);
             continue;
           }
-          if (row.provider === "" && row.model === "") {
+          if (row.provider === "" && row.model === "" && effortOf(row) === "") {
             next.push(row);
             continue;
           }
-          // 只清 provider/model：maxTokens 等页面不展示的字段留着，避免重置后静默丢配置。
-          next.push({ name: row.name, provider: "", model: "", extra: row.extra });
+          // 只清 provider/model/reasoningEffort：maxTokens 等页面不展示的字段留着，
+          // 避免重置后静默丢配置。
+          next.push({
+            name: row.name,
+            provider: "",
+            model: "",
+            reasoningEffort: "",
+            extra: row.extra
+          });
           changed = true;
         }
         if (!changed) return;
@@ -581,17 +699,24 @@ window.__ModuleLoader__.load({
           var groups = response.value && Array.isArray(response.value.groups) ? response.value.groups : [];
           var providers = [];
           var byProvider = {};
+          var effortsByModel = {};
           for (var i = 0; i < groups.length; i += 1) {
             var group = groups[i];
             if (!group || typeof group.id !== "string" || group.id === "") continue;
             var models = [];
+            var effortsForProvider = {};
             var list = Array.isArray(group.models) ? group.models : [];
             for (var j = 0; j < list.length; j += 1) {
               var model = list[j];
               if (!model || typeof model.id !== "string" || model.id === "") continue;
               models.push({ id: model.id, label: modelLabel(model) });
+              // 不支持推理强度的模型整个 reasoning 字段缺失 → reasoningEffortsOf 返回空数组，
+              // 这里只在非空时登记，渲染层用「查不到 = 不支持」判定。
+              var efforts = reasoningEffortsOf(model);
+              if (efforts.length > 0) effortsForProvider[model.id] = efforts;
             }
             byProvider[group.id] = models;
+            if (Object.keys(effortsForProvider).length > 0) effortsByModel[group.id] = effortsForProvider;
             providers.push({ id: group.id, label: providerLabel(group) });
           }
           providers.sort(function (left, right) {
@@ -600,6 +725,7 @@ window.__ModuleLoader__.load({
           });
           catalogProviders = providers;
           catalogByProvider = byProvider;
+          catalogEfforts = effortsByModel;
           catalogStatus = "ready";
           catalogError = "";
           publish();
@@ -678,7 +804,10 @@ window.__ModuleLoader__.load({
         ".cohub-row-id{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}",
         ".cohub-badge{margin-left:auto;border-radius:999px;padding:1px 8px;font-size:11px;line-height:17px;white-space:nowrap;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);}",
         ".cohub-badge-explicit{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary);}",
-        ".cohub-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:8px;margin-top:8px;align-items:end;}",
+        // 四列：供应商 / 模型 / 推理强度 / 重置。三列下拉都等分剩余宽度，重置按钮自适应。
+        ".cohub-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) auto;gap:8px;margin-top:8px;align-items:end;}",
+        // 窄容器下 4 列会把下拉压到不可读：退成两列（前三个字段各占一行两列，按钮贴右下）。
+        "@media (max-width:560px){.cohub-fields{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}}",
         ".cohub-field{display:flex;flex-direction:column;gap:4px;min-width:0;}",
         ".cohub-label{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;}",
         ".cohub-select,.cohub-input{box-sizing:border-box;width:100%;height:32px;font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:0 10px;font-size:13px;line-height:20px;}",
@@ -721,7 +850,7 @@ window.__ModuleLoader__.load({
     /**
      * settings.section 页面。
      * @param props - 注入面：hooks.cohubSkills→useCohubSkills、动作、locale 提供的 t。
-     * @returns 每个代理一行（供应商下拉 + 模型下拉/手填 + 重置）与保存/放弃。
+     * @returns 每个代理一行（供应商下拉 + 模型下拉/手填 + 推理强度下拉 + 重置）与保存/放弃。
      */
     function CohubSection(props) {
       var t = typeof props.t === "function" ? props.t : fallbackTranslate;
@@ -814,7 +943,58 @@ window.__ModuleLoader__.load({
           });
         }
 
-        var configured = row.provider !== "" || row.model !== "";
+        var configured = row.provider !== "" || row.model !== "" || effortOf(row) !== "";
+
+        // 第三个下拉：推理强度。档位来自模型目录（models[].reasoning.efforts），
+        // 按「供应商 + 模型」这一对查表；不支持的模型整个 reasoning 字段缺失 → 禁用并提示。
+        var currentEffort = effortOf(row);
+        var efforts = [];
+        if (row.provider !== "" && row.model !== "") {
+          var byModel = state.effortsByModel && state.effortsByModel[row.provider];
+          var list = byModel ? byModel[row.model] : undefined;
+          if (Array.isArray(list)) efforts = list;
+        }
+        var effortControl;
+        if (row.provider === "") {
+          effortControl = React.createElement("select", { className: "cohub-select", value: "", disabled: true },
+            React.createElement("option", { value: "" }, t("selectProviderFirst")));
+        } else if (state.catalogStatus === "loading") {
+          effortControl = React.createElement("select", { className: "cohub-select", value: "", disabled: true },
+            React.createElement("option", { value: "" }, t("loading")));
+        } else if (row.model === "") {
+          effortControl = React.createElement("select", { className: "cohub-select", value: "", disabled: true },
+            React.createElement("option", { value: "" }, t("effortSelectModelFirst")));
+        } else if (efforts.length === 0) {
+          // 模型目录里没有该模型的 reasoning 信息（或手填了不在目录里的 model id）→ 不支持。
+          effortControl = React.createElement("select", { className: "cohub-select", value: "", disabled: true },
+            React.createElement("option", { value: "" }, t("effortUnsupported")));
+        } else {
+          // 与模型下拉同理：value="" 的继承占位项必须在首位，否则浏览器把第一档显示成已选，
+          // 而实际存的是空串（用户以为配了 high，其实继承父会话）。
+          var effortOptions = [React.createElement("option", { key: "__inherit", value: "" }, t("effortInherit"))];
+          var effortIds = [];
+          for (var e = 0; e < efforts.length; e += 1) {
+            effortIds.push(efforts[e].id);
+            effortOptions.push(React.createElement("option", { key: efforts[e].id, value: efforts[e].id }, efforts[e].label));
+          }
+          if (currentEffort !== "" && effortIds.indexOf(currentEffort) < 0) {
+            // 已配强度不在当前模型档位里（手改过 YAML / 换过模型）→ 给不可选回显项，别静默改成第一档。
+            effortOptions.push(React.createElement("option", {
+              key: "__missing-effort",
+              value: currentEffort,
+              disabled: true
+            }, t("effortUnsupportedOption", { value: currentEffort })));
+          }
+          effortControl = React.createElement("select", {
+            className: "cohub-select",
+            value: currentEffort,
+            disabled: locked,
+            "aria-label": label + " · " + t("reasoningEffort"),
+            onChange: function (event) {
+              props.editRow(row.name, "reasoningEffort", event.target.value);
+            }
+          }, effortOptions);
+        }
 
         return React.createElement("li", { key: row.name, className: "cohub-row" },
           React.createElement("div", { className: "cohub-row-head" },
@@ -840,6 +1020,10 @@ window.__ModuleLoader__.load({
             React.createElement("div", { className: "cohub-field" },
               React.createElement("label", { className: "cohub-label" }, t("model")),
               modelControl
+            ),
+            React.createElement("div", { className: "cohub-field" },
+              React.createElement("label", { className: "cohub-label" }, t("reasoningEffort")),
+              effortControl
             ),
             React.createElement("button", {
               type: "button",
@@ -979,7 +1163,11 @@ window.__ModuleLoader__.load({
     exports.apply = apply;
     exports.inject = inject;
     // 纯函数契约（仅 test/client-runtime-0.2.ts 断言用；宿主不读）。
-    exports.__internals = { rowsFromSkills: rowsFromSkills, rowsToSkills: rowsToSkills };
+    exports.__internals = {
+      rowsFromSkills: rowsFromSkills,
+      rowsToSkills: rowsToSkills,
+      reasoningEffortsOf: reasoningEffortsOf
+    };
     return module.exports;
   }
 });

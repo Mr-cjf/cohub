@@ -177,7 +177,15 @@ let zhDict: Record<string, string> = {};
         value: {
           default: { provider: "p1", model: "m1" },
           routableProviders: ["p1"],
-          groups: [{ id: "p1", name: "Provider 1", models: [{ id: "m1", name: "Model 1" }] }],
+          groups: [{
+            id: "p1",
+            name: "Provider 1",
+            models: [
+              // m1 暴露两档推理强度（reasoning.efforts）；m2 整个 reasoning 字段缺失 = 不支持。
+              { id: "m1", name: "Model 1", reasoning: { efforts: [{ id: "low", name: "低" }, { id: "high", name: "高" }], defaultEffort: "high" } },
+              { id: "m2", name: "Model 2" },
+            ],
+          }],
           failures: [],
         },
       }),
@@ -235,6 +243,15 @@ let zhDict: Record<string, string> = {};
   check("modelCatalog 成功后 catalogStatus = ready", snapshot?.catalogStatus === "ready");
   check("目录含供应商 p1", Array.isArray(snapshot?.providers) && snapshot.providers.some((p: any) => p.id === "p1"));
   check("目录含 p1 的模型 m1", Array.isArray(snapshot?.modelsByProvider?.p1) && snapshot.modelsByProvider.p1[0].id === "m1");
+  // 推理档位单独建表（effortsByModel[provider][modelId]）：标签优先 effort.name，缺失退回 id。
+  check("目录按 provider+model 建推理档位表（m1 两档 low/high）",
+    Array.isArray(snapshot?.effortsByModel?.p1?.m1)
+    && snapshot.effortsByModel.p1.m1.length === 2
+    && snapshot.effortsByModel.p1.m1[0].id === "low"
+    && snapshot.effortsByModel.p1.m1[0].label === "低"
+    && snapshot.effortsByModel.p1.m1[1].id === "high");
+  check("不支持推理强度的模型（reasoning 字段缺失）不登记档位（不是登记空数组）",
+    snapshot?.effortsByModel?.p1?.m2 === undefined);
   check("初始渲染 13 个代理行", Array.isArray(snapshot?.rows) && snapshot.rows.length === 13);
   check("13 行覆盖 co-cordis（旧实现遗漏的代理）", snapshot.rows.some((r: any) => r.name === "co-cordis"));
 
@@ -274,6 +291,51 @@ let zhDict: Record<string, string> = {};
   check("model 为空时不写 model 键", Array.isArray(written) && written[0] !== undefined && !("model" in written[0]));
   snapshot = observable.getSnapshot();
   check("保存后 dirty = false 且 saved = true", snapshot?.dirty === false && snapshot?.saved === true);
+
+  // ── 推理强度：编辑 / 换模型清空不兼容档位 / 保存写回 ──
+  // 目的：避免写出宿主必然拒绝的 UNSUPPORTED_REASONING_EFFORT 配置。
+  face.editRow("co-fixer", "model", "m1");
+  face.editRow("co-fixer", "reasoningEffort", "high");
+  snapshot = observable.getSnapshot();
+  let effortRow = snapshot.rows.find((r: any) => r.name === "co-fixer");
+  check("编辑 reasoningEffort 后该行强度 = high", effortRow?.reasoningEffort === "high");
+  check("编辑 reasoningEffort 只影响目标行", snapshot.rows.filter((r: any) => r.reasoningEffort !== "").length === 1);
+
+  // m2 的 reasoning 字段整体缺失 = 不支持任何档位 → 已选强度必须清空。
+  face.editRow("co-fixer", "model", "m2");
+  snapshot = observable.getSnapshot();
+  effortRow = snapshot.rows.find((r: any) => r.name === "co-fixer");
+  check("换到不支持推理强度的模型 → 已选强度被清空",
+    effortRow?.model === "m2" && effortRow?.reasoningEffort === "");
+
+  // 换回支持的模型后重配，再换供应商：model 与强度都要清（强度属于「供应商+模型」这一对）。
+  face.editRow("co-fixer", "model", "m1");
+  face.editRow("co-fixer", "reasoningEffort", "high");
+  face.editRow("co-fixer", "provider", "p2");
+  snapshot = observable.getSnapshot();
+  effortRow = snapshot.rows.find((r: any) => r.name === "co-fixer");
+  check("换供应商时同时清空 model 与推理强度",
+    effortRow?.provider === "p2" && effortRow?.model === "" && effortRow?.reasoningEffort === "");
+
+  // 未选供应商的行即使有草稿强度也不写入配置（provider 为空整行丢弃，不留半配置）。
+  face.editRow("co-oracle", "reasoningEffort", "high");
+  check("未选供应商时仍记录草稿强度（只在保存时丢弃）",
+    observable.getSnapshot().rows.find((r: any) => r.name === "co-oracle")?.reasoningEffort === "high");
+  face.discard();
+  check("放弃修改后草稿强度一并回滚",
+    observable.getSnapshot().rows.every((r: any) => r.reasoningEffort === ""));
+
+  // 保存带强度的行：写入 reasoningEffort 键；未选强度的行不写该键。
+  face.editRow("co-fixer", "provider", "p1");
+  face.editRow("co-fixer", "model", "m1");
+  face.editRow("co-fixer", "reasoningEffort", "high");
+  const acceptedWithEffort = await face.save();
+  check("带推理强度的保存成功", acceptedWithEffort === true);
+  const effortWritten = mutations[mutations.length - 1]?.ops?.[0]?.value ?? [];
+  check("保存时把 reasoningEffort 写进配置",
+    effortWritten.length === 1 && effortWritten[0].reasoningEffort === "high");
+  check("保存 reasoningEffort 不影响 model/provider",
+    effortWritten[0].provider === "p1" && effortWritten[0].model === "m1");
 }
 
 // ── 层 4：纯函数写回契约（rowsToSkills / rowsFromSkills） ──
@@ -291,7 +353,7 @@ let zhDict: Record<string, string> = {};
   check("导出纯函数契约（__internals）", !!internals && typeof internals.rowsToSkills === "function" && typeof internals.rowsFromSkills === "function");
 
   const rows = internals.rowsFromSkills([
-    { name: "co-fixer", provider: "p1", model: "m1", maxTokens: 4096 },
+    { name: "co-fixer", provider: "p1", model: "m1", maxTokens: 4096, reasoningEffort: "high" },
     { name: "co-oracle", provider: "p2" },
     { name: "custom-agent", provider: "p3", model: "m3" },
     { provider: "p9" },
@@ -299,6 +361,10 @@ let zhDict: Record<string, string> = {};
   check("rowsFromSkills 跳过无名项", rows.length === 3);
   check("rowsFromSkills 保留 maxTokens 到 extra", rows[0].extra.maxTokens === 4096);
   check("rowsFromSkills 缺 model 时归一为空串", rows[1].model === "");
+  check("rowsFromSkills 读出一等字段 reasoningEffort", rows[0].reasoningEffort === "high");
+  check("rowsFromSkills 缺 reasoningEffort 时归一为空串（不是 undefined）", rows[1].reasoningEffort === "");
+  check("rowsFromSkills 不把 reasoningEffort 重复塞进 extra",
+    !("reasoningEffort" in rows[0].extra));
 
   const written = internals.rowsToSkills(rows);
   check("rowsToSkills 丢弃 provider 为空的整行", written.every((item: any) => typeof item.provider === "string" && item.provider !== ""));
@@ -306,9 +372,31 @@ let zhDict: Record<string, string> = {};
   check("rowsToSkills 空 model 不写 model 键", !("model" in written[1]));
   check("rowsToSkills 保留未知 skill 名（不静默丢配置）", written.some((item: any) => item.name === "custom-agent"));
   check("rowsToSkills 保留 provider 有值的行数（3 条）", written.length === 3);
+  check("rowsToSkills 写回 reasoningEffort", written[0].reasoningEffort === "high");
+  check("rowsToSkills 空 reasoningEffort 不写键（继承父会话，绝不写空串）",
+    !("reasoningEffort" in written[1]) && !("reasoningEffort" in written[2]));
 
-  const allEmpty = internals.rowsToSkills(internals.rowsFromSkills([]).concat([{ name: "co-fixer", provider: "", model: "", extra: {} }]));
+  // extra 里若混进了 reasoningEffort（历史数据/外部写入），以一等字段为准，不重复不覆盖。
+  const legacyExtra = internals.rowsToSkills([{
+    name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: { reasoningEffort: "low" },
+  }]);
+  check("extra 里的 reasoningEffort 不会绕过「空值不写键」规则",
+    legacyExtra.length === 1 && !("reasoningEffort" in legacyExtra[0]));
+
+  const allEmpty = internals.rowsToSkills(internals.rowsFromSkills([]).concat([{ name: "co-fixer", provider: "", model: "", reasoningEffort: "", extra: {} }]));
   check("全部继承时写入空数组（等价于清空配置）", Array.isArray(allEmpty) && allEmpty.length === 0);
+
+  // reasoningEffortsOf：从目录条目抽档位；不支持的模型整个 reasoning 字段缺失 → 空数组。
+  check("reasoningEffortsOf 抽出档位且标签优先取 name",
+    JSON.stringify(internals.reasoningEffortsOf({
+      id: "m1", reasoning: { efforts: [{ id: "low", name: "低" }, { id: "high", name: "高" }], defaultEffort: "high" },
+    })) === JSON.stringify([{ id: "low", label: "低" }, { id: "high", label: "高" }]));
+  check("reasoningEffortsOf 缺 reasoning 字段 → 空数组（不支持）",
+    internals.reasoningEffortsOf({ id: "m2" }).length === 0);
+  check("reasoningEffortsOf 档位缺 name 时退回 id",
+    internals.reasoningEffortsOf({ id: "m3", reasoning: { efforts: [{ id: "medium" }] } })[0]?.label === "medium");
+  check("reasoningEffortsOf 跳过无 id 的档位项",
+    internals.reasoningEffortsOf({ id: "m4", reasoning: { efforts: [{ name: "无名" }, null, { id: "low" }] } }).length === 1);
 }
 
 // ── 层 5：组件渲染契约（5 个特殊态 + 状态提示） ──
@@ -345,9 +433,10 @@ let zhDict: Record<string, string> = {};
       saving: false,
       saved: false,
       failed: false,
-      rows: [{ name: "co-fixer", provider: "", model: "", extra: {} }],
+      rows: [{ name: "co-fixer", provider: "", model: "", reasoningEffort: "", extra: {} }],
       providers: [{ id: "p1", label: "Provider 1" }],
       modelsByProvider: { p1: [{ id: "m1", label: "Model 1" }] },
+      effortsByModel: {},
       catalogStatus: "ready",
       catalogError: "",
       ...overrides,
@@ -386,6 +475,88 @@ let zhDict: Record<string, string> = {};
     && textOf(modelOptions[0]) === zhDict["modelInherit"]);
   check("⑤ 空 model：占位项之后是目录里的模型", modelOptions[1]?.props?.value === "m1");
   check("⑤ 空 model：下拉未被禁用（可选择）", modelSelect?.props?.disabled === false);
+
+  // ── 第三个下拉框：推理强度 ──────────────────────────────────────
+  // 每行三个 select：0=供应商 / 1=模型 / 2=推理强度；重置按钮在最后。
+  const effortState = (row: any, overrides: Record<string, any> = {}) => render(baseState({
+    rows: [row],
+    modelsByProvider: { p1: [{ id: "m1", label: "Model 1" }, { id: "m2", label: "Model 2" }] },
+    effortsByModel: { p1: { m1: [{ id: "low", label: "低" }, { id: "high", label: "高" }] } },
+    ...overrides,
+  }));
+  const effortSelectOf = (tree: any) => collect(rowsOf(tree)[0], "select")[2];
+
+  check("每行渲染三个下拉框（供应商/模型/推理强度）",
+    collect(rowsOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} }))[0], "select").length === 3);
+  check("推理强度有独立的中文标签", textOf(rowsOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} }))[0])
+    .includes(zhDict["reasoningEffort"]));
+
+  // 有档位：可点，首项是 value="" 的继承占位项，之后是各档位（用 effort.name 显示）
+  const withEfforts = effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} }));
+  const effortOptions = collect(withEfforts, "option");
+  check("推理强度下拉首项是 value=\"\" 的继承占位项",
+    effortOptions[0]?.props?.value === "" && textOf(effortOptions[0]) === zhDict["effortInherit"]);
+  check("档位选项来自模型目录且用 effort.name 显示",
+    effortOptions[1]?.props?.value === "low" && textOf(effortOptions[1]) === "低"
+    && effortOptions[2]?.props?.value === "high" && textOf(effortOptions[2]) === "高");
+  check("有档位时推理强度下拉可点", withEfforts?.props?.disabled === false);
+  check("已选强度回显在下拉上",
+    effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "high", extra: {} }))?.props?.value === "high");
+
+  // 档位随模型变化：换到 m2（目录里没有 reasoning 信息）→ 禁用「该模型不支持」
+  const unsupported = effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m2", reasoningEffort: "", extra: {} }));
+  check("模型不支持推理强度 → 下拉禁用并提示「该模型不支持」",
+    unsupported?.props?.disabled === true && textOf(unsupported) === zhDict["effortUnsupported"]);
+
+  // 换模型后档位选项确实跟着变（不是静态渲染）
+  const onM1 = collect(effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} })), "option");
+  const onM2 = collect(effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m2", reasoningEffort: "", extra: {} })), "option");
+  check("档位随模型变化（m1 有 2 档 + 继承项，m2 只有占位）",
+    onM1.length === 3 && onM2.length === 1);
+
+  // 已配强度不在当前模型档位里 → 插入 disabled 回显项「xxx（当前模型不支持）」
+  const staleEffort = effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "ultra", extra: {} }));
+  const staleOption = collect(staleEffort, "option").find((o) => o.props.value === "ultra");
+  check("已配强度不在当前模型档位里 → 渲染 disabled 回显项并标注不支持",
+    staleOption !== undefined && staleOption.props.disabled === true
+    && textOf(staleOption) === zhDict["effortUnsupportedOption"].replace("{value}", "ultra"));
+  check("失效强度不会把下拉改成第一档（value 仍回显已配值）", staleEffort?.props?.value === "ultra");
+
+  // 未选供应商 / 未选模型 / 目录加载中 → 各自的禁用提示
+  const noProviderEffort = effortSelectOf(effortState({ name: "co-fixer", provider: "", model: "", reasoningEffort: "", extra: {} }));
+  check("provider 为空 → 推理下拉禁用并提示「请先选择供应商」",
+    noProviderEffort?.props?.disabled === true && textOf(noProviderEffort) === zhDict["selectProviderFirst"]);
+
+  const noModelEffort = effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "", reasoningEffort: "", extra: {} }));
+  check("model 为空 → 推理下拉禁用并提示「请先选择模型」",
+    noModelEffort?.props?.disabled === true && textOf(noModelEffort) === zhDict["effortSelectModelFirst"]);
+
+  const loadingEffort = effortSelectOf(effortState(
+    { name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} },
+    { catalogStatus: "loading", modelsByProvider: {}, effortsByModel: {} },
+  ));
+  check("目录加载中 → 推理下拉禁用并显示「加载中…」",
+    loadingEffort?.props?.disabled === true && textOf(loadingEffort) === zhDict["loading"]);
+
+  // 手填 model（目录里没有该 model）→ 无法证明支持，按不支持禁用
+  const manualTree = effortState(
+    { name: "co-fixer", provider: "p1", model: "hand-typed", reasoningEffort: "", extra: {} },
+    { modelsByProvider: { p1: [] } },
+  );
+  const manualSelects = collect(rowsOf(manualTree)[0], "select");
+  const manualEffort = manualSelects[manualSelects.length - 1];
+  check("手填 model（目录无 reasoning 信息）→ 降级手填框 + 推理下拉禁用并提示不支持",
+    collect(rowsOf(manualTree)[0], "input").length === 1
+    && manualSelects.length === 2
+    && manualEffort?.props?.disabled === true
+    && textOf(manualEffort) === zhDict["effortUnsupported"]);
+
+  // 只读态下推理下拉也禁用
+  const readOnlyEffort = effortSelectOf(effortState(
+    { name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} },
+    { writable: false },
+  ));
+  check("只读态：推理强度下拉同样禁用", readOnlyEffort?.props?.disabled === true);
 
   // ② 目录加载中 → 模型下拉 disabled 并显示「加载中…」
   const loadingState = render(baseState({
