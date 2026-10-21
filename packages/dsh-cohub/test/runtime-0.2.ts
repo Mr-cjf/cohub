@@ -205,6 +205,36 @@ function check(name: string, cond: boolean) {
     JSON.stringify(out).includes("batch-ok-1") && JSON.stringify(out).includes("batch-ok-2"));
 }
 
+// ── 层 3c：delegate_batch 失败时透传 SubagentResult.diagnostic ──
+{
+  console.log("===== 层 3c：delegate_batch 透传 diagnostic =====");
+  const DIAG = "provider returned 400: Illegal API invocation from an unapproved channel";
+  let n = 0;
+  const ctx: any = {
+    logger: { info: () => {}, warn: () => {} },
+    llm: { listProviders: () => [], listModels: async () => [] },
+    subagents: {
+      async startActivation() {
+        n++;
+        return {
+          childId: "d" + n,
+          messageId: "dm" + n,
+          result: Promise.resolve({ output: [{ type: "text", text: "半成品" }], stopReason: "error", diagnostic: DIAG }),
+          async dispose() {},
+        };
+      },
+    },
+  };
+  const batchTool: any = createDelegateBatchTool(ctx, () => [], {});
+  const out: any = await batchTool.execute(
+    { tasks: [{ skill: "co-fixer", prompt: "任务 1" }] },
+    { agent: { id: "p-batch-diag" }, signal: new AbortController().signal },
+  );
+  check("delegate_batch 输出含 diagnostic 原文", String(out).includes(DIAG));
+  check("delegate_batch 输出含 diagnostic: 标签", String(out).includes("diagnostic: " + DIAG));
+  check("delegate_batch 输出仍保留 stopReason", String(out).includes("stopReason: error"));
+}
+
 // ── 层 4：真实 cordis Context + apply 挂载（stub 服务最小集）→ 插件行可挂载 ──
 {
   console.log("===== 层 4：cordis Context + apply 挂载 =====");

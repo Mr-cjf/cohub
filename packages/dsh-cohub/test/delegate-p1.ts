@@ -436,6 +436,61 @@ function check(name: string, cond: boolean) {
     String(err?.message ?? "").includes("startSubagentRun requires the subagents service"));
 }
 
+// ---- 用例 15：错误诊断透传（SubagentResult.diagnostic） ----
+{
+  console.log("===== 用例 15：错误诊断透传 =====");
+  const DIAG = "provider returned 400: Illegal API invocation from an unapproved channel";
+  const start = () => ({
+    id: "diag-run",
+    result: Promise.resolve({
+      output: [{ type: "text", text: "半成品" }],
+      stopReason: "error",
+      diagnostic: DIAG,
+    }),
+    dispose() {},
+  });
+  const tool = createDelegateTool(makeCtx(start), () => [], { delegateRetry: { maxRetries: 0 } });
+  let err: any = null;
+  try { await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec()); } catch (e) { err = e; }
+  const msg = String(err?.message ?? "");
+  check("抛错", !!err);
+  check("错误消息含 diagnostic 原文", msg.includes(DIAG));
+  check("错误消息含 diagnostic: 标签", msg.includes("diagnostic: " + DIAG));
+  check("错误消息仍保留 stopReason 原文", msg.includes('stopped with reason "error"'));
+  check("err.cause.diagnostic === 原文", err?.cause?.diagnostic === DIAG);
+  check("err.cause.stopReason 未被 diagnostic 污染", err?.cause?.stopReason === "error");
+
+  // 无 diagnostic 时不引入噪音（不回归）
+  const startNoDiag = () => ({
+    id: "nod", result: Promise.resolve({ output: [], stopReason: "error" }), dispose() {},
+  });
+  const tool2 = createDelegateTool(makeCtx(startNoDiag), () => [], { delegateRetry: { maxRetries: 0 } });
+  let err2: any = null;
+  try { await tool2.execute({ skill: "co-fixer", prompt: "任务" }, makeExec()); } catch (e) { err2 = e; }
+  check("无 diagnostic 时消息不含 diagnostic 字样", !String(err2?.message ?? "").includes("diagnostic"));
+  check("无 diagnostic 时 cause 不含该字段", err2?.cause?.diagnostic === undefined);
+}
+
+// ---- 用例 16：diagnostic 不破坏可重试原因判定 ----
+{
+  console.log("===== 用例 16：diagnostic 不污染 RETRYABLE 匹配 =====");
+  const start = () => ({
+    id: "r",
+    result: Promise.resolve({
+      output: [{ type: "text", text: "partial work" }],
+      stopReason: "aborted",
+      diagnostic: "aborted by watchdog",
+    }),
+    dispose() {},
+  });
+  const tool = createDelegateTool(makeCtx(start), () => [], { delegateRetry: { maxRetries: 1, retryDelayMs: 1 } });
+  let err: any = null;
+  try { await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec()); } catch (e) { err = e; }
+  // 若 diagnostic 被拼进 lastReason，RETRYABLE.has("aborted; diagnostic: ...") 会为 false → 不重试
+  check("aborted + diagnostic 仍按可重试处理（cause.retries === 1）", err?.cause?.retries === 1);
+  check("cause.stopReason 保持纯 aborted", err?.cause?.stopReason === "aborted");
+}
+
 console.log("");
 const allOk = fail === 0;
 console.log(`结果: ${pass} PASS / ${fail} FAIL`);

@@ -40,6 +40,8 @@ export interface DelegateBatchResult {
   result?: string;
   error?: string;
   stopReason?: string;
+  /** SubagentResult.diagnostic 原样透传（provider 侧失败详情） */
+  diagnostic?: string;
 }
 
 /** 批量委派最大任务数（硬上限，防止意外超量并行压垮系统） */
@@ -226,12 +228,15 @@ export function createDelegateBatchTool(
                 result: contentText(outcome.output),
               });
             } else {
+              const diag = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
               results.push({
                 id: taskId,
                 skill: task.skill,
                 status: "failed",
-                error: `stopReason: ${outcome?.stopReason ?? "unknown"}`,
+                error: `stopReason: ${outcome?.stopReason ?? "unknown"}`
+                  + (diag === undefined ? "" : `; diagnostic: ${diag}`),
                 stopReason: outcome?.stopReason,
+                ...(diag === undefined ? {} : { diagnostic: diag }),
               });
             }
           } catch (e) {
@@ -277,6 +282,7 @@ export function createDelegateBatchTool(
           output += `状态: ${r.status}\n`;
           if (r.error) output += `错误: ${r.error}\n`;
           if (r.stopReason) output += `stopReason: ${r.stopReason}\n`;
+          if (r.diagnostic) output += `diagnostic: ${r.diagnostic}\n`;
           output += "\n";
         }
       }

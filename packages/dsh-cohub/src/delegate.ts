@@ -724,6 +724,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       //    默认 maxRetries=0 → 单次尝试，失败即抛错（带结构化 cause）；
       //    stall.enabled=true 时每个 attempt 挂看门狗，提前中止并计入同一 maxRetries 预算。
       let lastReason = "unknown";
+      // P5：SubagentResult.diagnostic 原样保留（官方 run-settlement.js 用它拼错误详情）。
+      // 必须与 lastReason 分开：lastReason 参与 RETRYABLE 精确匹配，拼接会破坏重试判定。
+      let lastDiagnostic: string | undefined;
       let lastPartial = "";
       // 停滞信息经可变状态对象承载：直接 let 声明会在闭包/循环内被 TS 流分析收窄为 never
       // （循环头声明值为 null 时，三元判断的真分支类型为 never），对象属性则保持 StallInfo | null。
@@ -734,6 +737,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         const stallNote = stallState.last ? "；停滞诊断：" + stallState.last.diagnostics : "";
         const retryNote = attempt > 0
           ? "\n\n[重试 #" + attempt + "] 上一次执行中止，原因：" + lastReason
+            + (lastDiagnostic === undefined ? "" : "；诊断：" + lastDiagnostic)
             + "；已完成部分：" + (lastPartial || "（无）") + stallNote
             + "。请从中断处继续，不要重复已完成步骤。"
           : "";
@@ -801,6 +805,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           if (onExecAbort && exec.signal) exec.signal.removeEventListener("abort", onExecAbort);
           if (ac?.signal.aborted) {
             lastReason = "aborted";
+            lastDiagnostic = undefined;
             lastPartial = "";
             stallState.last = stallInfo;
             if (!RETRYABLE.has(lastReason) || attempt >= retry.maxRetries) break;
@@ -830,6 +835,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
 
         if (outcome?.stopReason === "completed") return contentText(outcome.output);
         lastReason = String(outcome?.stopReason ?? "unknown");
+        lastDiagnostic = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
         lastPartial = contentText(outcome?.output ?? []).slice(0, 500);
         stallState.last = stallInfo;
         // N2：停滞触发的中止仅在 recoverable=true 时按可重试中止处理；否则直接失败
@@ -842,11 +848,13 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       // ⑧ 重试耗尽（或不可重试）：抛错并回传结构化 cause（通用，不依赖任何环境枚举）
       const err: any = new Error(
         'delegate: subagent stopped with reason "' + lastReason + '" after ' + retries + ' retry(ies)'
+        + (lastDiagnostic === undefined ? "" : "; diagnostic: " + lastDiagnostic)
         + (stallState.last ? "; stalled: " + stallState.last.diagnostics : "")
         + "; partial: " + lastPartial,
       );
       err.cause = {
         stopReason: lastReason,
+        ...(lastDiagnostic === undefined ? {} : { diagnostic: lastDiagnostic }),
         partial: lastPartial,
         skill: args.skill,
         retries,

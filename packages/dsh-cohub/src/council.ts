@@ -104,11 +104,16 @@ export function createCouncilTool(config: CouncilRuntimeConfig, ctx: any) {
               timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
             }),
           ]);
+          // diagnostic 按官方契约只随非 completed 结果出现；completed 时忽略，保持原样
+          const diag = outcome.stopReason !== "completed" && typeof outcome.diagnostic === "string"
+            ? outcome.diagnostic
+            : undefined;
           results.push({
             name: c.name,
             model: c.model,
             status: outcome.stopReason === "completed" ? "completed" : outcome.stopReason,
             result: contentText(outcome.output) || undefined,
+            ...(diag === undefined ? {} : { error: `diagnostic: ${diag}` }),
           });
         } catch (e) {
           results.push({
