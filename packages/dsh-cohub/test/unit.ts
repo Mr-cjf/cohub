@@ -62,11 +62,19 @@ const fakeCtx = {
   llm: { listProviders: () => [] },
   logger: { warn: () => {} },
   subagents: {
-    start: (_transport: string, req: any) => {
-      capturedPrompt = req.prompt[0].text;
+    // 0.2.1 契约：startActivation(spec)（无 start）；prompt 首块为 persona 前置，任务块紧随其后
+    async startActivation(spec: any) {
+      const blocks: any[] = Array.isArray(spec?.request?.prompt) ? spec.request.prompt : [];
+      // 跳过前置的 persona 块，取任务 prompt
+      const taskBlock = blocks.length > 1 && String(blocks[0]?.text ?? '').includes('你是被委派的专职代理')
+        ? blocks[1]
+        : blocks[0];
+      capturedPrompt = taskBlock?.text ?? '';
       return {
+        childId: 'child-1',
+        messageId: 'msg-1',
         result: Promise.resolve({ output: [{ type: 'text', text: 'done' }], stopReason: 'completed' }),
-        dispose() {},
+        async dispose() {},
       };
     },
   },
@@ -233,7 +241,46 @@ const okAgg = String(out).includes('**expert1** (m1):')
 console.log('聚合输出:', okAgg ? 'PASS' : 'FAIL');
 console.log('输出预览:', String(out).split('\n').slice(0, 6).join(' / '));
 
-const allOk = okSkills && okContent && okBrief && okDelegate && okOrch && okLayers && okBriefBudget && okPlannerBrief && okOrchBrief && okGen && okRouting && okAgg;
+// ⑤b 集成：0.2.1 契约（仅 startActivation，无 start）下 council 仍可用
+// 这是防回归关键：若 council 仍直接调 ctx.subagents.start(...)，此处会像生产环境一样抛错。
+const cSpecs: any[] = [];
+const cCtx: any = {
+  llm: { listProviders: () => [], listModels: async () => [] },
+  logger: { info: () => {}, warn: () => {} },
+  subagents: {
+    async startActivation(spec: any) {
+      cSpecs.push(spec);
+      return {
+        childId: 'c-' + cSpecs.length,
+        messageId: 'cm-' + cSpecs.length,
+        result: Promise.resolve({
+          output: [{ type: 'text', text: `0.2.1 councillor：同意（${spec?.request?.agentOptions?.model}）` }],
+          stopReason: 'completed',
+        }),
+        async dispose() {},
+      };
+    },
+  },
+};
+const tool21 = lib.createCouncilTool({
+  councillors: [
+    { name: 'expert1', provider: 'p1', model: 'm1' },
+    { name: 'expert2', provider: 'p2', model: 'm2' },
+  ],
+  councilTimeoutMs: 5000,
+  councilProvider: 'spawn',
+}, cCtx);
+const out21 = await tool21.execute({ prompt: '要不要重构？' }, { agent: { id: 'council-parent' }, signal: new AbortController().signal });
+const okCouncil21 = cSpecs.length === 2
+  && cSpecs.every(s => s?.delivery === 'caller')
+  && cSpecs.every(s => s?.provider === 'spawn')
+  && cSpecs.every(s => s?.request?.persona === undefined)
+  && cSpecs[0]?.request?.agentOptions?.model === 'm1'
+  && cSpecs[1]?.request?.agentOptions?.model === 'm2'
+  && String(out21).includes('Council: 2/2 councillors responded');
+console.log('council 走 0.2.1 startActivation（delivery=caller / 无 persona 字段 / 模型路由）:', okCouncil21 ? 'PASS' : 'FAIL');
+
+const allOk = okSkills && okContent && okBrief && okDelegate && okOrch && okLayers && okBriefBudget && okPlannerBrief && okOrchBrief && okGen && okRouting && okAgg && okCouncil21;
 console.log('');
 console.log(allOk ? '✅ 全部 PASS' : '❌ 存在 FAIL');
 process.exit(allOk ? 0 : 1);

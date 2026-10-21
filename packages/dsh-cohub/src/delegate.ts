@@ -100,6 +100,85 @@ export const DELEGATE_PERSONA = "你是被委派的专职代理：严格遵循�
 /** 子代理 spawn transport 名（非 LLM provider；别跟 agentOptions.provider 搞混） */
 export const DEFAULT_SPAWN_TRANSPORT = "spawn";
 
+/** 统一入口返回的运行句柄：抹平 0.2.0（run.id）与 0.2.1（activation.childId）的差异 */
+export interface SubagentRunHandle {
+  id: string;
+  result: Promise<any>;
+  dispose: () => Promise<void>;
+}
+
+/** 统一入口的 spawn 参数 */
+export interface SpawnRunSpec {
+  label: string;
+  prompt: Array<{ type: string; text: string }>;
+  parent: any;
+  /** 子代理人格前缀。0.2.1 起 SubagentStartRequest 已删除 persona 字段，改由 prompt 首块承接。 */
+  persona?: string;
+  agentOptions?: Record<string, unknown>;
+  signal?: AbortSignal;
+}
+
+/**
+ * 跨版本 spawn 子代理的统一入口。
+ *
+ * DSH 0.2.1 运行时 SubagentRuntime 移除了 start(provider, request)，改为 startActivation(spec)：
+ *   - spec.provider 与 label/request/signal/delivery 同级；
+ *   - request 是 Omit<SubagentStartRequest, "label" | "signal">，persona / toolFilter 字段已删除；
+ *   - 返回 { childId, messageId?, result, dispose } —— 注意是 childId 不是 id；
+ *   - delivery 必须显式传 "caller"：默认 "parent" 会在子代理 prompt 末尾追加 send_message 返回指引、
+ *     并在父会话写入完成通知，而 cohub 三个工具都自行聚合结果，走 parent 路径是行为回归。
+ *
+ * 0.2.0 保留原生 start(provider, request)，persona 走原生字段。特性探测双分支，两个版本都能跑。
+ */
+export async function startSubagentRun(
+  ctx: any,
+  provider: string,
+  spec: SpawnRunSpec,
+): Promise<SubagentRunHandle> {
+  const subagents = ctx?.subagents;
+  if (!subagents) throw new Error("cohub: startSubagentRun requires the subagents service");
+
+  const signal = spec.signal ?? new AbortController().signal;
+
+  if (typeof subagents.startActivation === "function") {
+    // 0.2.1+：persona 原生能力已删除，前置到 prompt 首个 text 块补偿
+    const prompt = spec.persona !== undefined
+      ? [{ type: "text", text: spec.persona }, ...spec.prompt]
+      : spec.prompt;
+    const receipt = await subagents.startActivation({
+      provider,
+      label: spec.label,
+      request: {
+        prompt,
+        parent: spec.parent,
+        ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
+      },
+      signal,
+      delivery: "caller",
+    });
+    return {
+      id: receipt.childId,
+      result: receipt.result,
+      dispose: () => receipt.dispose(),
+    };
+  }
+
+  // 0.2.0 回退：provider 契约仍声明 persona 能力
+  const run = await subagents.start(provider, {
+    label: spec.label,
+    prompt: spec.prompt,
+    parent: spec.parent,
+    ...(spec.persona !== undefined ? { persona: spec.persona } : {}),
+    ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
+    signal,
+  });
+  return {
+    id: run.id,
+    result: run.result,
+    dispose: () => run.dispose(),
+  };
+}
+
 /** 从 DelegateConfig 提取 envContract */
 export function createEnvContract(config: DelegateConfig): { enabled: boolean; text?: string } {
   return {
@@ -703,11 +782,11 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           if (!learner.attach(ctx)) learner = null;
         }
 
-        // ⑦ spawn 子代理（第一个参数是 transport provider 名，固定 "spawn"；
-        //    agentOptions.provider 才是 LLM 供应商名，两者不同，别搞混）
+        // ⑦ spawn 子代理（startSubagentRun 抹平 0.2.0 start / 0.2.1 startActivation；
+        //    provider 参数是 transport 名，固定 "spawn"；agentOptions.provider 才是 LLM 供应商名，别搞混）
         let run: any;
         try {
-          run = await ctx.subagents.start(DEFAULT_SPAWN_TRANSPORT, {
+          run = await startSubagentRun(ctx, DEFAULT_SPAWN_TRANSPORT, {
             label: "delegate:" + args.skill,
             prompt: [{ type: "text", text: promptText }],
             parent,

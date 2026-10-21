@@ -2,19 +2,77 @@
 // 覆盖：环境契约注入（enabled/text）、可配置重试（maxRetries/未知 reason）、
 //       delegate 路由不回归（agentOptions 覆盖 / provider 不可用继承父模型）。
 // 用法：bun run test/delegate-p1.ts（或 node test/delegate-p1.ts，node >= 24 类型剥离）
-import { createDelegateTool } from "../src/delegate.ts";
+import { createDelegateTool, DELEGATE_PERSONA } from "../src/delegate.ts";
 
 /** delegate 注入的特有标记：技能内容里 P0 已有「## 执行器环境契约」段落，故用带围栏的「--- … ---」区分 */
 const DELEGATE_CONTRACT_MARKER = "--- 执行器环境契约（通用原则 + 探测式自适应） ---";
 
-/** fake ctx：只提供 delegate 用到的 subagents.start / llm.listProviders / llm.listModels
+/**
+ * fake subagents 服务的版本形态：
+ * - "0.2.1"（默认）：只提供 startActivation(spec)，**不提供 start**——与宿主真实运行时一致，
+ *   这样任何残留的 ctx.subagents.start(...) 调用都会像生产环境一样炸掉，而不是被桩掩盖。
+ * - "0.2.0"：只提供 start(provider, request)，用于验证回退分支不回归。
+ */
+type SubagentsFlavor = "0.2.1" | "0.2.0";
+
+interface MakeCtxOptions {
+  flavor?: SubagentsFlavor;
+  /** 原始 spec 捕获数组（0.2.1 路径下断言 persona 前置 / delivery 用） */
+  rawSpecs?: any[];
+  /** 原始 start 参数捕获数组（0.2.0 路径下断言 persona 原生字段用） */
+  rawRequests?: any[];
+}
+
+/** 0.2.1 路径下把 persona 从 prompt 首块剥离，还原成「逻辑 request」交给各用例的 startImpl */
+function toLogicalRequest(spec: any) {
+  const prompt: any[] = Array.isArray(spec?.request?.prompt) ? spec.request.prompt : [];
+  const headIsPersona = prompt.length > 1 && prompt[0]?.type === "text" && prompt[0]?.text === DELEGATE_PERSONA;
+  return {
+    label: spec?.label,
+    prompt: headIsPersona ? prompt.slice(1) : prompt,
+    parent: spec?.request?.parent,
+    ...(spec?.request?.agentOptions !== undefined ? { agentOptions: spec.request.agentOptions } : {}),
+    signal: spec?.signal,
+    delivery: spec?.delivery,
+    provider: spec?.provider,
+    persona: headIsPersona ? DELEGATE_PERSONA : undefined,
+  };
+}
+
+/** fake ctx：只提供 delegate 用到的 subagents / llm.listProviders / llm.listModels
  *（resolveModelInfo 可选：只有 reasoningEffort 预校验用得到） */
 function makeCtx(
   startImpl: (req: any) => any,
   providers: any[] = [],
   modelsByProvider?: Record<string, any[] | Error>,
   resolveModelInfo?: (provider: string, model: string) => Promise<any>,
+  options: MakeCtxOptions = {},
 ) {
+  const flavor = options.flavor ?? "0.2.1";
+  const rawSpecs = options.rawSpecs ?? [];
+  const rawRequests = options.rawRequests ?? [];
+
+  const subagents: any = {};
+  if (flavor === "0.2.1") {
+    // 真实 0.2.1 运行时契约：startActivation(spec) → { childId, messageId?, result, dispose }
+    subagents.startActivation = async (spec: any) => {
+      rawSpecs.push(spec);
+      const run = await startImpl(toLogicalRequest(spec));
+      return {
+        childId: run?.id ?? "child-1",
+        messageId: "msg-1",
+        result: run?.result ?? Promise.resolve({ output: [], stopReason: "completed" }),
+        async dispose() { run?.dispose?.(); },
+      };
+    };
+  } else {
+    // 0.2.0 契约：start(provider, request) → { id, result, dispose }
+    subagents.start = async (_transport: string, req: any) => {
+      rawRequests.push(req);
+      return startImpl(req);
+    };
+  }
+
   return {
     llm: {
       listProviders: () => providers,
@@ -29,11 +87,9 @@ function makeCtx(
       },
       ...(resolveModelInfo ? { resolveModelInfo } : {}),
     },
-    subagents: {
-      async start(_transport: string, req: any) {
-        return startImpl(req);
-      },
-    },
+    subagents,
+    _rawSpecs: rawSpecs,
+    _rawRequests: rawRequests,
   };
 }
 
@@ -312,6 +368,72 @@ function check(name: string, cond: boolean) {
   await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec());
   check("maxTokens 与 reasoningEffort 同时保留",
     captured?.agentOptions?.maxTokens === 900 && captured?.agentOptions?.reasoningEffort === "high");
+}
+
+// ---- 用例 12：DSH 0.2.1 —— fake ctx 只提供 startActivation，不提供 start ----
+// 这是本用例集的核心防线：如果 delegate 仍直接调用 ctx.subagents.start(...)，
+// 这里会像生产环境一样抛 "ctx.subagents.start is not a function"，而不是被桩掩盖。
+{
+  console.log("===== 用例 12：0.2.1 仅 startActivation（无 start）delegate 仍可用 =====");
+  const rawSpecs: any[] = [];
+  let spawnCount = 0;
+  const start = (req: any) => {
+    spawnCount++;
+    return { id: "child-42", result: Promise.resolve({ output: [{ type: "text", text: "0.2.1 完成" }], stopReason: "completed" }), dispose() {} };
+  };
+  const ctx = makeCtx(start, [{ id: "deepseek-official" }], undefined, undefined, { flavor: "0.2.1", rawSpecs });
+  check("桩里确实没有 start 方法", typeof (ctx as any).subagents.start === "undefined");
+  check("桩里提供 startActivation", typeof (ctx as any).subagents.startActivation === "function");
+
+  const tool = createDelegateTool(ctx, () => [{ name: "co-fixer", provider: "deepseek-official", model: "m1" }]);
+  const out = await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec());
+  check("delegate 正常返回结果", out === "0.2.1 完成");
+  check("spawn 次数 = 1", spawnCount === 1);
+
+  const spec = rawSpecs[0];
+  check("spec.provider === spawn（transport 名）", spec?.provider === "spawn");
+  check("delivery 显式传 caller（不用默认 parent）", spec?.delivery === "caller");
+  check("label 在 spec 顶层（不在 request 内）", spec?.label === "delegate:co-fixer" && spec?.request?.label === undefined);
+  check("signal 在 spec 顶层", spec?.signal instanceof AbortSignal || typeof spec?.signal?.aborted === "boolean");
+  check("request 不含 persona 字段（0.2.1 已删除）", spec?.request && !("persona" in spec.request));
+  check("request 不含 toolFilter 字段（0.2.1 已删除）", spec?.request && !("toolFilter" in spec.request));
+  check("persona 前置为 prompt 首个 text 块", spec?.request?.prompt?.[0]?.type === "text" && spec?.request?.prompt?.[0]?.text === DELEGATE_PERSONA);
+  check("任务 prompt 顺延为第二块", spec?.request?.prompt?.[1]?.type === "text" && spec.request.prompt[1].text.includes("--- 你的具体任务 ---"));
+  check("agentOptions 落到 request 内", spec?.request?.agentOptions?.provider === "deepseek-official");
+}
+
+// ---- 用例 13：DSH 0.2.0 回退 —— fake ctx 只提供 start，不提供 startActivation ----
+{
+  console.log("===== 用例 13：0.2.0 回退分支（仅 start） =====");
+  const rawRequests: any[] = [];
+  let spawnCount = 0;
+  const start = (req: any) => {
+    spawnCount++;
+    return { id: "run-7", result: Promise.resolve({ output: [{ type: "text", text: "0.2.0 完成" }], stopReason: "completed" }), dispose() {} };
+  };
+  const ctx = makeCtx(start, [], undefined, undefined, { flavor: "0.2.0", rawRequests });
+  check("桩里没有 startActivation（走回退分支）", typeof (ctx as any).subagents.startActivation === "undefined");
+
+  const tool = createDelegateTool(ctx, () => []);
+  const out = await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec());
+  check("0.2.0 回退路径正常返回", out === "0.2.0 完成");
+  check("spawn 次数 = 1", spawnCount === 1);
+  const req = rawRequests[0];
+  check("0.2.0 保留 persona 原生字段", req?.persona === DELEGATE_PERSONA);
+  check("0.2.0 prompt 未被前置 persona（单块）", req?.prompt?.length === 1 && req.prompt[0].text.includes("--- 你的具体任务 ---"));
+  check("0.2.0 label 在 request 内", req?.label === "delegate:co-fixer");
+  check("0.2.0 传了 signal", req?.signal !== undefined);
+}
+
+// ---- 用例 14：0.2.1 无 subagents 服务 → fail loud（不静默） ----
+{
+  console.log("===== 用例 14：缺 subagents 服务时 fail loud =====");
+  const tool = createDelegateTool({ llm: { listProviders: () => [] } } as any, () => []);
+  let err: any = null;
+  try { await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec()); } catch (e) { err = e; }
+  check("缺 subagents 抛错", !!err);
+  check("错误信息点名 startSubagentRun 需要 subagents 服务",
+    String(err?.message ?? "").includes("startSubagentRun requires the subagents service"));
 }
 
 console.log("");

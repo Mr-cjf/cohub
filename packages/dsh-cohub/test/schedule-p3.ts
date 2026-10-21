@@ -90,9 +90,13 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
     logger: { info: () => {}, warn: () => {} },
     llm: { listProviders: () => [] },
     subagents: {
-      async start(_t: string, _req: any) {
+      async startActivation(_spec: any) {
         spawnCount++;
-        return { id: "r" + spawnCount, result: Promise.resolve({ output: [{ type: "text", text: "x" }], stopReason: "aborted" }), dispose() {} };
+        return {
+          childId: "r" + spawnCount,
+          result: Promise.resolve({ output: [{ type: "text", text: "x" }], stopReason: "aborted" }),
+          async dispose() {},
+        };
       },
     },
   };
@@ -118,19 +122,20 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
     logger: { info: () => {}, warn: () => {} },
     llm: { listProviders: () => [] },
     subagents: {
-      async start(_t: string, req: any) {
+      async startActivation(spec: any) {
         spawnCount++;
         const runId = "child-" + spawnCount;
+        const req = { signal: spec?.signal, prompt: spec?.request?.prompt };
         if (spawnCount === 1) {
           for (let i = 0; i < 3; i++) {
             stallCtx._emit(runId, { type: "tool/call", data: { name: "run_code", arguments: "x" } });
             stallCtx._emit(runId, { type: "tool/result", data: { message: { isError: true, content: [{ type: "text", text: "Error: boom" }] } } });
           }
         }
-        return spawnCount > 1
+        const run = spawnCount > 1
           ? { id: runId, result: Promise.resolve({ output: [{ type: "text", text: "OK" }], stopReason: "completed" }), dispose() {} }
           : (() => {
-              const run: any = {
+              const r: any = {
                 id: runId,
                 result: new Promise((resolve) => {
                   const timer = setTimeout(() => resolve({ output: [{ type: "text", text: "unused" }], stopReason: "completed" }), 800);
@@ -138,8 +143,14 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
                 }),
                 dispose() {},
               };
-              return run;
+              return r;
             })();
+        return {
+          childId: run.id,
+          messageId: "msg-" + spawnCount,
+          result: run.result,
+          async dispose() { run.dispose(); },
+        };
       },
     },
     on(type: string, h: (...a: any[]) => void) {

@@ -91,16 +91,32 @@ function check(name: string, cond: boolean) {
     logger: { info: () => {}, warn: () => {} },
     llm: { listProviders: () => [], listModels: async () => [] },
     subagents: {
-      async start(_t: string, req: any) {
+      // 0.2.1 契约：startActivation(spec)（无 start），persona 已在 prompt 首块
+      async startActivation(spec: any) {
         spawnCount++;
+        const prompt: any[] = Array.isArray(spec?.request?.prompt) ? spec.request.prompt : [];
+        const req = {
+          label: spec?.label,
+          prompt,
+          parent: spec?.request?.parent,
+          agentOptions: spec?.request?.agentOptions,
+          signal: spec?.signal,
+          delivery: spec?.delivery,
+        };
         lastAgentOptions = req?.agentOptions;
         // AbortSignal 转发链断言：父 exec.signal 已中止时应出现在子代理 start 请求中
         if (req?.signal?.aborted) forwardedAborted = true;
-        if (!abortedOnce) {
-          abortedOnce = true;
-          return { id: "r" + spawnCount, result: Promise.resolve({ output: [{ type: "text", text: "partial" }], stopReason: "aborted" }), dispose() {} };
-        }
-        return { id: "r" + spawnCount, result: Promise.resolve({ output: [{ type: "text", text: "ok-retry" }], stopReason: "completed" }), dispose() {} };
+        const settled = !abortedOnce;
+        if (!abortedOnce) abortedOnce = true;
+        const run = settled
+          ? { id: "r" + spawnCount, result: Promise.resolve({ output: [{ type: "text", text: "partial" }], stopReason: "aborted" }), dispose() {} }
+          : { id: "r" + spawnCount, result: Promise.resolve({ output: [{ type: "text", text: "ok-retry" }], stopReason: "completed" }), dispose() {} };
+        return {
+          childId: run.id,
+          messageId: "msg-" + spawnCount,
+          result: run.result,
+          async dispose() { run.dispose(); },
+        };
       },
     },
   };
@@ -151,6 +167,42 @@ function check(name: string, cond: boolean) {
     lastAgentOptions?.reasoningEffort === "low");
   check("只配 reasoningEffort 时不覆盖 provider/model",
     !("provider" in (lastAgentOptions ?? {})) && !("model" in (lastAgentOptions ?? {})));
+}
+
+// ── 层 3b：delegate_batch 在 0.2.1 契约（仅 startActivation，无 start）下可用 ──
+{
+  console.log("===== 层 3b：delegate_batch 走 0.2.1 startActivation =====");
+  const specs: any[] = [];
+  let batchSpawns = 0;
+  const ctx: any = {
+    logger: { info: () => {}, warn: () => {} },
+    llm: { listProviders: () => [], listModels: async () => [] },
+    subagents: {
+      // 0.2.1 契约：只有 startActivation。若 delegate_batch 仍调 ctx.subagents.start 会在此炸掉。
+      async startActivation(spec: any) {
+        batchSpawns++;
+        specs.push(spec);
+        return {
+          childId: "b" + batchSpawns,
+          messageId: "bm" + batchSpawns,
+          result: Promise.resolve({ output: [{ type: "text", text: "batch-ok-" + batchSpawns }], stopReason: "completed" }),
+          async dispose() {},
+        };
+      },
+    },
+  };
+  const batchTool: any = createDelegateBatchTool(ctx, () => [], {});
+  const out: any = await batchTool.execute(
+    { tasks: [{ skill: "co-explorer", prompt: "任务 1" }, { skill: "co-fixer", prompt: "任务 2" }] },
+    { agent: { id: "p-batch" }, signal: new AbortController().signal },
+  );
+  check("delegate_batch 在仅 startActivation 下 spawn 2 次", batchSpawns === 2);
+  check("delegate_batch 每个 spec 都传 delivery=caller", specs.every(s => s?.delivery === "caller"));
+  check("delegate_batch spec.provider=spawn", specs.every(s => s?.provider === "spawn"));
+  check("delegate_batch persona 前置到 prompt 首块",
+    specs.every(s => String(s?.request?.prompt?.[0]?.text ?? "").includes("你是被委派的专职代理")));
+  check("delegate_batch 两个任务都返回结果",
+    JSON.stringify(out).includes("batch-ok-1") && JSON.stringify(out).includes("batch-ok-2"));
 }
 
 // ── 层 4：真实 cordis Context + apply 挂载（stub 服务最小集）→ 插件行可挂载 ──

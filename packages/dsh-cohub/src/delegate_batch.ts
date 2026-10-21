@@ -12,6 +12,7 @@ import {
   createEnvSig,
   DELEGATE_PERSONA,
   DEFAULT_SPAWN_TRANSPORT,
+  startSubagentRun,
   DELEGATE_OUTPUT_CONFIG,
   type SkillRouteSource,
   type DelegateConfig,
@@ -144,7 +145,7 @@ export function createDelegateBatchTool(
           }
 
           try {
-            const run = await ctx.subagents.start(DEFAULT_SPAWN_TRANSPORT, {
+            const run = await startSubagentRun(ctx, DEFAULT_SPAWN_TRANSPORT, {
               label: `delegate_batch:${taskId}:${task.skill}`,
               prompt: [{ type: "text", text: promptText }],
               parent,

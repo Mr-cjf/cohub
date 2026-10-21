@@ -22,13 +22,39 @@ function makeExec() {
   return { agent: { id: "parent-1" }, signal: new AbortController().signal };
 }
 
-/** fake ctx：仅 subagents.start / llm.listProviders（无事件总线，供读路径测试） */
+/** 把 0.2.1 activation spec 还原成逻辑 request（persona 前置块剥离），供各用例的 startImpl 复用 */
+function toLogicalRequest(spec: any) {
+  const prompt: any[] = Array.isArray(spec?.request?.prompt) ? spec.request.prompt : [];
+  const headIsPersona = prompt.length > 1 && prompt[0]?.type === "text"
+    && String(prompt[0]?.text ?? "").includes("你是被委派的专职代理");
+  return {
+    label: spec?.label,
+    prompt: headIsPersona ? prompt.slice(1) : prompt,
+    parent: spec?.request?.parent,
+    ...(spec?.request?.agentOptions !== undefined ? { agentOptions: spec.request.agentOptions } : {}),
+    signal: spec?.signal,
+    delivery: spec?.delivery,
+    provider: spec?.provider,
+  };
+}
+
+/** 把 startImpl 的返回值包成 0.2.1 的 SubagentActivation（childId 而非 id） */
+function toActivation(run: any) {
+  return {
+    childId: run?.id ?? "child-1",
+    messageId: "msg-1",
+    result: run?.result ?? Promise.resolve({ output: [], stopReason: "completed" }),
+    async dispose() { run?.dispose?.(); },
+  };
+}
+
+/** fake ctx：仅 subagents.startActivation（0.2.1，与宿主真实运行时一致，无 start）/ llm.listProviders */
 function makeCtx(startImpl: (req: any) => any) {
   return {
     logger: { info: () => {}, warn: () => {} },
     llm: { listProviders: () => [] },
     subagents: {
-      async start(_t: string, req: any) { return startImpl(req); },
+      async startActivation(spec: any) { return toActivation(await startImpl(toLogicalRequest(spec))); },
     },
   };
 }
@@ -40,7 +66,7 @@ function makeCtxWithBus(startImpl: (req: any, ctx: any) => any) {
     logger: { info: () => {}, warn: () => {} },
     llm: { listProviders: () => [] },
     subagents: {
-      async start(_t: string, req: any) { return startImpl(req, ctx); },
+      async startActivation(spec: any) { return toActivation(await startImpl(toLogicalRequest(spec), ctx)); },
     },
     on(type: string, h: (...a: any[]) => void) {
       if (type === "session/event") { listeners.add(h); return () => listeners.delete(h); }

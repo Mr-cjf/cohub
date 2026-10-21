@@ -19,14 +19,35 @@ function makeExec() {
   return { agent: { id: "parent-1" }, signal: new AbortController().signal };
 }
 
-/** fake ctx：subagents.start / llm.listProviders / logger / session/event 总线（on/off/_emit） */
+/** fake ctx：subagents（0.2.1 startActivation 形态，与宿主真实运行时一致，无 start）
+ * / llm.listProviders / logger / session/event 总线（on/off/_emit） */
 function makeStallCtx(startImpl: (req: any, ctx: any) => any) {
   const listeners = new Set<(...a: any[]) => void>();
   const ctx: any = {
     logger: { info: () => {}, warn: () => {} },
     llm: { listProviders: () => [] },
     subagents: {
-      async start(_t: string, req: any) { return startImpl(req, ctx); },
+      // 0.2.1 契约：startActivation(spec) → { childId, result, dispose }。
+      // 故意不提供 start，确保任何残留 ctx.subagents.start(...) 都会像生产环境一样抛错。
+      async startActivation(spec: any) {
+        const prompt: any[] = Array.isArray(spec?.request?.prompt) ? spec.request.prompt : [];
+        const headIsPersona = prompt.length > 1 && prompt[0]?.type === "text" && String(prompt[0]?.text ?? "").includes("你是被委派的专职代理");
+        const run = await startImpl({
+          label: spec?.label,
+          prompt: headIsPersona ? prompt.slice(1) : prompt,
+          parent: spec?.request?.parent,
+          ...(spec?.request?.agentOptions !== undefined ? { agentOptions: spec.request.agentOptions } : {}),
+          signal: spec?.signal,
+          delivery: spec?.delivery,
+          provider: spec?.provider,
+        }, ctx);
+        return {
+          childId: run?.id ?? "child-1",
+          messageId: "msg-1",
+          result: run?.result ?? Promise.resolve({ output: [], stopReason: "completed" }),
+          async dispose() { run?.dispose?.(); },
+        };
+      },
     },
     on(type: string, h: (...a: any[]) => void) {
       if (type === "session/event") { listeners.add(h); return () => listeners.delete(h); }
@@ -291,9 +312,13 @@ function check(name: string, cond: boolean) {
     logger: { info: () => {}, warn: () => {} },
     llm: { listProviders: () => [] },
     subagents: {
-      async start() {
+      async startActivation(spec: any) {
         spawnCount++;
-        return { id: "child-1", result: Promise.resolve({ output: [{ type: "text", text: "OK" }], stopReason: "completed" }), dispose() {} };
+        return {
+          childId: "child-1",
+          result: Promise.resolve({ output: [{ type: "text", text: "OK" }], stopReason: "completed" }),
+          async dispose() {},
+        };
       },
     },
     // 故意没有 on（无 session/event 事件源）

@@ -3,7 +3,7 @@
 // 多模型并行不再手动建 session：直接走 ctx.subagents seam + agentOptions 路由覆盖。
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { contentText } from "./text-utils.ts";
-import { DEFAULT_SPAWN_TRANSPORT } from "./delegate.ts";
+import { DEFAULT_SPAWN_TRANSPORT, startSubagentRun } from "./delegate.ts";
 import { shortModelLabel } from "./shared/model.ts";
 import { COUNCIL_TIMEOUT_MS } from "./shared/constants.ts";
 import {
@@ -71,7 +71,7 @@ export function createCouncilTool(config: CouncilRuntimeConfig, ctx: any) {
 
       // 并行启动所有 councillor
       const starts = await Promise.allSettled(councillors.map(c =>
-        ctx.subagents.start(provider, {
+        startSubagentRun(ctx, provider, {
           label: `council:${c.name}`,
           prompt: [{ type: "text", text: formatCouncillorPrompt(String(args.prompt), c.prompt) }],
           parent,
