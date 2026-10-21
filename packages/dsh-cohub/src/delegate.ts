@@ -28,6 +28,9 @@ export interface SkillRouteConfig {
   provider?: string;
   model?: string;
   maxTokens?: number;
+  /** 推理强度（DSH ReasoningEffortId，adapter 拥有的不透明字符串：low/medium/high/...）。
+   *  合法取值由「该 provider+model 的模型目录」决定；空串/缺省 = 不覆盖。 */
+  reasoningEffort?: string;
 }
 
 /** delegate 工具运行时路由源：返回当前生效的 skill 路由表 */
@@ -343,8 +346,33 @@ export function resolveSkillAndRoute(
 }
 
 /**
- * 根据路由配置构造 agentOptions：仅当 route 有 provider 且该 provider 在可用集合中才覆盖；
- * provider 不可用或未配置则返回 undefined（继承父/会话模型）。
+ * 归一化推理强度：非字符串 / 空串 / 纯空白 一律视为「未配置」（undefined）。
+ *
+ * 必须归一化空串：官方设置页的文本字段被清空时会写回 ""（schemastery 的可选 string
+ * 保留 ""，实测不吞空串），若把 "" 传给 DSH，会被当成一个显式档位去校验，
+ * 以 UNSUPPORTED_REASONING_EFFORT 硬失败。
+ */
+export function normalizeReasoningEffort(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * 根据路由配置构造 agentOptions。
+ *
+ * 三种出口（DSH 语义见 dsh-subagent resolveChildAgentOptions）：
+ *   ① 配了 provider 且 provider 可用 → 覆盖 provider/model(/maxTokens/reasoningEffort)；
+ *   ② 未配 provider、但配了 reasoningEffort → **只交出 { reasoningEffort }**
+ *      （provider/model 仍继承父会话）。这是有意为之：DSH 先继承父的 provider/model/
+ *      reasoningEffort/maxTokens，再展开 requested（本函数的返回值）覆盖，因此「只配强度、
+ *      不配模型」是官方支持的差异化配置（例如让 co-explorer 用 low、co-oracle 用 high，
+ *      两者都跑父会话的模型）。旧版此处 `if (!route?.provider) return undefined;` 会把这种
+ *      配置静默丢弃。
+ *   ③ 未配 provider 且未配强度 / provider 配了但不在可用集合 → 返回 undefined（完全继承，
+ *      与旧行为一致）。provider 不可用时连强度一起丢弃：此时子代理会落到父会话的
+ *      provider+model，而那段强度未必被父模型支持（会硬失败），保持「配置失效即完全继承」
+ *      这一既有安全语义，只记一条告警。
  *
  * 模型回退（P4-1）：route 只配了 provider、没配 model 时**不能**只交出 provider ——
  * 子代理会回落到父会话的模型名，而该模型名往往不属于这个 provider，请求在发出前就会以
@@ -352,14 +380,35 @@ export function resolveSkillAndRoute(
  * 这里改为向该 provider 查询模型目录并取第一个（适配器偏好顺序的第一项）作为回退模型，
  * 使「留空则继承」退化为「用该 provider 自己的默认模型」这一安全语义。
  * 查询失败或无可用模型时保持原样（不传 model），维持旧行为，交由上层报错。
+ *
+ * reasoningEffort 预校验（fail-soft）：DSH 在发出请求前用模型目录校验档位，不支持的档位
+ * 直接抛 UNSUPPORTED_REASONING_EFFORT（"no clamping or aliasing is performed"）。为免
+ * 「改了个档位导致整次委派秒失败」，这里在 provider+model 都确定时先用 resolveModelInfo
+ * 查该模型的 efforts，不支持就丢弃强度并告警（委派照常进行，只是按模型默认档跑）。
+ * 无法判定时（无 resolveModelInfo / 查询抛错 / model 未定）一律放行，不改变既有行为。
  */
 export async function buildAgentOptions(
   route: SkillRouteConfig | undefined,
   ctx: any,
 ): Promise<Record<string, unknown> | undefined> {
-  if (!route?.provider) return undefined;
+  if (!route) return undefined;
+  const effort = normalizeReasoningEffort(route.reasoningEffort);
+
+  // ② 只配强度、不配 provider：交出部分 options（provider/model 由 DSH 继承父会话）
+  if (!route.provider) {
+    return effort ? { reasoningEffort: effort } : undefined;
+  }
+
   const available = new Set(ctx.llm.listProviders().map((p: any) => p.id));
-  if (!available.has(route.provider)) return undefined;
+  if (!available.has(route.provider)) {
+    if (effort) {
+      ctx.logger?.warn?.(
+        '[cohub route] ' + route.name + ' 配置的 provider "' + route.provider
+        + '" 当前不可用，推理强度 "' + effort + '" 一并忽略（完全继承父会话）',
+      );
+    }
+    return undefined;
+  }
 
   const options: Record<string, unknown> = { provider: route.provider };
   if (route.model) {
@@ -380,7 +429,45 @@ export async function buildAgentOptions(
     }
   }
   if (route.maxTokens) options.maxTokens = route.maxTokens;
+  if (effort) {
+    // 预校验只在 provider+model 都确定时进行（model 可能是上面解析出的回退模型）
+    const supported = await isReasoningEffortSupported(route.provider, options.model as string | undefined, effort, ctx);
+    if (supported === false) {
+      ctx.logger?.warn?.(
+        '[cohub route] ' + route.name + ' 的模型 "' + route.provider + '/' + String(options.model)
+        + '" 不支持推理强度 "' + effort + '"，已忽略该强度（按模型默认档执行）',
+      );
+    } else {
+      options.reasoningEffort = effort;
+    }
+  }
   return options;
+}
+
+/**
+ * 查询某 provider+model 的模型目录，判断该推理强度是否被支持。
+ * @returns true 支持 / false 明确不支持 / undefined 无法判定（放行，不改变行为）
+ *
+ * 只读查询；resolveModelInfo 缺失（老宿主 / 测试 stub）或抛错都返回 undefined，
+ * 让调用方维持「照传」的既有行为，而不是因查询失败把用户的配置丢掉。
+ */
+async function isReasoningEffortSupported(
+  provider: string,
+  model: string | undefined,
+  effort: string,
+  ctx: any,
+): Promise<boolean | undefined> {
+  if (!model) return undefined; // 继承父模型时无法在本层判定
+  const resolve = ctx?.llm?.resolveModelInfo;
+  if (typeof resolve !== 'function') return undefined;
+  try {
+    const info = await resolve.call(ctx.llm, provider, model);
+    const efforts = info?.reasoning?.efforts;
+    if (!Array.isArray(efforts) || efforts.length === 0) return false; // 该模型不暴露任何档位
+    return efforts.some((e: any) => e && e.id === effort);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -452,8 +539,9 @@ export function buildDelegatePrompt(params: {
  * 创建 delegate 工具。
  * 按 skill 名精确匹配 COHUB_SKILLS，注入该 skill 的精简指令（brief）+（可选）执行器环境契约 + 用户具体任务；
  * 通过 ctx.subagents.start("spawn", ...) 自包含地 spawn 子代理。
- * 路由经 getRoutes() 读取（组合层或 settings 解析后的当前值）；仅当该 skill 配置了可用
- * 的 provider 时才用 agentOptions 覆盖，provider 不可用或未配置则继承父/会话模型。
+ * 路由经 getRoutes() 读取（组合层或 settings 解析后的当前值）：配了可用 provider 时覆盖
+ * provider/model(/maxTokens/reasoningEffort)；只配了 reasoningEffort 时只覆盖推理强度
+ * （provider/model 仍继承父会话）；两者都没配（或 provider 不可用）则完全继承父/会话模型。
  *
  * P1-1：config.delegateEnvContract.enabled=true（默认）时，在 skill 内容与任务之间插入
  *       「--- 执行器环境契约 ---」+ 通用原则/探测流程文本（text 可覆盖，缺省 DEFAULT_ENV_CONTRACT），

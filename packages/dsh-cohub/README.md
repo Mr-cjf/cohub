@@ -83,6 +83,7 @@ dsh plugin --profile web add <monorepo>/packages/dsh-cohub
     councillors: []          # 为空则不注册 council_session 工具
     councilTimeoutMs: 180000
     skills: []               # delegate 委派路由（DSH 0.2 起由设置页按 profile entry id 投影此 volatile 字段，实时生效）
+                             # 每条路由可配 provider/model/maxTokens/reasoningEffort，见下节「skills 字段」
 ```
 
 **M4 启用 council**（councillors 非空时自动注册 council_session 工具）：
@@ -135,6 +136,38 @@ dsh plugin --profile web add <monorepo>/packages/dsh-cohub
 
 完整字段含义与缺省见 [`cordis.patch.yml`](cordis.patch.yml) 顶部注释块。
 
+### skills 字段：按代理配置推理强度（reasoningEffort）
+
+每条 skill 路由可写的字段：`name`（必填）、`provider`、`model`、`maxTokens`、`reasoningEffort`。
+
+`reasoningEffort` 直接转发为 DSH 的 `AgentOptions.reasoningEffort`（`ReasoningEffortId`，
+adapter 拥有的**不透明字符串**——`dsh-llm` 的 `brand.ts` 明确 "no validation is performed"，
+所以本插件用 `z.string()` 而不是写死 `low/medium/high` 枚举，避免把别的 provider 的档位拒之门外）：
+
+```yaml
+skills:
+  - { name: co-oracle,   provider: deepseek-official, model: deepseek-v4-pro, reasoningEffort: high }
+  - { name: co-explorer, reasoningEffort: low }   # 只降档：provider/model 仍继承父会话
+```
+
+语义（依据官方 `@deepseek-ai/dsh-subagent` 的 `resolveChildAgentOptions`）：
+
+| 配置 | 子代理实际模型/强度 |
+| --- | --- |
+| 都不配 | 完全继承父会话（provider/model/强度） |
+| 只配 `provider`+`model` | 用该模型；**继承的强度会被清掉**，改用该模型的 `defaultEffort` |
+| `provider`+`model`+`reasoningEffort` | 用该模型 + 指定强度（显式值覆盖继承值） |
+| **只配 `reasoningEffort`** | provider/model 仍继承父会话，只覆盖推理强度 |
+| `provider` 当前不可用 | 完全继承（强度一并忽略，并打印告警） |
+
+- 合法档位 = 该 provider+model 在模型目录里暴露的 `models[].reasoning.efforts[].id`
+  （`ctx.remote.session.modelCatalog()` / `ctx.llm.resolveModelInfo()` 同源）。
+- 配了模型不支持的档位：DSH 会在发出请求前直接抛 `UNSUPPORTED_REASONING_EFFORT`（不做
+  clamp/alias）。本插件因此在**provider+model 都确定**时先用 `resolveModelInfo` 预校验：
+  不支持则丢弃该强度并告警（委派照常进行，按模型默认档跑）；查询不可用/抛错时放行不拦截。
+- 空串与纯空白视为「未配置」（官方设置页清空文本字段会写回 `""`）。
+- 本字段可选、无默认值：不配置时解析结果不含该键，官方表单也不会把默认档写回每条路由。
+
 ## 使用
 
 1. 主会话中让模型加载 co-orchestrator 技能（skill 工具）
@@ -143,14 +176,26 @@ dsh plugin --profile web add <monorepo>/packages/dsh-cohub
 
 ### settings 卡片
 
-**DSH 0.2 起**：本插件不再注入自定义设置卡片——官方 0.2 移除了 `settingsScope` 服务与
-`settings.plugin.item` slot，客户端模块（`src/client/index.js`）仅保留 locale 设置字典注册
-（`npm run build:client` 产物经 `npm run test:client` 验证只声明/访问 locale 服务）。
-官方设置页按活动 profile entry id 自动投影 Config 的 **volatile 字段**
-（`SettingsForms.describe()` 从真实 Loader entry 的 `fiber.runtime.Config` 投影），
-生成「CoHub」表单：12 个 skill 行 + 调度参数 + 委派重试（含停滞检测）+ 环境契约持久化——
-即原自定义卡片覆盖的全部字段，由官方表单实时提交。本包 0.5.0 仅面向 DSH 0.2，
-不支持 0.1，无旧卡片兼容分支。
+**DSH 0.2 起**：本插件**注册独立的设置页**「CoHub 代理模型」——客户端模块
+（`src/client/index.js`）向 `settings.section` slot 注册一个 section（`order: 12`，插在
+「模型」10 与「插件」15 之间），13 个代理每个一行：供应商下拉 + 模型下拉（可降级手填）。
+页面通过 `configForms` 读写 Config 的 volatile `skills` 字段（走 `mutate` 提交，携带读取时的
+revision 做冲突栅栏），因此改完保存即生效，无需重启。
+
+> 历史纠正：曾有提交（`8c34732`）删除该 UI，理由是「官方设置页会自动按 volatile 字段生成表单」。
+> 该理由**不成立**——官方 0.2 的 settings 导航与页面全部由客户端插件注册
+> （general / models / plugins / agent-presets / account 都是这么做的），官方 README 亦明说
+> 「目前没有已发布的客户端会那样渲染 volatile 字段」。另：`settingsScope` → `configForms`、
+> `settings.plugin.item` → `plugins.item` / `settings.section` 是**改名**，不是移除。
+
+`reasoningEffort` 仍通过官方表单（`SettingsForms.describe()` 从真实 Loader entry 的
+`fiber.runtime.Config` 投影）配置，在官方表单里是文本字段（档位随模型变化，静态枚举无法表达），
+留空 = 不覆盖；可填档位见上文
+[skills 字段：按代理配置推理强度](#skills-字段按代理配置推理强度reasoningeffort)。
+
+`npm run test:client`（`test/client-runtime-0.2.ts`，84 条断言）覆盖该页的渲染契约与写回契约：
+`value=""` 继承占位项、目录加载中/失败降级手填、已存值不可用时 disabled 回显、只读连接、
+revision 冲突拒绝保存、只写显式配置的代理等。本包 0.5.0 仅面向 DSH 0.2，不支持 0.1。
 
 官方表单提交后无需重启即生效：Config 的 `skills` / `schedule` / `delegateRetry` 是 `.volatile()` 字段，
 官方设置页按**活动 profile entry id** 投影这些字段，改动经 `entry.update({config})` 写入 profile patch 后，
@@ -297,6 +342,17 @@ peer 移除不再使用的 `react` / `dsh-client-connection` / `dsh-client-ui-se
 （`test/client-runtime-0.2.ts`）：执行真实构建产物 `lib/client.js` 的 ModuleLoader 注册，断言
 module id / inject 仅 locale、apply 只访问声明服务、不触碰旧 settingsScope/slot/未声明 remote
 （locale 与 window 为内存 stub，非 React 真实浏览器 UI，浏览器实测留给宿主）。
+
+**v0.5.1 变更（恢复「CoHub 代理模型」设置页）**：撤销 v0.5.0 收尾中「删除自定义设置卡片」的决定——
+该决定的理由是「官方设置页会自动按 volatile 字段生成表单」，但官方 README 明说
+「目前没有已发布的客户端会那样渲染 volatile 字段」，官方 settings 导航/页面全部由客户端插件
+注册（general / models / plugins / agent-presets / account 皆然），故该理由不成立。
+`src/client/index.js` 恢复为向 `settings.section` 注册独立设置页（`order: 12`），13 个代理的
+provider/model 双下拉经 `configForms` 读写 volatile `skills`（`mutate` + revision 冲突栅栏）；
+`dsh.client.inject` 补回 `@deepseek-ai/dsh-client-ui-settings` / `@deepseek-ai/dsh-api-remotes`
+（由宿主 web 组合提供，本包不直接依赖）；`test/client-runtime-0.2.ts` 扩为 84 条断言，
+覆盖渲染契约（`value=""` 继承占位项、目录加载中/失败降级手填、已存值不可用 disabled 回显、
+只读、冲突、保存失败）与写回契约（只写显式配置的代理、空 model 不写键、保留未知 skill 名）。
 
 > **`cohub-cordis` 因此不含 `cordis_*` 工具**（`cordis_define` / `cordis_run` / `cordis_mount` / `cordis_inspect_*`）。需要 Cordis 自指能力时，请用官方**创造模式**会话；本 preset 用于"标准能力 + cohub 委派纪律"的日常开发。
 >

@@ -9,12 +9,24 @@
         #   - { name: expert1, provider: deepseek-official, model: deepseek-v4-flash }
         councillors: []
         councilTimeoutMs: 180000
-        # skills: delegate 委派路由，按 skill 名覆盖子代理的 provider/model/maxTokens。
+        # skills: delegate 委派路由，按 skill 名覆盖子代理的 provider/model/maxTokens/reasoningEffort。
         # DSH 0.2 起本字段是 volatile：设置页按 profile entry id（cohub）投影并实时提交
         # （loader/volatile-update），无需重启；此处为组合层初始值。未配置则继承父模型。示例：
         # skills:
         #   - { name: co-fixer, provider: deepseek-official, model: deepseek-v4-flash }
         #   - { name: co-explorer, provider: deepseek-official, model: deepseek-v4-flash }
+        #
+        # reasoningEffort（推理强度，按代理差异化）：
+        #   - 合法取值由「该 provider + model 的模型目录」决定，即 modelCatalog() 中
+        #     models[].reasoning.efforts[].id（常见 low / medium / high），不是跨 provider 的固定枚举；
+        #   - 留空 = 不覆盖。provider+model 与父会话相同时沿用父会话档位；一旦换了模型，DSH 会
+        #     清掉继承的档位、改用该模型自己的 defaultEffort（官方 resolveChildAgentOptions 语义）；
+        #   - 可以只配强度、不配 provider/model：此时 provider/model 仍继承父会话，只覆盖推理强度；
+        #   - 配了当前模型不支持的档位时，DSH 会在发请求前硬失败（UNSUPPORTED_REASONING_EFFORT）。
+        #     本插件在 provider+model 都确定时会先用模型目录预校验：不支持则丢弃该强度并告警，委派照常进行。
+        # 示例：
+        #   - { name: co-oracle,   provider: deepseek-official, model: deepseek-v4-pro, reasoningEffort: high }
+        #   - { name: co-explorer, reasoningEffort: low }   # 只降档，模型仍用父会话的
         skills: []
         # delegateEnvContract: delegate 委派时是否在子代理 prompt 前注入「执行器环境契约」
         # （通用原则 + 探测式自适应，避免子代理在陌生执行环境现场盲试）。默认开；可关闭/可覆盖文本：

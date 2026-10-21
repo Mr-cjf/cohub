@@ -177,6 +177,21 @@ async function buildHost() {
   // 更新后的 batch=9 被真实读到并打印——证明 volatile 提交后下次 execute 即见新值
   const scheduleLog = logs.some(l => l.includes("[cohub schedule]") && l.includes("batch=9"));
   check("下一 execute 读到新 schedule（日志含 batch=9）", scheduleLog);
+
+  // reasoningEffort 路由：只配强度（不配 provider/model）→ 真实 SubagentRuntime 把
+  // 部分 agentOptions 转发到 provider start（provider/model 由 DSH 继承父会话）
+  await entry.update({ config: {
+    installPresets: false, councillors: [],
+    skills: [{ name: "co-fixer", reasoningEffort: "low" }],
+  } });
+  await delegate.execute(
+    { skill: "co-fixer", prompt: "任务丙" },
+    { agent: { id: "parent-1" }, signal: new AbortController().signal },
+  );
+  check("提交 reasoningEffort 后下一 execute 转发 agentOptions.reasoningEffort",
+    calls[2]?.agentOptions?.reasoningEffort === "low");
+  check("转发时不含 provider/model 键（保持继承）",
+    !("provider" in (calls[2]?.agentOptions ?? {})) && !("model" in (calls[2]?.agentOptions ?? {})));
   root.stop?.();
 }
 
@@ -201,6 +216,18 @@ async function buildHost() {
   check("value.schedule 与 config.schedule.get() 一致", JSON.stringify(row?.value?.schedule) === JSON.stringify(entry.fiber?.config?.schedule?.get?.()));
   // 旧 settings.yaml 迁移不触发：临时 home 无 settings.yaml，importLegacyDocument 直接 return
   check("未触发旧 settings.yaml 迁移（home 无该文件且未被创建）", !existsSync(join(home, "settings.yaml")));
+  // 官方设置页按序列化 schema 生成控件：schema 里必须有 reasoningEffort 才会出现可编辑字段
+  check("表单 schema 含 skills[].reasoningEffort（官方表单据此渲染该字段）",
+    JSON.stringify(row?.schema ?? {}).includes("reasoningEffort"));
+  // volatile 提交带 reasoningEffort 的路由 → describe 的 value 出现该字段（用户保存即生效）
+  await entry.update({ config: {
+    installPresets: false, councillors: [],
+    skills: [{ name: "co-oracle", provider: "p1", model: "m1", reasoningEffort: "high" }],
+  } });
+  const rowAfter = root.settings.describe().find(f => f.ns === "cohub");
+  check("提交后 describe() 的 value 带 reasoningEffort", rowAfter?.value?.skills?.[0]?.reasoningEffort === "high");
+  check("提交后 config.skills.get() 也带 reasoningEffort（同一引用）",
+    entry.fiber?.config?.skills?.get?.()[0]?.reasoningEffort === "high");
   root.stop?.();
 }
 

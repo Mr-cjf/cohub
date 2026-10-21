@@ -7,11 +7,13 @@ import { createDelegateTool } from "../src/delegate.ts";
 /** delegate 注入的特有标记：技能内容里 P0 已有「## 执行器环境契约」段落，故用带围栏的「--- … ---」区分 */
 const DELEGATE_CONTRACT_MARKER = "--- 执行器环境契约（通用原则 + 探测式自适应） ---";
 
-/** fake ctx：只提供 delegate 用到的 subagents.start / llm.listProviders / llm.listModels */
+/** fake ctx：只提供 delegate 用到的 subagents.start / llm.listProviders / llm.listModels
+ *（resolveModelInfo 可选：只有 reasoningEffort 预校验用得到） */
 function makeCtx(
   startImpl: (req: any) => any,
   providers: any[] = [],
   modelsByProvider?: Record<string, any[] | Error>,
+  resolveModelInfo?: (provider: string, model: string) => Promise<any>,
 ) {
   return {
     llm: {
@@ -25,6 +27,7 @@ function makeCtx(
         if (models instanceof Error) throw models;
         return models;
       },
+      ...(resolveModelInfo ? { resolveModelInfo } : {}),
     },
     subagents: {
       async start(_transport: string, req: any) {
@@ -238,6 +241,77 @@ function check(name: string, cond: boolean) {
   await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec());
   check("空目录 → 不传 model", captured?.agentOptions?.model === undefined);
   check("maxTokens 仍被保留", captured?.agentOptions?.maxTokens === 1234);
+}
+
+// ---- 用例 11：reasoningEffort 路由（按代理差异化推理强度） ----
+{
+  console.log("===== 用例 11：reasoningEffort 路由 =====");
+  let captured: any = null;
+  const warns: string[] = [];
+  const start = (req: any) => {
+    captured = { agentOptions: req.agentOptions };
+    return { id: "ok", result: Promise.resolve({ output: [{ type: "text", text: "OK" }], stopReason: "completed" }), dispose() {} };
+  };
+  // 模型目录：m1 支持 low/high（defaultEffort=high）；m2 完全不暴露难度档位；m3 查询抛错
+  const ctx: any = makeCtx(start, [{ id: "p1" }], { p1: [{ id: "m1", name: "m1" }] }, async (provider: string, model: string) => {
+    if (model === "m1") {
+      return { provider, id: model, name: "m1", reasoning: { efforts: [{ id: "low", name: "低" }, { id: "high", name: "高" }], defaultEffort: "high" } };
+    }
+    if (model === "m2") return { provider, id: model, name: "m2" };
+    throw new Error("resolveModelInfo boom");
+  });
+  ctx.logger = { info() {}, warn: (m: any) => warns.push(String(m)) };
+
+  // ① provider + model + reasoningEffort：全部传给子代理
+  let tool = createDelegateTool(ctx, () => [{ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "low" }]);
+  await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec());
+  check("provider/model/reasoningEffort 同时传递",
+    captured?.agentOptions?.provider === "p1" && captured?.agentOptions?.model === "m1" && captured?.agentOptions?.reasoningEffort === "low");
+
+  // ② 只配 reasoningEffort（不配 provider/model）→ 交出部分 options，provider/model 由 DSH 继承父会话
+  tool = createDelegateTool(ctx, () => [{ name: "co-explorer", reasoningEffort: "high" }]);
+  await tool.execute({ skill: "co-explorer", prompt: "任务" }, makeExec());
+  check("只配 reasoningEffort → agentOptions = { reasoningEffort }",
+    JSON.stringify(captured?.agentOptions) === JSON.stringify({ reasoningEffort: "high" }));
+  check("只配强度时不写入 provider/model 键",
+    !("provider" in (captured?.agentOptions ?? {})) && !("model" in (captured?.agentOptions ?? {})));
+
+  // ③ 目标模型不支持该档位 → fail-soft 丢弃强度 + 告警，委派照常成功
+  tool = createDelegateTool(ctx, () => [{ name: "co-planner", provider: "p1", model: "m2", reasoningEffort: "low" }]);
+  const outUnsupported = await tool.execute({ skill: "co-planner", prompt: "任务" }, makeExec());
+  check("模型无 reasoning 元数据 → 丢弃强度但保留 provider/model",
+    outUnsupported === "OK" && captured?.agentOptions?.provider === "p1"
+    && captured?.agentOptions?.model === "m2" && captured?.agentOptions?.reasoningEffort === undefined);
+  check("丢弃强度时记录告警", warns.some(w => w.includes("不支持推理强度")));
+
+  // ④ 档位不在模型 efforts 里 → 同样丢弃
+  tool = createDelegateTool(ctx, () => [{ name: "co-oracle", provider: "p1", model: "m1", reasoningEffort: "ultra" }]);
+  await tool.execute({ skill: "co-oracle", prompt: "任务" }, makeExec());
+  check("档位不在 efforts 列表 → 丢弃强度", captured?.agentOptions?.reasoningEffort === undefined);
+
+  // ⑤ 目录查询抛错（无法判定）→ 放行，不因查询失败丢用户配置
+  tool = createDelegateTool(ctx, () => [{ name: "co-oracle", provider: "p1", model: "m3", reasoningEffort: "high" }]);
+  await tool.execute({ skill: "co-oracle", prompt: "任务" }, makeExec());
+  check("resolveModelInfo 抛错 → 强度照传（fail-open）", captured?.agentOptions?.reasoningEffort === "high");
+
+  // ⑥ 空串 / 纯空白 = 未配置（设置页清空字段会写回 ""）
+  tool = createDelegateTool(ctx, () => [{ name: "co-fixer", reasoningEffort: "" }, { name: "co-explorer", reasoningEffort: "   " }]);
+  await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec());
+  check("空串 reasoningEffort 归一为未配置（不传 agentOptions）", captured?.agentOptions === undefined);
+  await tool.execute({ skill: "co-explorer", prompt: "任务" }, makeExec());
+  check("纯空白 reasoningEffort 归一为未配置", captured?.agentOptions === undefined);
+
+  // ⑦ provider 配了但不可用 + 配了强度 → 连强度一起继承（保守，避免父模型不支持的硬失败）
+  tool = createDelegateTool(ctx, () => [{ name: "co-fixer", provider: "not-available", reasoningEffort: "low" }]);
+  await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec());
+  check("provider 不可用 → 不传 agentOptions（强度一并忽略）", captured?.agentOptions === undefined);
+  check("provider 不可用时记录强度被忽略的告警", warns.some(w => w.includes("一并忽略")));
+
+  // ⑧ maxTokens 与强度并存（既有覆盖不回归）
+  tool = createDelegateTool(ctx, () => [{ name: "co-fixer", provider: "p1", model: "m1", maxTokens: 900, reasoningEffort: "high" }]);
+  await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec());
+  check("maxTokens 与 reasoningEffort 同时保留",
+    captured?.agentOptions?.maxTokens === 900 && captured?.agentOptions?.reasoningEffort === "high");
 }
 
 console.log("");

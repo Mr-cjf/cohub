@@ -38,6 +38,20 @@ const SkillRoute = z.object({
   provider: z.string(),
   model: z.string(),
   maxTokens: z.number(),
+  // 推理强度（DSH 的 ReasoningEffortId）：可选，缺省/空串 = 不覆盖。
+  //
+  // 为什么是 string 而不是 union：合法档位由「该 provider + model 的模型目录」决定
+  // （LlmModelReasoningInfo.efforts[].id，如 low / medium / high），是 adapter 拥有的
+  // 不透明字符串（dsh-llm brand.ts：ReasoningEffortId 无校验，"no validation is performed"），
+  // 不是跨 provider 的固定枚举——写死 union 会把别的 provider 的档位拒之门外。
+  //
+  // 配了当前模型不支持的档位，DSH 会在发出请求前硬失败（llm resolveCallWithInfo 抛
+  // UNSUPPORTED_REASONING_EFFORT），因此 delegate.ts 的 buildAgentOptions 会在
+  // 「已确定 provider+model」时先用 resolveModelInfo 预校验，不支持则丢弃并告警（fail-soft）。
+  //
+  // 不加 .required()：schemastery 中未 required 即可选（缺省时解析结果不含该键）；
+  // 不加 .default()：避免官方设置页把默认值强制写回每一条路由。
+  reasoningEffort: z.string().description("推理强度（如 low/medium/high；留空则按模型默认档/继承规则）"),
 });
 
 /** delegate 执行器环境契约注入配置（P1-1）：默认开、可关闭、文本可覆盖 */
@@ -124,7 +138,8 @@ export const Config = z.object({
   councilTimeoutMs: z.number().default(COUNCIL_TIMEOUT_MS),
   /** 子代理 provider（spawn 为内置进程内后端） */
   councilProvider: z.string().default("spawn"),
-  /** skill 路由表（delegate 工具）：按 skill 名覆盖 provider/model/maxTokens，缺省继承父模型。
+  /** skill 路由表（delegate 工具）：按 skill 名覆盖 provider/model/maxTokens/reasoningEffort，缺省继承父模型。
+   *  reasoningEffort 可单独配置（不配 provider/model 时只覆盖推理强度，provider/model 仍继承父会话）。
    *  volatile：DSH 0.2 起由 Loader 按活动 profile entry id 投影为设置页可编辑字段，
    *  变更经 loader/volatile-update 提交到同一引用，无需重挂载（apply 内以 config.skills.get() 实时读取）。 */
   skills: z.array(SkillRoute).default([]).volatile(),

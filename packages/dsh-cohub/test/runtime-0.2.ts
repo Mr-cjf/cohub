@@ -43,6 +43,21 @@ function check(name: string, cond: boolean) {
   // 普通字段仍是值（非 volatile）
   check("councillors 仍是普通值", Array.isArray(parsed.councillors));
   check("installPresets 仍是普通值", parsed.installPresets === true);
+
+  // ── SkillRoute.reasoningEffort（按代理差异化推理强度）──
+  const withEffort = Config({ skills: [{ name: "co-oracle", reasoningEffort: "high" }] });
+  check("skills 路由可解析 reasoningEffort", withEffort.skills.get()[0]?.reasoningEffort === "high");
+  check("reasoningEffort 可与 provider/model 并存",
+    Config({ skills: [{ name: "co-oracle", provider: "p1", model: "m1", reasoningEffort: "high" }] })
+      .skills.get()[0]?.reasoningEffort === "high");
+  const withoutEffort = Config({ skills: [{ name: "co-explorer", provider: "p1", model: "m1" }] }).skills.get()[0];
+  check("未配置 reasoningEffort 时解析结果不含该键（schemastery 可选字段）",
+    !Object.prototype.hasOwnProperty.call(withoutEffort, "reasoningEffort"));
+  // 官方设置页按 Config schema 序列化生成表单 → schema JSON 必须含该字段才会出现可编辑控件
+  check("Config schema JSON 含 reasoningEffort 字段（官方表单投影依据）",
+    JSON.stringify(Config.toJSON()).includes('"reasoningEffort"'));
+  check("reasoningEffort 带 schema 描述（表单提示用）",
+    JSON.stringify(Config.toJSON()).includes("推理强度"));
 }
 
 // ── 层 2：Volatile 引用更新（loader/volatile-update 的引用层等价）──
@@ -71,12 +86,14 @@ function check(name: string, cond: boolean) {
   let spawnCount = 0;
   let abortedOnce = false;
   let forwardedAborted = false;
+  let lastAgentOptions: any = null;
   const ctx: any = {
     logger: { info: () => {}, warn: () => {} },
     llm: { listProviders: () => [], listModels: async () => [] },
     subagents: {
       async start(_t: string, req: any) {
         spawnCount++;
+        lastAgentOptions = req?.agentOptions;
         // AbortSignal 转发链断言：父 exec.signal 已中止时应出现在子代理 start 请求中
         if (req?.signal?.aborted) forwardedAborted = true;
         if (!abortedOnce) {
@@ -125,6 +142,15 @@ function check(name: string, cond: boolean) {
   ac.abort();
   await tool.execute({ skill: "co-fixer", prompt: "任务 C" }, { agent: { id: "p" }, signal: ac.signal });
   check("已中止信号转发到子代理 start 请求", forwardedAborted);
+
+  // ⑤ reasoningEffort 路由（只配强度、不配 provider/model）经 volatile 提交后下一次 execute 生效
+  const nextEffort = Config({ skills: [{ name: "co-fixer", reasoningEffort: "low" }] });
+  updateVolatile(parsed.skills, nextEffort.skills);
+  await tool.execute({ skill: "co-fixer", prompt: "任务 D" }, { agent: { id: "p" }, signal: new AbortController().signal });
+  check("只配 reasoningEffort → 子代理 start 收到 agentOptions.reasoningEffort",
+    lastAgentOptions?.reasoningEffort === "low");
+  check("只配 reasoningEffort 时不覆盖 provider/model",
+    !("provider" in (lastAgentOptions ?? {})) && !("model" in (lastAgentOptions ?? {})));
 }
 
 // ── 层 4：真实 cordis Context + apply 挂载（stub 服务最小集）→ 插件行可挂载 ──
