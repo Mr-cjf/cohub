@@ -7,17 +7,24 @@
 // co-cordis 子代理（delegate 委派）继承父 preset 的工具面，因此在 cohub-cordis
 // 会话里的子代理也能看到并调用这些工具；在 co-orchestrator 会话里的子代理则不能。
 
-import { defineTool } from "@deepseek-ai/dsh-tools";
+import { defineTool, type ToolRunContext } from "@deepseek-ai/dsh-tools";
 
 export const name = "co-cordis-plugin";
 export const inject = ["tools", "cordisInspect", "dynamicCordisRunner"];
 
-function requireAgent(exec) {
+function requireAgent(exec: ToolRunContext) {
   if (exec.agent === void 0) throw new Error("co-cordis 工具需要 Agent 支持的会话");
   return exec.agent;
 }
 
-export function apply(ctx) {
+/**
+ * 注意：`cordisInspect` 与 `dynamicCordisRunner` 由宿主运行时提供，本地
+ * `@deepseek-ai/dsh-*` 依赖中**没有**这两个服务的类型声明（无对应包）。
+ * 因此这里只能显式标注 `ctx: any`——显式 any 比隐式 any 更诚实：它记录了
+ * 「此处类型未知」这一事实，而不是靠 noImplicitAny 报错来假装检查过。
+ * 若将来这两个服务有了 .d.ts，应改为 `Context` 强类型。
+ */
+export function apply(ctx: any) {
   // ── co_inspect_list ──────────────────────────────────────────────────
   ctx.tools.register(defineTool({
     name: "co_inspect_list",
@@ -62,7 +69,7 @@ export function apply(ctx) {
       if (args.pluginId === void 0) {
         return Promise.resolve({
           mode: "plugins",
-          plugins: ctx.dynamicCordisRunner.listPlugins(agent).map((ref) => ({
+          plugins: ctx.dynamicCordisRunner.listPlugins(agent).map((ref: any) => ({
             pluginId: String(ref.pluginId),
             name: ref.name,
             purpose: ref.purpose,
@@ -80,7 +87,7 @@ export function apply(ctx) {
           name: plugin.name,
           purpose: plugin.purpose,
           status: plugin.status,
-          packages: plugin.packages.map((pkg) => ({
+          packages: plugin.packages.map((pkg: any) => ({
             packageId: String(pkg.packageId),
             isCurrent: pkg.packageId === plugin.currentPackageId,
             isNext: pkg.packageId === plugin.nextPackageId,
@@ -185,7 +192,10 @@ export function apply(ctx) {
     name: "co_stop",
     description: "停止一个正在运行的动态 Plugin。保留其定义、版本指针与审批记录，可以后续用 co_run 重新激活或回滚。要彻底删除用 co_remove。",
     parameters: { pluginId: { type: "string", required: true, description: "要停止的 Plugin ID" } },
-    output: { schema: { type: "object", properties: { stopped: { type: "boolean" } }, additionalProperties: false } },
+    output: {
+      schema: { type: "object", properties: { stopped: { type: "boolean" } }, additionalProperties: false },
+      render: (_a, v) => [{ type: "text", text: JSON.stringify(v) }],
+    },
     async execute(args, exec) {
       await ctx.dynamicCordisRunner.stop(requireAgent(exec), args.pluginId);
       return { stopped: true };
@@ -197,7 +207,10 @@ export function apply(ctx) {
     name: "co_remove",
     description: "彻底删除一个动态 Plugin：先停止运行、取消审批请求，然后删除所有版本与授权。执行后其 pluginId、packageId 和 @ 引用全部失效。要保留版本以便重新激活用 co_stop。",
     parameters: { pluginId: { type: "string", required: true, description: "要彻底删除的 Plugin ID" } },
-    output: { schema: { type: "object", properties: { removed: { type: "boolean" } }, additionalProperties: false } },
+    output: {
+      schema: { type: "object", properties: { removed: { type: "boolean" } }, additionalProperties: false },
+      render: (_a, v) => [{ type: "text", text: JSON.stringify(v) }],
+    },
     async execute(args, exec) {
       await ctx.dynamicCordisRunner.undefine(requireAgent(exec), args.pluginId);
       return { removed: true };
