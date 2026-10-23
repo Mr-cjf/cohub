@@ -90,6 +90,16 @@ export interface DelegateConfig {
   toolFilter?: {
     enabled?: boolean;
   };
+  /** 后台 job 模式（background delegate）：默认关闭 → 完全保持前台同步行为。
+   *  开启后 delegate 把这次运行注册为 DSH 后台 job 并立即返回 jobId，
+   *  主代理用 job_output 取结果（或等完成时自动唤醒），等待期间可并行推进其他工作。
+   *  jobs 服务不可用 / start() 拒绝时自动降级回前台同步（对该次调用完全透明）。 */
+  delegateBackground?: {
+    /** 总开关；false（缺省）时即使 args.background=true 也走前台 */
+    enabled?: boolean;
+    /** 这些 skill 默认走后台（无需显式传 background: true） */
+    defaultFor?: string[];
+  };
 }
 
 /**
@@ -734,6 +744,26 @@ export function resolveOwnerSessionId(exec: any): string | undefined {
   return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
+/**
+ * 取后台任务注册表服务（`ctx.jobs`，由 @deepseek-ai/dsh-jobs-local 提供；`dsh-tool-jobs`
+ * 提供「控制器」使 `start()` 对该 owner 可用）。
+ *
+ * 取法与 result-budget 取 spillStore 完全一致：先走 ctx.get 非 inject 通道，再退到
+ * ctx.reflect.get（cordis 内置 accessor）。**绝不直接读 ctx.jobs**——包装 loader 会触发
+ * cordis 的 inject 强校验报错。都取不到时返回 undefined，由调用方降级到前台。
+ */
+export function resolveJobsService(ctx: any): any {
+  try {
+    const viaGet = typeof ctx?.get === "function" ? ctx.get("jobs") : undefined;
+    if (viaGet !== undefined && viaGet !== null) return viaGet;
+  } catch { /* 落到 reflect 通道 */ }
+  try {
+    return ctx?.reflect?.get?.("jobs", false);
+  } catch {
+    return undefined;
+  }
+}
+
 /** 子代理结果预算处理的调用参数 */
 export interface SubagentBudgetOptions {
   /** 本段字符上限 */
@@ -938,7 +968,15 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
     const scheduleCfg = settingsNow.schedule ?? config.schedule;
     // P1-3（子代理结果预算）：settings 优先，config 兜底；缺省值即生效（用户不改也能工作）
     const budget = resolveResultBudget(settingsNow.resultBudget ?? config.resultBudget);
-    return { retry, stall, schedule: scheduleCfg, budget };
+    // 后台 job 模式（background delegate）：settings 优先，config 兜底；缺省 enabled=false（行为不变）
+    const bgCfg = settingsNow.delegateBackground ?? config.delegateBackground;
+    const background = {
+      enabled: bgCfg?.enabled === true,
+      defaultFor: Array.isArray(bgCfg?.defaultFor)
+        ? bgCfg.defaultFor.filter((n: unknown): n is string => typeof n === "string" && n.length > 0)
+        : [],
+    };
+    return { retry, stall, schedule: scheduleCfg, budget, background };
   }
 
   // P3-2（N1）：环境契约持久化配置归一（默认 auto；无缓存时行为不变；读写失败静默降级）
@@ -946,7 +984,10 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
 
   return defineTool({
     name: "delegate",
-    description: "把任务委派给指定专职代理：按 skill 名路由 provider/model，自动注入该代理的精简指令后 spawn 子代理。",
+    description: "把任务委派给指定专职代理：按 skill 名路由 provider/model，自动注入该代理的精简指令后 spawn 子代理。"
+      + "默认前台同步（阻塞到子代理结束）。传 background=true（需开启 delegateBackground.enabled）时改为"
+      + "注册为 DSH 后台 job 并立即返回 jobId：用 job_output({ job_id, wait: true }) 取结果，"
+      + "或等完成时自动唤醒；等待期间可继续推进其他工作。适合长任务（预计 >2 分钟）或多路并行。",
 
     parameters: {
       skill: {
@@ -958,18 +999,23 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         required: true,
         description: "给该代理的具体任务（写全目标、相关文件路径、约束、期望输出格式）",
       },
+      background: {
+        type: "boolean",
+        description: "true=注册为 DSH 后台 job 并立即返回 jobId（需 delegateBackground.enabled 已开启；"
+          + "jobs 不可用时自动降级为前台）；false/缺省=前台同步等待结果",
+      },
     },
 
     output: DELEGATE_OUTPUT_CONFIG,
 
     isConcurrencySafe: () => true,
 
-    async execute(args: { skill: string; prompt: string }, exec: any) {
+    async execute(args: { skill: string; prompt: string; background?: boolean }, exec: any) {
       const parent = exec?.agent;
       if (!parent) throw new Error("delegate requires a calling agent (exec.agent was undefined)");
 
       // P3-3（N3）：每次调用解析生效配置（settings > config > 保守默认）；RETRYABLE 随 retryableReasons 动态
-      const { retry, stall, schedule, budget } = resolveRuntimeConfig();
+      const { retry, stall, schedule, budget, background } = resolveRuntimeConfig();
       const RETRYABLE = new Set(retry.retryableReasons);
       ctx.logger?.info?.("[cohub schedule] 生效调度参数：batch=" + (schedule?.maxParallelBatch ?? 3)
         + " wallMs=" + (schedule?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS));
@@ -1004,170 +1050,242 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       // ⑥ 中止/失败重试循环（P1-2）+ N2 停滞检测（P3-1）：
       //    默认 maxRetries=0 → 单次尝试，失败即抛错（带结构化 cause）；
       //    stall.enabled=true 时每个 attempt 挂看门狗，提前中止并计入同一 maxRetries 预算。
-      let lastReason = "unknown";
-      // P5：SubagentResult.diagnostic 原样保留（官方 run-settlement.js 用它拼错误详情）。
-      // 必须与 lastReason 分开：lastReason 参与 RETRYABLE 精确匹配，拼接会破坏重试判定。
-      let lastDiagnostic: string | undefined;
-      let lastPartial = "";
-      // P1-3：被丢弃的大段 partial 的预算内版本（只进 err.cause，不进 error.message）
-      let lastPartialBudget = "";
-      // 停滞信息经可变状态对象承载：直接 let 声明会在闭包/循环内被 TS 流分析收窄为 never
-      // （循环头声明值为 null 时，三元判断的真分支类型为 never），对象属性则保持 StallInfo | null。
-      const stallState: { last: StallInfo | null } = { last: null };
-      let retries = 0;
+      // ⑥⑦ 前台/后台共用的尝试循环：原前台路径整体内联在此闭包内，前台照旧直接调用，
+      //      后台由 job 生产者调用——同一个实现，避免两条路径行为分叉。
+      // outerSignal：前台 = exec.signal（父轮次中止转发）；后台 = job cancel 驱动的独立 signal
+      //      （后台不能沿用 exec.signal：工具返回后父轮次结束，会把子代理误杀）。
+      const runAttempts = async (outerSignal: AbortSignal | undefined): Promise<string> => {
+        let lastReason = "unknown";
+        // P5：SubagentResult.diagnostic 原样保留（官方 run-settlement.js 用它拼错误详情）。
+        // 必须与 lastReason 分开：lastReason 参与 RETRYABLE 精确匹配，拼接会破坏重试判定。
+        let lastDiagnostic: string | undefined;
+        let lastPartial = "";
+        // P1-3：被丢弃的大段 partial 的预算内版本（只进 err.cause，不进 error.message）
+        let lastPartialBudget = "";
+        // 停滞信息经可变状态对象承载：直接 let 声明会在闭包/循环内被 TS 流分析收窄为 never
+        // （循环头声明值为 null 时，三元判断的真分支类型为 never），对象属性则保持 StallInfo | null。
+        const stallState: { last: StallInfo | null } = { last: null };
+        let retries = 0;
 
-      for (let attempt = 0; attempt <= retry.maxRetries; attempt++) {
-        const stallNote = stallState.last ? "；停滞诊断：" + stallState.last.diagnostics : "";
-        const retryNote = attempt > 0
-          ? "\n\n[重试 #" + attempt + "] 上一次执行中止，原因：" + lastReason
-            + (lastDiagnostic === undefined ? "" : "；诊断：" + lastDiagnostic)
-            + "；已完成部分：" + (lastPartial || "（无）") + stallNote
-            + "。请从中断处继续，不要重复已完成步骤。"
-          : "";
-        const promptText = buildDelegatePrompt({
-          skill,
-          contractText,
-          userPrompt: args.prompt,
-          retryNote,
-        });
-
-        // N2（P3-1）：启用时自建 AbortController 并转发 exec.signal（T3：父中止 → 子中止）；
-        // 看门狗在 start 之前挂事件总线；enabled=false 时保持 P1 原路径（signal 直传，不注册监听）。
-        const ac = stall.enabled ? new AbortController() : null;
-        let onExecAbort: (() => void) | null = null;
-        const forwardAbort = () => { if (ac && !ac.signal.aborted) ac.abort(); };
-        if (ac && exec.signal) {
-          if (exec.signal.aborted) forwardAbort();
-          else { onExecAbort = forwardAbort; exec.signal.addEventListener("abort", onExecAbort, { once: true }); }
-        }
-        const signal = ac ? ac.signal : exec.signal;
-        let watchdog: StallWatchdog | null = null;
-        let stallInfo: StallInfo | null = null;
-        if (ac) {
-          watchdog = new StallWatchdog(stall, (info) => {
-            stallInfo = info;
-            ctx.logger?.info?.("[cohub stall] " + JSON.stringify(info));
-            forwardAbort();
+        for (let attempt = 0; attempt <= retry.maxRetries; attempt++) {
+          const stallNote = stallState.last ? "；停滞诊断：" + stallState.last.diagnostics : "";
+          const retryNote = attempt > 0
+            ? "\n\n[重试 #" + attempt + "] 上一次执行中止，原因：" + lastReason
+              + (lastDiagnostic === undefined ? "" : "；诊断：" + lastDiagnostic)
+              + "；已完成部分：" + (lastPartial || "（无）") + stallNote
+              + "。请从中断处继续，不要重复已完成步骤。"
+            : "";
+          const promptText = buildDelegatePrompt({
+            skill,
+            contractText,
+            userPrompt: args.prompt,
+            retryNote,
           });
-          const attached = watchdog.attach(ctx);
-          if (!attached) {
-            // 三态降级：无 session/event 事件源 → 看门狗不可用，维持现状（最终超时兜底）
-            ctx.logger?.warn?.("[cohub stall] 无 session/event 事件源，停滞检测降级为关闭（维持现状）");
+
+          // N2（P3-1）：启用时自建 AbortController 并转发 exec.signal（T3：父中止 → 子中止）；
+          // 看门狗在 start 之前挂事件总线；enabled=false 时保持 P1 原路径（signal 直传，不注册监听）。
+          const ac = stall.enabled ? new AbortController() : null;
+          let onExecAbort: (() => void) | null = null;
+          const forwardAbort = () => { if (ac && !ac.signal.aborted) ac.abort(); };
+          if (ac && outerSignal) {
+            if (outerSignal.aborted) forwardAbort();
+            else { onExecAbort = forwardAbort; outerSignal.addEventListener("abort", onExecAbort, { once: true }); }
           }
-        }
-
-        // P3-2（N1）：use="auto" 时挂独立轻量观测，累计环境契约类错误签名；
-        // 无事件源（ctx.on 缺失）自动降级（不观测不写，行为不变）。
-        let learner: EnvSignatureLearner | null = null;
-        if (envSig.use === "auto") {
-          learner = new EnvSignatureLearner({
-            fingerprint: fp,
-            confirmCount: envSig.confirmCount,
-            errorCategories: envSig.errorCategories,
-            write: (data) => writeEnvSignatures(data, envSig.cachePath),
-          });
-          if (!learner.attach(ctx)) learner = null;
-        }
-
-        // ⑦ spawn 子代理（startSubagentRun 抹平 0.2.0 start / 0.2.1 startActivation；
-        //    provider 参数是 transport 名，固定 "spawn"；agentOptions.provider 才是 LLM 供应商名，别搞混）
-        let run: any;
-        try {
-          run = await startSubagentRun(ctx, DEFAULT_SPAWN_TRANSPORT, {
-            label: "delegate:" + args.skill,
-            prompt: [{ type: "text", text: promptText }],
-            parent,
-            persona: DELEGATE_PERSONA,
-            // P1-1：工具表裁剪（undefined 时不透传，等价于全量工具）
-            ...(toolFilter !== undefined ? { toolFilter } : {}),
-            ...(agentOptions ? { agentOptions } : {}),
-            signal,
-          });
-        } catch (error) {
-          // T3：spawn 前/期间中止（prePublicationAbort）可能使 start() 抛错——归一为 aborted 处理
-          if (watchdog) watchdog.detach();
-          if (learner) learner.detach();
-          if (onExecAbort && exec.signal) exec.signal.removeEventListener("abort", onExecAbort);
-          if (ac?.signal.aborted) {
-            lastReason = "aborted";
-            lastDiagnostic = undefined;
-            lastPartial = "";
-            stallState.last = stallInfo;
-            if (!RETRYABLE.has(lastReason) || attempt >= retry.maxRetries) break;
-            retries++;
-            await new Promise(r => setTimeout(r, retry.retryDelayMs));
-            continue;
-          }
-          throw error;
-        }
-        if (watchdog) watchdog.bind(run.id);
-        if (learner) learner.bind(run.id);
-        run.result.catch(() => {}); // dispose 后的拒绝不产生 unhandledRejection
-        let outcome: any;
-        try {
-          outcome = await run.result;
-        } finally {
-          if (learner) {
-            if (learner.flush()) {
-              ctx.logger?.info?.("[cohub envsig] 写入环境契约缓存（确认 " + envSig.confirmCount + " 次一致签名）");
+          const signal = ac ? ac.signal : outerSignal;
+          let watchdog: StallWatchdog | null = null;
+          let stallInfo: StallInfo | null = null;
+          if (ac) {
+            watchdog = new StallWatchdog(stall, (info) => {
+              stallInfo = info;
+              ctx.logger?.info?.("[cohub stall] " + JSON.stringify(info));
+              forwardAbort();
+            });
+            const attached = watchdog.attach(ctx);
+            if (!attached) {
+              // 三态降级：无 session/event 事件源 → 看门狗不可用，维持现状（最终超时兜底）
+              ctx.logger?.warn?.("[cohub stall] 无 session/event 事件源，停滞检测降级为关闭（维持现状）");
             }
-            learner.detach();
           }
-          if (watchdog) watchdog.detach();
-          if (onExecAbort && exec.signal) exec.signal.removeEventListener("abort", onExecAbort);
-          try { run.dispose(); } catch { /* 已释放 */ }
+
+          // P3-2（N1）：use="auto" 时挂独立轻量观测，累计环境契约类错误签名；
+          // 无事件源（ctx.on 缺失）自动降级（不观测不写，行为不变）。
+          let learner: EnvSignatureLearner | null = null;
+          if (envSig.use === "auto") {
+            learner = new EnvSignatureLearner({
+              fingerprint: fp,
+              confirmCount: envSig.confirmCount,
+              errorCategories: envSig.errorCategories,
+              write: (data) => writeEnvSignatures(data, envSig.cachePath),
+            });
+            if (!learner.attach(ctx)) learner = null;
+          }
+
+          // ⑦ spawn 子代理（startSubagentRun 抹平 0.2.0 start / 0.2.1 startActivation；
+          //    provider 参数是 transport 名，固定 "spawn"；agentOptions.provider 才是 LLM 供应商名，别搞混）
+          let run: any;
+          try {
+            run = await startSubagentRun(ctx, DEFAULT_SPAWN_TRANSPORT, {
+              label: "delegate:" + args.skill,
+              prompt: [{ type: "text", text: promptText }],
+              parent,
+              persona: DELEGATE_PERSONA,
+              // P1-1：工具表裁剪（undefined 时不透传，等价于全量工具）
+              ...(toolFilter !== undefined ? { toolFilter } : {}),
+              ...(agentOptions ? { agentOptions } : {}),
+              signal,
+            });
+          } catch (error) {
+            // T3：spawn 前/期间中止（prePublicationAbort）可能使 start() 抛错——归一为 aborted 处理
+            if (watchdog) watchdog.detach();
+            if (learner) learner.detach();
+            if (onExecAbort && outerSignal) outerSignal.removeEventListener("abort", onExecAbort);
+            if (ac?.signal.aborted) {
+              lastReason = "aborted";
+              lastDiagnostic = undefined;
+              lastPartial = "";
+              stallState.last = stallInfo;
+              if (!RETRYABLE.has(lastReason) || attempt >= retry.maxRetries) break;
+              retries++;
+              await new Promise(r => setTimeout(r, retry.retryDelayMs));
+              continue;
+            }
+            throw error;
+          }
+          if (watchdog) watchdog.bind(run.id);
+          if (learner) learner.bind(run.id);
+          run.result.catch(() => {}); // dispose 后的拒绝不产生 unhandledRejection
+          let outcome: any;
+          try {
+            outcome = await run.result;
+          } finally {
+            if (learner) {
+              if (learner.flush()) {
+                ctx.logger?.info?.("[cohub envsig] 写入环境契约缓存（确认 " + envSig.confirmCount + " 次一致签名）");
+              }
+              learner.detach();
+            }
+            if (watchdog) watchdog.detach();
+            if (onExecAbort && outerSignal) outerSignal.removeEventListener("abort", onExecAbort);
+            try { run.dispose(); } catch { /* 已释放 */ }
+          }
+
+          if (outcome?.stopReason === "completed") {
+            // P1-3：结果先经「契约保留 + 预算裁剪 + 落盘定位」再回传，
+            // 避免子代理全文永久驻留父会话历史并被每轮重发。
+            return await budgetSubagentResult(ctx, exec, contentText(outcome.output), {
+              maxChars: budget.maxChars,
+              scope: "delegate",
+              label: args.skill,
+              enabled: budget.enabled,
+            });
+          }
+          lastReason = String(outcome?.stopReason ?? "unknown");
+          lastDiagnostic = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
+          const partialRaw = contentText(outcome?.output ?? []);
+          // 保留既有 slice(0, 500) 行为（error.message 与 retryNote 用它，绝不加长）
+          lastPartial = partialRaw.slice(0, 500);
+          // P1-3：被丢弃的大段 partial 也走同一个预算函数（上限更小，且**不落盘**——
+          // 失败路径不额外引入失败点，也不产生无谓 I/O）；只进 cause，不进模型上下文
+          lastPartialBudget = budget.enabled && partialRaw.length > budget.partialMaxChars
+            ? applyResultBudget(partialRaw, {
+              maxChars: budget.partialMaxChars,
+              scope: "delegate:partial",
+              label: args.skill,
+              locatorFallback: "未落盘（失败路径不写盘）",
+            }).text
+            : partialRaw;
+          stallState.last = stallInfo;
+          // N2：停滞触发的中止仅在 recoverable=true 时按可重试中止处理；否则直接失败
+          if (stallInfo && !stall.recoverable) break;
+          if (!RETRYABLE.has(lastReason) || attempt >= retry.maxRetries) break;
+          retries++;
+          await new Promise(r => setTimeout(r, retry.retryDelayMs));
         }
 
-        if (outcome?.stopReason === "completed") {
-          // P1-3：结果先经「契约保留 + 预算裁剪 + 落盘定位」再回传，
-          // 避免子代理全文永久驻留父会话历史并被每轮重发。
-          return await budgetSubagentResult(ctx, exec, contentText(outcome.output), {
-            maxChars: budget.maxChars,
-            scope: "delegate",
-            label: args.skill,
-            enabled: budget.enabled,
-          });
+        // ⑧ 重试耗尽（或不可重试）：抛错并回传结构化 cause（通用，不依赖任何环境枚举）
+        const err: any = new Error(
+          'delegate: subagent stopped with reason "' + lastReason + '" after ' + retries + ' retry(ies)'
+          + (lastDiagnostic === undefined ? "" : "; diagnostic: " + lastDiagnostic)
+          + (stallState.last ? "; stalled: " + stallState.last.diagnostics : "")
+          + "; partial: " + lastPartial,
+        );
+        err.cause = {
+          stopReason: lastReason,
+          ...(lastDiagnostic === undefined ? {} : { diagnostic: lastDiagnostic }),
+          partial: lastPartial,
+          ...(lastPartialBudget === lastPartial ? {} : { partialBudget: lastPartialBudget }),
+          skill: args.skill,
+          retries,
+          ...(stallState.last ? { stall: stallState.last } : {}),
+        };
+        throw err;
+      };
+
+      // ⑦b 后台模式（background delegate）：把这次运行注册为 DSH 后台 job 并立即返回 jobId。
+      //      - 缺省 enabled=false → 完全走原前台路径，行为不变（向后兼容）；
+      //      - jobs 服务缺失 / start() 拒绝（无 job controller 服务该 owner、超出每 owner 并发
+      //        上限 10、owner 不是存活 Agent 实例…）→ warn + 回退前台（降级对标快调用完全透明）。
+      const bgWanted = typeof args.background === "boolean"
+        ? args.background
+        : background.defaultFor.includes(skill.name);
+      if (bgWanted && background.enabled) {
+        const jobs = resolveJobsService(ctx);
+        if (jobs !== undefined && typeof jobs.start === "function") {
+          // job cancel / owner 释放 → abort 子代理；子代理 run.dispose() 由 runAttempts 的
+          // finally 保证（run.result 结算后必执行），因此 kill 路径不泄漏子代理。
+          const cancelAc = new AbortController();
+          let jobId: string | undefined;
+          try {
+            const started = jobs.start({
+              kind: "delegate",
+              label: skill.name + ": " + String(args.prompt ?? "").slice(0, 60),
+              // owner 必须是存活的 Agent 实例：jobs-local 用 agents.get(owner.id) === owner 校验
+              // （lib/index.js:398），并用 owner.ctx 做 scope 分层（servesOwner，:281）。
+              // exec.agent 正是这个实例（同一对象也作为 spawn 的 parent）。
+              owner: parent,
+              // outputLimitBytes 只在**渲染期**截断（保尾丢头）；结果已由 budgetSubagentResult
+              // 裁到 budget.maxChars，这里给足余量以保证头部契约段不被吃掉。
+              outputLimitBytes: Math.max(65_536, budget.maxChars * 4),
+              run: () => {
+                const done = (async () => {
+                  try {
+                    // 结果先过 cohub 的 result-budget（含 spill locator）再写 job.output，
+                    // 否则 outputLimitBytes 渲染期截断会把 locator 一起截掉。
+                    const text = await runAttempts(cancelAc.signal);
+                    return { status: "completed", output: text };
+                  } catch (error) {
+                    // job 被 kill → 生产方按 killed 结算（jobs-local settle 为 first-wins，
+                    // 终端状态由生产方给出，不由注册表改写）。
+                    if (cancelAc.signal.aborted) {
+                      return { status: "killed", detail: "delegate 已取消（job_kill / owner 释放）" };
+                    }
+                    return { status: "failed", output: "", detail: String(error) };
+                  }
+                })();
+                return {
+                  cancel: () => { try { cancelAc.abort(); } catch { /* 已中止 */ } },
+                  done,
+                };
+              },
+            });
+            if (typeof started === "string" && started.length > 0) jobId = started;
+          } catch (error) {
+            ctx.logger?.warn?.("[cohub background] background delegate 不可用，回退前台：" + String(error));
+          }
+          if (jobId !== undefined) {
+            ctx.logger?.info?.("[cohub background] delegate 已注册为后台 job：" + jobId + "（skill=" + skill.name + "）");
+            return "已在后台启动：" + skill.name + "（job: " + jobId + "）。"
+              + "取结果：job_output({ job_id: \"" + jobId + "\", wait: true })；"
+              + "或等自动唤醒（job 完成且你空闲时会自动开新一轮，最多连续 3 次）。"
+              + "等待期间可以继续派发别的任务或推进其他工作。";
+          }
+        } else {
+          ctx.logger?.warn?.("[cohub background] jobs 服务不可用（本组合未加载 dsh-jobs / dsh-tool-jobs），回退前台");
         }
-        lastReason = String(outcome?.stopReason ?? "unknown");
-        lastDiagnostic = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
-        const partialRaw = contentText(outcome?.output ?? []);
-        // 保留既有 slice(0, 500) 行为（error.message 与 retryNote 用它，绝不加长）
-        lastPartial = partialRaw.slice(0, 500);
-        // P1-3：被丢弃的大段 partial 也走同一个预算函数（上限更小，且**不落盘**——
-        // 失败路径不额外引入失败点，也不产生无谓 I/O）；只进 cause，不进模型上下文
-        lastPartialBudget = budget.enabled && partialRaw.length > budget.partialMaxChars
-          ? applyResultBudget(partialRaw, {
-            maxChars: budget.partialMaxChars,
-            scope: "delegate:partial",
-            label: args.skill,
-            locatorFallback: "未落盘（失败路径不写盘）",
-          }).text
-          : partialRaw;
-        stallState.last = stallInfo;
-        // N2：停滞触发的中止仅在 recoverable=true 时按可重试中止处理；否则直接失败
-        if (stallInfo && !stall.recoverable) break;
-        if (!RETRYABLE.has(lastReason) || attempt >= retry.maxRetries) break;
-        retries++;
-        await new Promise(r => setTimeout(r, retry.retryDelayMs));
       }
 
-      // ⑧ 重试耗尽（或不可重试）：抛错并回传结构化 cause（通用，不依赖任何环境枚举）
-      const err: any = new Error(
-        'delegate: subagent stopped with reason "' + lastReason + '" after ' + retries + ' retry(ies)'
-        + (lastDiagnostic === undefined ? "" : "; diagnostic: " + lastDiagnostic)
-        + (stallState.last ? "; stalled: " + stallState.last.diagnostics : "")
-        + "; partial: " + lastPartial,
-      );
-      err.cause = {
-        stopReason: lastReason,
-        ...(lastDiagnostic === undefined ? {} : { diagnostic: lastDiagnostic }),
-        partial: lastPartial,
-        ...(lastPartialBudget === lastPartial ? {} : { partialBudget: lastPartialBudget }),
-        skill: args.skill,
-        retries,
-        ...(stallState.last ? { stall: stallState.last } : {}),
-      };
-      throw err;
+      // 前台同步路径：与加入后台模式之前完全一致
+      return await runAttempts(exec.signal);
     },
   });
 }

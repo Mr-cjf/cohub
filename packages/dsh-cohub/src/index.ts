@@ -154,6 +154,19 @@ const ResultBudgetConfig = z.object({
   warnMessageTokens: z.number().default(DEFAULT_CONTEXT_WARN_TOKENS),
 }).default({});
 
+/** delegate 后台 job 模式（background delegate）：默认关闭 = 完全保持前台同步行为。
+ *  开启后 delegate spawn 完子代理即把这次运行注册为 DSH 后台 job 并**立即返回 jobId**，
+ *  主代理用 job_output({ job_id, wait: true }) 取结果，或等完成时的自动唤醒；
+ *  等待期间可以并行推进其他工作。jobs 服务不可用 / start() 拒绝时自动降级回前台同步，
+ *  降级对该次调用完全透明（绝不因后台不可用而失败）。
+ *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
+const DelegateBackgroundConfig = z.object({
+  /** 总开关；默认 false（不改现有行为） */
+  enabled: z.boolean().default(false),
+  /** 默认走后台的 skill 名列表（如 ["co-explorer"]）；空数组 = 仅显式 background: true 才走后台 */
+  defaultFor: z.array(z.string()).default([]),
+}).default({});
+
 /** P1-1 子代理工具表裁剪（按角色 deny 裁剪子代理继承的工具表）。
  *  默认开启：把只读代理用不到的 write/pwsh、写类代理不该有的再委派工具从子代理
  *  工具表里裁掉（每请求省下数千 schema tokens）。裁剪被服务端拒绝时自动回退全量
@@ -190,6 +203,9 @@ export const Config = z.object({
   /** 子代理结果预算（P1-3）：单次/批单任务/批总量上限与总开关；默认值即生效。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
   resultBudget: ResultBudgetConfig.volatile(),
+  /** delegate 后台 job 模式：默认关闭；开启后 delegate 立即返回 jobId，主代理轮询 job_output。
+   *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
+  delegateBackground: DelegateBackgroundConfig.volatile(),
   /** 子代理工具表裁剪（P1-1）：按角色 deny 裁剪，默认开启，失败自动回退全量工具 */
   toolFilter: ToolFilterConfig,
   /** 是否把内置 agent preset 安装/升级到用户 preset root（~/.dsh/.agent-presets/）。
@@ -198,7 +214,7 @@ export const Config = z.object({
   installPresets: z.boolean().default(true),
 });
 
-export { ScheduleConfig, ResultBudgetConfig, CohubSettingsSchema };
+export { ScheduleConfig, ResultBudgetConfig, DelegateBackgroundConfig, CohubSettingsSchema };
 /** 兼容/测试导出：preset 安装台账与递归复制（实现位于 preset-install.ts） */
 export { copyTree, installShippedPresets, hashTree, removeInstallRecord } from "./preset-install";
 
@@ -218,6 +234,7 @@ const CohubSettingsSchema = z.object({
   schedule: ScheduleConfig,
   delegateRetry: DelegateRetry,
   resultBudget: ResultBudgetConfig,
+  delegateBackground: DelegateBackgroundConfig,
 });
 
 /** 本包内置的 agent preset 目录（随 files 字段打包进 npm 包） */
@@ -290,6 +307,7 @@ export function apply(ctx: any, config: any) {
     schedule: config.schedule.get(),
     delegateRetry: config.delegateRetry.get(),
     resultBudget: config.resultBudget.get(),
+    delegateBackground: config.delegateBackground.get(),
   });
   const currentSkills = () => config.skills.get();
 
