@@ -95,9 +95,11 @@ export interface DelegateConfig {
    *  主代理用 job_output 取结果（或等完成时自动唤醒），等待期间可并行推进其他工作。
    *  jobs 服务不可用 / start() 拒绝时自动降级回前台同步（对该次调用完全透明）。 */
   delegateBackground?: {
-    /** 总开关；false（缺省）时即使 args.background=true 也走前台 */
+    /** 缺省判定总开关：**只影响「未显式传 background」的那一档**
+     *  （enabled && defaultFor 命中 → 后台）。显式 args.background=true 永远强制后台，
+     *  false 永远强制前台，都不看本字段。 */
     enabled?: boolean;
-    /** 这些 skill 默认走后台（无需显式传 background: true） */
+    /** 这些 skill 在「未显式传 background」时默认走后台 */
     defaultFor?: string[];
   };
 }
@@ -985,9 +987,10 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
   return defineTool({
     name: "delegate",
     description: "把任务委派给指定专职代理：按 skill 名路由 provider/model，自动注入该代理的精简指令后 spawn 子代理。"
-      + "默认前台同步（阻塞到子代理结束）。传 background=true（需开启 delegateBackground.enabled）时改为"
-      + "注册为 DSH 后台 job 并立即返回 jobId：用 job_output({ job_id, wait: true }) 取结果，"
-      + "或等完成时自动唤醒；等待期间可继续推进其他工作。适合长任务（预计 >2 分钟）或多路并行。",
+      + "默认前台同步（阻塞到子代理结束）。background 三档语义：true=强制后台（显式指令，不看配置）；"
+      + "false=强制前台；缺省=按配置（delegateBackground.enabled && skill 命中 defaultFor）。后台化后立即返回 jobId，"
+      + "用 job_output({ job_id, wait: true }) 取结果，或等完成时自动唤醒；等待期间可继续推进其他工作。"
+      + "jobs 服务不可用 / start() 拒绝时一律降级前台。适合长任务（预计 >3 分钟）或多路并行。",
 
     parameters: {
       skill: {
@@ -1001,8 +1004,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       },
       background: {
         type: "boolean",
-        description: "true=注册为 DSH 后台 job 并立即返回 jobId（需 delegateBackground.enabled 已开启；"
-          + "jobs 不可用时自动降级为前台）；false/缺省=前台同步等待结果",
+        description: "true=强制后台（显式指令，不看 delegateBackground.enabled，注册为 DSH 后台 job 并立即返回 jobId）；"
+          + "false=强制前台同步等待（不看 defaultFor）；缺省=按配置（enabled && 该 skill 在 defaultFor 中）。"
+          + "jobs 不可用时一律自动降级为前台",
       },
     },
 
@@ -1222,13 +1226,16 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       };
 
       // ⑦b 后台模式（background delegate）：把这次运行注册为 DSH 后台 job 并立即返回 jobId。
-      //      - 缺省 enabled=false → 完全走原前台路径，行为不变（向后兼容）；
-      //      - jobs 服务缺失 / start() 拒绝（无 job controller 服务该 owner、超出每 owner 并发
-      //        上限 10、owner 不是存活 Agent 实例…）→ warn + 回退前台（降级对标快调用完全透明）。
-      const bgWanted = typeof args.background === "boolean"
-        ? args.background
-        : background.defaultFor.includes(skill.name);
-      if (bgWanted && background.enabled) {
+      //      三档语义（显式传参永远优先于配置）：
+      //        args.background === true  → 强制后台（显式指令，不看 delegateBackground.enabled）
+      //        args.background === false → 强制前台（不看 defaultFor）
+      //        args.background 缺省      → 看 config：enabled && defaultFor.includes(skill)
+      //      （缺省 enabled=false 时即完全走原前台路径，行为不变、向后兼容）
+      //      兜底：jobs 服务缺失 / start() 拒绝（无 job controller 服务该 owner、超出每 owner
+      //      并发上限 10、owner 不是存活 Agent 实例…）→ warn + 回退前台（对快调用完全透明）。
+      const bgWanted = args.background === true
+        || (args.background === undefined && background.enabled && background.defaultFor.includes(skill.name));
+      if (bgWanted) {
         const jobs = resolveJobsService(ctx);
         if (jobs !== undefined && typeof jobs.start === "function") {
           // job cancel / owner 释放 → abort 子代理；子代理 run.dispose() 由 runAttempts 的
