@@ -18,6 +18,14 @@ import { createCouncilTool } from "./council";
 import { createDelegateTool } from "./delegate";
 import { createDelegateBatchTool } from "./delegate_batch.ts";
 import { COUNCIL_TIMEOUT_MS, WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
+import {
+  DEFAULT_BATCH_TASK_CHARS,
+  DEFAULT_BATCH_TOTAL_CHARS,
+  DEFAULT_CONTEXT_WARN_TOKENS,
+  DEFAULT_DELEGATE_RESULT_CHARS,
+  DEFAULT_PARTIAL_BUDGET_CHARS,
+  resolveResultBudget,
+} from "./result-budget.ts";
 
 import { DEFAULT_ERROR_CATEGORIES } from "./env-signatures";
 
@@ -128,6 +136,32 @@ const ScheduleConfig = z.object({
   wallClockBudgetMs: z.number().default(WALL_CLOCK_BUDGET_MS),
 }).default({});
 
+/** P1-3（子代理结果预算）：契约保留 + 预算裁剪 + 落盘定位。
+ *  全部字段内建默认值 → 用户不改也能生效；enabled=false 完全回到「全文回传」的旧行为。
+ *  字符上限按 3 字符/token 折算：6000 字符 ≈ 2000 tokens（父会话每轮都要重发，故取小预算）。 */
+const ResultBudgetConfig = z.object({
+  /** 是否启用结果预算裁剪；默认 true */
+  enabled: z.boolean().default(true),
+  /** delegate 单次子代理结果上限（字符） */
+  maxChars: z.number().default(DEFAULT_DELEGATE_RESULT_CHARS),
+  /** 失败路径 partial 的预算上限（字符）；只进 err.cause，不进模型上下文 */
+  partialMaxChars: z.number().default(DEFAULT_PARTIAL_BUDGET_CHARS),
+  /** delegate_batch 单个任务结果上限（字符） */
+  batchTaskMaxChars: z.number().default(DEFAULT_BATCH_TASK_CHARS),
+  /** delegate_batch 拼装后总串上限（字符） */
+  batchTotalMaxChars: z.number().default(DEFAULT_BATCH_TOTAL_CHARS),
+  /** 预算守卫告警阈值（消息体量 tokens）；超过只 warn，绝不阻断 agent loop */
+  warnMessageTokens: z.number().default(DEFAULT_CONTEXT_WARN_TOKENS),
+}).default({});
+
+/** P1-1 子代理工具表裁剪（按角色 deny 裁剪子代理继承的工具表）。
+ *  默认开启：把只读代理用不到的 write/pwsh、写类代理不该有的再委派工具从子代理
+ *  工具表里裁掉（每请求省下数千 schema tokens）。裁剪被服务端拒绝时自动回退全量
+ *  工具，只留一行 warn——绝不因此阻断委派。 */
+const ToolFilterConfig = z.object({
+  enabled: z.boolean().default(true),
+}).default({});
+
 export const name = "cohub";
 export const inject = ["systemPrompt", "skills", "tools", "sessionProjections", "llm", "subagents"];
 
@@ -153,13 +187,18 @@ export const Config = z.object({
   /** 调度参数（P3-3/N3）：批大小 / 墙钟预算 / job 跟踪 / 批间自适应；settings 可覆盖。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
   schedule: ScheduleConfig.volatile(),
+  /** 子代理结果预算（P1-3）：单次/批单任务/批总量上限与总开关；默认值即生效。
+   *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
+  resultBudget: ResultBudgetConfig.volatile(),
+  /** 子代理工具表裁剪（P1-1）：按角色 deny 裁剪，默认开启，失败自动回退全量工具 */
+  toolFilter: ToolFilterConfig,
   /** 是否把内置 agent preset 安装/升级到用户 preset root（~/.dsh/.agent-presets/）。
    *  默认 true。设为 false 后本插件不再动该目录（已安装的 preset 不会自动删除，
    *  需要时手动清理 ~/.dsh/.agent-presets/ 下对应目录）。 */
   installPresets: z.boolean().default(true),
 });
 
-export { ScheduleConfig, CohubSettingsSchema };
+export { ScheduleConfig, ResultBudgetConfig, CohubSettingsSchema };
 /** 兼容/测试导出：preset 安装台账与递归复制（实现位于 preset-install.ts） */
 export { copyTree, installShippedPresets, hashTree, removeInstallRecord } from "./preset-install";
 
@@ -178,6 +217,7 @@ const CohubSettingsSchema = z.object({
   skills: z.array(SkillRoute).default([]),
   schedule: ScheduleConfig,
   delegateRetry: DelegateRetry,
+  resultBudget: ResultBudgetConfig,
 });
 
 /** 本包内置的 agent preset 目录（随 files 字段打包进 npm 包） */
@@ -249,6 +289,7 @@ export function apply(ctx: any, config: any) {
     skills: config.skills.get(),
     schedule: config.schedule.get(),
     delegateRetry: config.delegateRetry.get(),
+    resultBudget: config.resultBudget.get(),
   });
   const currentSkills = () => config.skills.get();
 
@@ -266,6 +307,7 @@ export function apply(ctx: any, config: any) {
     delegateEnvContract: config.delegateEnvContract,
     delegateRetry: config.delegateRetry,
     envSignatures: config.envSignatures,
+    toolFilter: config.toolFilter,
   }, () => currentSettings()));
 
   // ④c delegate_batch 工具（批量并行委派）：一次调用并行启动多个子代理
@@ -275,6 +317,7 @@ export function apply(ctx: any, config: any) {
     delegateEnvContract: config.delegateEnvContract,
     delegateRetry: config.delegateRetry,
     envSignatures: config.envSignatures,
+    toolFilter: config.toolFilter,
   }, () => currentSettings()));
 
 // ④b 调度参数注入：已移除（2026-09-01）。
@@ -300,18 +343,30 @@ export function apply(ctx: any, config: any) {
     ));
   }
 
-  // ⑥ tokenMeter：把「当前 agent 的系统提示 + 工具 schema」的 token 用量输出到诊断日志
-  //    监听 session/event 的 request/header 事件，读取 sessionProjections 的 contextBreakdown；
+  // ⑥ tokenMeter + 预算守卫（P2-1）
+  //    监听 session/event 的 request/header 事件，读取 sessionProjections 的 contextBreakdown：
+  //    ① 始终输出 token 诊断日志（既有行为）；
+  //    ② 消息体量超过阀值时额外打一条带数字的中文告警——**只告警，绝不阻断**（平台没有
+  //       能阻断 agent loop 的公共 API）；不新增工具、不写进模型上下文，故模型可见行为不变。
   //    effect 返回 off，插件卸载时自动撤销监听。
   ctx.effect(() => {
     const off = ctx.on("session/event", (session: any, event: any) => {
       if (event.type !== "request/header") return;
       const snap = ctx.sessionProjections.snapshot(session);
       const cb = snap.values.contextBreakdown;
-      if (cb) {
-        const total = cb.systemTokens + cb.toolsTokens + cb.messageTokens;
-        ctx.logger.info("[cohub token] session=" + session.id + " system=" + cb.systemTokens + " tools=" + cb.toolsTokens + " messages=" + cb.messageTokens + " total=" + total);
-      }
+      if (!cb) return;
+      const total = cb.systemTokens + cb.toolsTokens + cb.messageTokens;
+      ctx.logger.info("[cohub token] session=" + session.id + " system=" + cb.systemTokens + " tools=" + cb.toolsTokens + " messages=" + cb.messageTokens + " total=" + total);
+
+      const guard = resolveResultBudget(config.resultBudget.get());
+      if (!guard.enabled) return;
+      if (cb.messageTokens <= guard.warnMessageTokens) return;
+      ctx.logger.warn(
+        "[cohub budget] 上下文告警：会话 " + session.id + " 的消息体量 " + cb.messageTokens
+        + " tokens 超过阀值 " + guard.warnMessageTokens + " tokens（system " + cb.systemTokens
+        + " + tools " + cb.toolsTokens + " + messages " + cb.messageTokens + " = total " + total
+        + "）；建议精简历史或调小 resultBudget.maxChars（子代理结果每轮都会被重发）。仅告警，不阻断。",
+      );
     });
     return off;
   }, "cohub.tokenMeter()");

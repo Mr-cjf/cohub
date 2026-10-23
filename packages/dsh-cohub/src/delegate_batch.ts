@@ -6,10 +6,12 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import {
   resolveSkillAndRoute,
   buildAgentOptions,
+  budgetSubagentResult,
   resolveContractText,
   buildDelegatePrompt,
   createEnvContract,
   createEnvSig,
+  resolveSkillToolFilter,
   DELEGATE_PERSONA,
   DEFAULT_SPAWN_TRANSPORT,
   startSubagentRun,
@@ -18,6 +20,7 @@ import {
   type DelegateConfig,
   type SkillRouteConfig,
 } from "./delegate.ts";
+import { applyResultBudget, approxTokens, resolveResultBudget } from "./result-budget.ts";
 import type { CoHubSkill } from "./skills.ts";
 import { contentText } from "./text-utils.ts";
 import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
@@ -68,9 +71,15 @@ export function createDelegateBatchTool(
     // maxParallelBatch：从 settings 读取（默认 3），与硬上限 MAX_BATCH_SIZE 取小值；
     // 保留 MAX_BATCH_SIZE 作为绝对安全上限（防止配置错误导致超量并行）。
     const rawMaxParallel = Math.max(1, scheduleCfg?.maxParallelBatch ?? 3);
+    // P1-3（子代理结果预算）：settings 优先，config 兜底；缺省值即生效
+    const budget = resolveResultBudget(settingsNow.resultBudget ?? config.resultBudget);
+    // P1-1（子代理工具表裁剪）：默认开启；settings 未提供时回落 config
+    const toolFilterEnabled = (settingsNow.toolFilter ?? config.toolFilter)?.enabled ?? true;
     return {
       wallClockBudgetMs: Math.max(0, scheduleCfg?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS),
       maxParallelBatch: Math.min(rawMaxParallel, MAX_BATCH_SIZE),
+      budget,
+      toolFilterEnabled,
     };
   }
 
@@ -103,7 +112,7 @@ export function createDelegateBatchTool(
       const parent = exec?.agent;
       if (!parent) throw new Error("delegate_batch requires a calling agent (exec.agent was undefined)");
 
-      const { wallClockBudgetMs, maxParallelBatch } = resolveRuntimeConfig();
+      const { wallClockBudgetMs, maxParallelBatch, budget, toolFilterEnabled } = resolveRuntimeConfig();
       const tasks = args.tasks ?? [];
 
       if (tasks.length === 0) {
@@ -131,7 +140,9 @@ export function createDelegateBatchTool(
             contractText,
             userPrompt: task.prompt,
           });
-          const agentOptions = await buildAgentOptions(route, ctx);
+          const agentOptions = await buildAgentOptions(route, ctx, skill.name);
+          // P1-1：按角色裁剪子代理工具表（deny 减法；构造失败已 fail-soft 成全量工具）
+          const toolFilter = resolveSkillToolFilter(skill.name, toolFilterEnabled, ctx.logger);
 
           // 每个 task 独立的 AbortController
           const ac = new AbortController();
@@ -152,6 +163,8 @@ export function createDelegateBatchTool(
               prompt: [{ type: "text", text: promptText }],
               parent,
               persona: DELEGATE_PERSONA,
+              // P1-1：工具表裁剪（undefined 时不透传，等价于全量工具）
+              ...(toolFilter !== undefined ? { toolFilter } : {}),
               ...(agentOptions ? { agentOptions } : {}),
               signal: ac.signal,
             });
@@ -221,11 +234,19 @@ export function createDelegateBatchTool(
             ]);
 
             if (outcome?.stopReason === "completed") {
+              // P1-3：每个任务结果先各自预算裁剪（超预算时落盘定位），之后才参与总串拼接
+              const resultText = await budgetSubagentResult(ctx, exec, contentText(outcome.output), {
+                maxChars: budget.batchTaskMaxChars,
+                scope: "batch:task",
+                label: taskId + ":" + task.skill,
+                enabled: budget.enabled,
+                toolName: "delegate_batch",
+              });
               results.push({
                 id: taskId,
                 skill: task.skill,
                 status: "completed",
-                result: contentText(outcome.output),
+                result: resultText,
               });
             } else {
               const diag = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
@@ -285,6 +306,23 @@ export function createDelegateBatchTool(
           if (r.diagnostic) output += `diagnostic: ${r.diagnostic}\n`;
           output += "\n";
         }
+      }
+
+      // P1-3：拼装后对总串再做一次总体预算（**不落盘**——各任务全文已各自落盘，
+      // 重复写盘只产生无用副本）；失败任务保持上面的简短格式，不参与长文本回传。
+      if (budget.enabled && output.length > budget.batchTotalMaxChars) {
+        const fullChars = output.length;
+        output = applyResultBudget(output, {
+          maxChars: budget.batchTotalMaxChars,
+          scope: "batch:total",
+          label: "total",
+          locatorFallback: "见各任务 locator",
+        }).text;
+        ctx?.logger?.warn?.(
+          "[cohub budget] batch:total：拼装结果 " + fullChars + " 字符 ≈ " + approxTokens(fullChars)
+          + " tokens 超过总预算 " + budget.batchTotalMaxChars
+          + " 字符，已裁剪；各任务全文见各自的 locator。仅告警，不阻断。",
+        );
       }
 
       return output;

@@ -21,6 +21,13 @@ import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
 import { EnvSignatureLearner, envFingerprint, normalizeErrorSignature, pickEnvContractText, readEnvSignatures, writeEnvSignatures, type EnvContractFacts, type EnvFingerprint, type EnvSignaturesConfig } from "./env-signatures.ts";
 import { contentText } from "./text-utils.ts";
 import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
+import {
+  applyResultBudget,
+  approxTokens,
+  budgetResultWithSpill,
+  resolveResultBudget,
+  type ResultBudgetConfig,
+} from "./result-budget.ts";
 
 /** 单个 skill 的路由配置（来自组合层 cordis.patch.yml 或 DSH settings 的 cohub.skills） */
 export interface SkillRouteConfig {
@@ -77,6 +84,12 @@ export interface DelegateConfig {
     maxParallelBatch?: number;
     wallClockBudgetMs?: number;
   };
+  /** 子代理结果预算（P1-3）：契约保留 + 预算裁剪 + 落盘定位；缺省值即生效 */
+  resultBudget?: ResultBudgetConfig;
+  /** P1-1 子代理工具表裁剪：默认开启（deny 减法，按角色裁剪；失败自动回退全量工具） */
+  toolFilter?: {
+    enabled?: boolean;
+  };
 }
 
 /**
@@ -107,30 +120,167 @@ export interface SubagentRunHandle {
   dispose: () => Promise<void>;
 }
 
+// ── P1-1 子代理工具表裁剪 ────────────────────────────────────────────────
+//
+// 每请求约 75 个工具 schema（native 42 个 ≈ 9,014 tokens）被子代理无差别继承，
+// 而只读代理永远用不到 write/pwsh、写类代理也不该再往下委派。
+//
+// 机制（官方原生支持，无需自造）：SubagentStartRequest.toolFilter 被 SubagentRuntime
+// 透传进 startActivation 的 composition，再由 child-agent 的 applyChildComposition
+// 施为 childCtx.tools.restrict(filter)——时序在子代理创建窗口内、首次请求之前，
+// 因此不污染父代理工具表，也不存在「先看见再被撤掉」的空窗。
+//
+// 策略：deny 减法，不用 allow 白名单。
+//   - allow 会连带裁掉 todo_write / skill / list_agents / job_* / read_image 等
+//     角色实际依赖的工具，漏一项就断链；deny 漏一项只是「没裁到」。
+//   - restrict() 对未知名字是 loud 报错（unknown global tool），allow 拼错与 deny
+//     拼错代价相同，但 allow 漏项是静默缺能力，deny 漏项无害。
+//
+// 硬约束：restrict() 只认**已挂载的全局工具精确名**。MCP 工具（mcp__github__*）、
+// taskboard_* 以及本部署未挂载的工具一律不写；平台条件与 preset 的 disabled
+// 表达式保持一致（tool-bash 仅非 win32 / tool-pwsh 仅 win32），否则换个平台
+// 就是「未知名字 → 整个委派失败」。
+
+/** 本平台实际挂载的 shell 工具名（preset 里 tool-bash 与 tool-pwsh 互斥挂载） */
+const SHELL_TOOL = process.platform === "win32" ? "pwsh" : "bash";
+
+/** 只读类代理：写入 / 执行 / 再委派全部裁掉（read、grep、glob、web、read_image 保留） */
+const READ_ONLY_DENY: readonly string[] = [
+  "write",
+  "edit",
+  SHELL_TOOL,
+  "create_worktree",
+  "workflow",
+  "delegate",
+  "delegate_batch",
+  "subagent",
+  "subagent_fork",
+];
+
+/** 写类代理：能干活的工具都留，只裁「再往下委派」与建工作树（避免无限套娃） */
+const WRITE_DENY: readonly string[] = [
+  "create_worktree",
+  "workflow",
+  "delegate",
+  "delegate_batch",
+  "subagent",
+  "subagent_fork",
+];
+
+/** 通用裁剪（所有角色都加）：与本职无关的交互 / 目标循环 / 多媒体工具 */
+const UNIVERSAL_DENY: readonly string[] = [
+  "ask_user_question",
+  "create_goal",
+  "update_goal",
+  "get_goal",
+  "weather",
+  "video_search",
+];
+
+const READ_ONLY_SKILLS = new Set([
+  "co-explorer", "co-oracle", "co-planner", "co-council",
+  "co-observer", "co-librarian",
+  "co-rule-user", "co-rule-project", "co-rule-app",
+]);
+
+const WRITE_SKILLS = new Set(["co-fixer", "co-designer", "co-cordis"]);
+
+/**
+ * 按 skill 名解析子代理工具裁剪 filter（deny 减法）。
+ *
+ * fail-soft：任何构造异常都退回 undefined（= 全量工具，与改造前行为一致），
+ * 只留一行 warn——裁剪是省 token 的优化，绝不能成为委派失败的来源。
+ *
+ * @param skillName - 规范化后的 skill 名（如 co-fixer）。
+ * @param enabled - 总开关（Config.toolFilter.enabled，默认 true）。
+ * @param logger - 可选日志器（仅用于 warn）。
+ * @returns filter；undefined 表示不裁剪。
+ */
+export function resolveSkillToolFilter(
+  skillName: string | undefined,
+  enabled = true,
+  logger?: { warn?: (...args: unknown[]) => void },
+): { deny: string[] } | undefined {
+  if (!enabled) return undefined;
+  try {
+    const key = (skillName ?? "").trim();
+    // co-orchestrator 本身是委派发起方，被委派时保留全部工具；名字不在已知表里
+    // （拼错 / 新增 skill）时只裁通用项——宁可少裁，不可炸链。
+    if (key === "co-orchestrator") return undefined;
+    const base = READ_ONLY_SKILLS.has(key)
+      ? READ_ONLY_DENY
+      : WRITE_SKILLS.has(key)
+        ? WRITE_DENY
+        : UNIVERSAL_DENY;
+    const deny = [...new Set<string>([...base, ...UNIVERSAL_DENY])];
+    return deny.length > 0 ? { deny } : undefined;
+  } catch (error) {
+    logger?.warn?.("[cohub toolfilter] 构造子代理工具裁剪失败，已回退全量工具："
+      + (error instanceof Error ? error.message : String(error)));
+    return undefined;
+  }
+}
+
 /** 统一入口的 spawn 参数 */
 export interface SpawnRunSpec {
   label: string;
   prompt: Array<{ type: string; text: string }>;
   parent: any;
-  /** 子代理人格前缀。0.2.1 起 SubagentStartRequest 已删除 persona 字段，改由 prompt 首块承接。 */
+  /** 子代理人格前缀。0.2.1 起 SubagentStartRequest 不再把 persona 暴露给模型工具层，
+   *  但服务端仍接受该字段；cohub 统一走 prompt 首块 / 原生字段两条路（见下）。 */
   persona?: string;
+  /** P1-1 子代理工具表裁剪（deny 减法，见 resolveSkillToolFilter）。
+   *  0.2.0 / 0.2.1 的 SubagentStartRequest 均接受 toolFilter。 */
+  toolFilter?: { allow?: string[]; deny?: string[] };
   agentOptions?: Record<string, unknown>;
   signal?: AbortSignal;
 }
 
+/** toolFilter 被拒的可识别特征：restrict() 报未知全局工具名，或 provider 无该能力 */
+const TOOL_FILTER_REJECTED = /unknown global tool|toolFilter|tool filter|capabilit/i;
+
 /**
- * 跨版本 spawn 子代理的统一入口。
+ * 跨版本 spawn 子代理的统一入口（对外）。
+ *
+ * 在 {@link startSubagentRunOnce} 外面包一层 fail-soft 重试：当 toolFilter 被
+ * 服务端拒绝（`tools.restrict() names unknown global tool ...` 或 provider 不支持
+ * toolFilter 能力）时，**去掉 filter 重试一次**，让委派照常跑（全量工具），
+ * 只留一行 warn。裁剪是优化，不是功能前提。
+ */
+export async function startSubagentRun(
+  ctx: any,
+  provider: string,
+  spec: SpawnRunSpec,
+): Promise<SubagentRunHandle> {
+  try {
+    return await startSubagentRunOnce(ctx, provider, spec);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const aborted = spec.signal?.aborted === true
+      || /abort/i.test(message);
+    if (spec.toolFilter !== undefined && !aborted && TOOL_FILTER_REJECTED.test(message)) {
+      ctx?.logger?.warn?.("[cohub toolfilter] 子代理工具表裁剪被拒绝，已回退全量工具重试：" + message);
+      return await startSubagentRunOnce(ctx, provider, { ...spec, toolFilter: undefined });
+    }
+    throw error;
+  }
+}
+
+/**
+ * 跨版本 spawn 子代理的实际实现。
  *
  * DSH 0.2.1 运行时 SubagentRuntime 移除了 start(provider, request)，改为 startActivation(spec)：
  *   - spec.provider 与 label/request/signal/delivery 同级；
- *   - request 是 Omit<SubagentStartRequest, "label" | "signal">，persona / toolFilter 字段已删除；
+ *   - request 是 Omit<SubagentStartRequest, "label" | "signal">：persona / toolFilter
+ *     仍被接受（只是不再由模型面向的 subagent 工具暴露给 LLM），cohub 显式经 request 透传；
  *   - 返回 { childId, messageId?, result, dispose } —— 注意是 childId 不是 id；
  *   - delivery 必须显式传 "caller"：默认 "parent" 会在子代理 prompt 末尾追加 send_message 返回指引、
  *     并在父会话写入完成通知，而 cohub 三个工具都自行聚合结果，走 parent 路径是行为回归。
  *
- * 0.2.0 保留原生 start(provider, request)，persona 走原生字段。特性探测双分支，两个版本都能跑。
+ * 0.2.0 保留原生 start(provider, request)：persona / toolFilter 都是 SubagentStartRequest
+ * 的一等字段（0.2.0-rc.2 的类型里就已存在），故两个分支都透传。特性探测双分支，两个版本都能跑。
  */
-export async function startSubagentRun(
+async function startSubagentRunOnce(
   ctx: any,
   provider: string,
   spec: SpawnRunSpec,
@@ -141,7 +291,7 @@ export async function startSubagentRun(
   const signal = spec.signal ?? new AbortController().signal;
 
   if (typeof subagents.startActivation === "function") {
-    // 0.2.1+：persona 原生能力已删除，前置到 prompt 首个 text 块补偿
+    // 0.2.1+：persona 前置到 prompt 首个 text 块补偿（原生能力不再对模型工具层暴露）
     const prompt = spec.persona !== undefined
       ? [{ type: "text", text: spec.persona }, ...spec.prompt]
       : spec.prompt;
@@ -152,6 +302,7 @@ export async function startSubagentRun(
         prompt,
         parent: spec.parent,
         ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
+        ...(spec.toolFilter !== undefined ? { toolFilter: spec.toolFilter } : {}),
       },
       signal,
       delivery: "caller",
@@ -163,12 +314,13 @@ export async function startSubagentRun(
     };
   }
 
-  // 0.2.0 回退：provider 契约仍声明 persona 能力
+  // 0.2.0 回退：provider 契约仍声明 persona / toolFilter 能力
   const run = await subagents.start(provider, {
     label: spec.label,
     prompt: spec.prompt,
     parent: spec.parent,
     ...(spec.persona !== undefined ? { persona: spec.persona } : {}),
+    ...(spec.toolFilter !== undefined ? { toolFilter: spec.toolFilter } : {}),
     ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
     signal,
   });
@@ -466,16 +618,56 @@ export function normalizeReasoningEffort(value: unknown): string | undefined {
  * 查该模型的 efforts，不支持就丢弃强度并告警（委派照常进行，只是按模型默认档跑）。
  * 无法判定时（无 resolveModelInfo / 查询抛错 / model 未定）一律放行，不改变既有行为。
  */
+/**
+ * P1-2 模型分层默认值：路由表未显式配置时，按 skill 名给保守默认。
+ *
+ * 用户已配置的字段**永远优先**——本函数只提供缺省值，绝不覆盖任何显式配置。
+ * 依据：统一「高推理档 + 大输出预算」会让只做定位/读图的代理白付延迟与输出预算；
+ * 探索类只降推理强度，实施类需要足够大的 maxTokens，规划类输出本来就短。
+ * 其余代理（oracle / council / designer / rule-*）保持不动（完全继承父会话）。
+ *
+ * @param skillName 兜底后的 skill 名（COHUB_SKILLS 中的 name）
+ * @returns 该 skill 的缺省 agentOptions 片段；无分层默认时 undefined
+ */
+export function skillTierDefaults(skillName: string | undefined): Record<string, unknown> | undefined {
+  switch (skillName) {
+    case "co-explorer":
+    case "co-librarian":
+    case "co-observer":
+      return { reasoningEffort: "low" };
+    case "co-fixer":
+      return { maxTokens: 8192 };
+    case "co-planner":
+      return { maxTokens: 4096 };
+    default:
+      return undefined;
+  }
+}
+
 export async function buildAgentOptions(
   route: SkillRouteConfig | undefined,
   ctx: any,
+  skillName?: string,
 ): Promise<Record<string, unknown> | undefined> {
-  if (!route) return undefined;
+  const tier = skillTierDefaults(skillName);
+  if (!route) {
+    if (!tier) return undefined;
+    // ③' 未配置路由但该 skill 有分层默认值：只交出分层字段（provider/model 仍继承父会话）
+    ctx?.logger?.info?.(
+      "[cohub tier] " + String(skillName) + " 未配置路由，启用模型分层默认值 " + JSON.stringify(tier),
+    );
+    return { ...tier };
+  }
   const effort = normalizeReasoningEffort(route.reasoningEffort);
 
   // ② 只配强度、不配 provider：交出部分 options（provider/model 由 DSH 继承父会话）
   if (!route.provider) {
-    return effort ? { reasoningEffort: effort } : undefined;
+    // P1-2：用户没配的字段才用分层默认补（显式配置永远优先）
+    const merged: Record<string, unknown> = {};
+    const effectiveEffort = effort ?? normalizeReasoningEffort(tier?.reasoningEffort);
+    if (effectiveEffort) merged.reasoningEffort = effectiveEffort;
+    if (typeof tier?.maxTokens === "number") merged.maxTokens = tier.maxTokens;
+    return Object.keys(merged).length > 0 ? merged : undefined;
   }
 
   const available = new Set(ctx.llm.listProviders().map((p: any) => p.id));
@@ -508,19 +700,100 @@ export async function buildAgentOptions(
     }
   }
   if (route.maxTokens) options.maxTokens = route.maxTokens;
-  if (effort) {
+  else if (typeof tier?.maxTokens === "number") options.maxTokens = tier.maxTokens;
+  // P1-2：分层默认的推理强度同样走预校验（fail-soft，判定不了时放行）
+  const effectiveEffort = effort ?? normalizeReasoningEffort(tier?.reasoningEffort);
+  if (effectiveEffort) {
+    const eff = effectiveEffort;
     // 预校验只在 provider+model 都确定时进行（model 可能是上面解析出的回退模型）
-    const supported = await isReasoningEffortSupported(route.provider, options.model as string | undefined, effort, ctx);
+    const supported = await isReasoningEffortSupported(route.provider, options.model as string | undefined, eff, ctx);
     if (supported === false) {
       ctx.logger?.warn?.(
         '[cohub route] ' + route.name + ' 的模型 "' + route.provider + '/' + String(options.model)
-        + '" 不支持推理强度 "' + effort + '"，已忽略该强度（按模型默认档执行）',
+        + '" 不支持推理强度 "' + eff + '"，已忽略该强度（按模型默认档执行）',
       );
     } else {
-      options.reasoningEffort = effort;
+      options.reasoningEffort = eff;
     }
   }
   return options;
+}
+
+/**
+ * 取父会话 id（spill 落盘的归属命名空间）。
+ *
+ * 取法与官方消费方完全一致：`exec.agent.session.header.id`
+ * （见 @deepseek-ai/dsh-spill-policy/lib/index.js 的 ownerSessionId）。
+ *
+ * @param exec 工具执行上下文
+ * @returns 会话 id；缺失时 undefined（此后跳过落盘，只裁剪）
+ */
+export function resolveOwnerSessionId(exec: any): string | undefined {
+  const id = exec?.agent?.session?.header?.id;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
+/** 子代理结果预算处理的调用参数 */
+export interface SubagentBudgetOptions {
+  /** 本段字符上限 */
+  maxChars: number;
+  /** 语义范围（"delegate" / "batch:task"，用于日志与落盘命名） */
+  scope: string;
+  /** 段标识（skill 名 / taskId） */
+  label: string;
+  /** 是否启用（false 时原样返回，完全回到旧行为） */
+  enabled: boolean;
+  /** 来源工具名（用于落盘命名） */
+  toolName?: string;
+}
+
+/**
+ * 把子代理结果按预算裁剪并（超预算时）落盘定位——delegate / delegate_batch 共用。
+ *
+ * 行为：
+ *   - `enabled=false` 或未超预算 → **原样返回**（零行为变化）；
+ *   - 超预算 → 走 result-budget 的单一入口（先落盘拿 locator，再裁剪）；
+ *   - 任一步异常 / 落盘失败 → **fail-soft**：返回原文，只告警，绝不因预算逻辑丢掉结果。
+ *
+ * @param ctx 插件上下文（转发给 spillStore）
+ * @param exec 工具执行上下文（取父会话 id）
+ * @param raw 子代理结果原文
+ * @param options 预算参数
+ * @returns 回传给父代理的文本
+ */
+export async function budgetSubagentResult(
+  ctx: any,
+  exec: any,
+  raw: string,
+  options: SubagentBudgetOptions,
+): Promise<string> {
+  const text = typeof raw === "string" ? raw : "";
+  if (!options.enabled || text.length === 0) return text;
+  try {
+    const budgeted = await budgetResultWithSpill(ctx, text, {
+      maxChars: options.maxChars,
+      scope: options.scope,
+      label: options.label,
+      toolName: options.toolName ?? "delegate",
+      sessionId: resolveOwnerSessionId(exec),
+    });
+    if (budgeted.truncated) {
+      const locatorNote = budgeted.locator
+        ?? ("落盘失败" + (budgeted.spillReason ? "（" + budgeted.spillReason + "）" : ""));
+      ctx?.logger?.warn?.(
+        "[cohub budget] " + options.scope + " " + options.label + "：子代理结果 " + budgeted.fullChars
+        + " 字符 ≈ " + approxTokens(budgeted.fullChars) + " tokens 超过预算 " + options.maxChars
+        + " 字符，已裁剪保留 " + budgeted.keptChars + " 字符；locator=" + locatorNote + "。仅告警，不阻断。",
+      );
+    }
+    return budgeted.text;
+  } catch (error) {
+    ctx?.logger?.warn?.(
+      "[cohub budget] " + options.scope + " " + options.label + " 预算处理失败，回退原文（"
+      + (error instanceof Error ? error.message : String(error)) + "）",
+    );
+    return text;
+  }
 }
 
 /**
@@ -662,7 +935,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       checkIntervalMs: Math.max(50, retryCfg?.stall?.checkIntervalMs ?? 1000),
     };
     const scheduleCfg = settingsNow.schedule ?? config.schedule;
-    return { retry, stall, schedule: scheduleCfg };
+    // P1-3（子代理结果预算）：settings 优先，config 兜底；缺省值即生效（用户不改也能工作）
+    const budget = resolveResultBudget(settingsNow.resultBudget ?? config.resultBudget);
+    return { retry, stall, schedule: scheduleCfg, budget };
   }
 
   // P3-2（N1）：环境契约持久化配置归一（默认 auto；无缓存时行为不变；读写失败静默降级）
@@ -693,7 +968,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       if (!parent) throw new Error("delegate requires a calling agent (exec.agent was undefined)");
 
       // P3-3（N3）：每次调用解析生效配置（settings > config > 保守默认）；RETRYABLE 随 retryableReasons 动态
-      const { retry, stall, schedule } = resolveRuntimeConfig();
+      const { retry, stall, schedule, budget } = resolveRuntimeConfig();
       const RETRYABLE = new Set(retry.retryableReasons);
       ctx.logger?.info?.("[cohub schedule] 生效调度参数：batch=" + (schedule?.maxParallelBatch ?? 3)
         + " wallMs=" + (schedule?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS));
@@ -707,8 +982,13 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         ctx.logger?.warn?.('delegate: skill "' + args.skill + '" 缺少 brief，回退完整 content');
       }
 
-      // ④ 构造 agentOptions（共享函数；provider 未配 model 时解析该 provider 的默认模型）
-      const agentOptions = await buildAgentOptions(route, ctx);
+      // ④ 构造 agentOptions（共享函数；provider 未配 model 时解析该 provider 的默认模型；
+      //    P1-2：路由未显式配置的字段由 skill 分层默认值补，用户配置永远优先）
+      const agentOptions = await buildAgentOptions(route, ctx, skill.name);
+
+      // ④b P1-1 子代理工具表裁剪：按规范化后的 skill 名查 deny 表（开关默认开；
+      //     构造失败已在 resolveSkillToolFilter 内 fail-soft 成 undefined = 全量工具）
+      const toolFilter = resolveSkillToolFilter(skill.name, config.toolFilter?.enabled ?? true, ctx.logger);
 
       // ⑤ 执行器环境契约注入（共享函数）：指纹只算一次，契约解析与随后的学习者共用
       const fp = envFingerprint();
@@ -728,6 +1008,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       // 必须与 lastReason 分开：lastReason 参与 RETRYABLE 精确匹配，拼接会破坏重试判定。
       let lastDiagnostic: string | undefined;
       let lastPartial = "";
+      // P1-3：被丢弃的大段 partial 的预算内版本（只进 err.cause，不进 error.message）
+      let lastPartialBudget = "";
       // 停滞信息经可变状态对象承载：直接 let 声明会在闭包/循环内被 TS 流分析收窄为 never
       // （循环头声明值为 null 时，三元判断的真分支类型为 never），对象属性则保持 StallInfo | null。
       const stallState: { last: StallInfo | null } = { last: null };
@@ -795,6 +1077,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             prompt: [{ type: "text", text: promptText }],
             parent,
             persona: DELEGATE_PERSONA,
+            // P1-1：工具表裁剪（undefined 时不透传，等价于全量工具）
+            ...(toolFilter !== undefined ? { toolFilter } : {}),
             ...(agentOptions ? { agentOptions } : {}),
             signal,
           });
@@ -833,10 +1117,31 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           try { run.dispose(); } catch { /* 已释放 */ }
         }
 
-        if (outcome?.stopReason === "completed") return contentText(outcome.output);
+        if (outcome?.stopReason === "completed") {
+          // P1-3：结果先经「契约保留 + 预算裁剪 + 落盘定位」再回传，
+          // 避免子代理全文永久驻留父会话历史并被每轮重发。
+          return await budgetSubagentResult(ctx, exec, contentText(outcome.output), {
+            maxChars: budget.maxChars,
+            scope: "delegate",
+            label: args.skill,
+            enabled: budget.enabled,
+          });
+        }
         lastReason = String(outcome?.stopReason ?? "unknown");
         lastDiagnostic = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
-        lastPartial = contentText(outcome?.output ?? []).slice(0, 500);
+        const partialRaw = contentText(outcome?.output ?? []);
+        // 保留既有 slice(0, 500) 行为（error.message 与 retryNote 用它，绝不加长）
+        lastPartial = partialRaw.slice(0, 500);
+        // P1-3：被丢弃的大段 partial 也走同一个预算函数（上限更小，且**不落盘**——
+        // 失败路径不额外引入失败点，也不产生无谓 I/O）；只进 cause，不进模型上下文
+        lastPartialBudget = budget.enabled && partialRaw.length > budget.partialMaxChars
+          ? applyResultBudget(partialRaw, {
+            maxChars: budget.partialMaxChars,
+            scope: "delegate:partial",
+            label: args.skill,
+            locatorFallback: "未落盘（失败路径不写盘）",
+          }).text
+          : partialRaw;
         stallState.last = stallInfo;
         // N2：停滞触发的中止仅在 recoverable=true 时按可重试中止处理；否则直接失败
         if (stallInfo && !stall.recoverable) break;
@@ -856,6 +1161,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         stopReason: lastReason,
         ...(lastDiagnostic === undefined ? {} : { diagnostic: lastDiagnostic }),
         partial: lastPartial,
+        ...(lastPartialBudget === lastPartial ? {} : { partialBudget: lastPartialBudget }),
         skill: args.skill,
         retries,
         ...(stallState.last ? { stall: stallState.last } : {}),

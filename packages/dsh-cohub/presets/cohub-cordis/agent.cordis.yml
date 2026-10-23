@@ -150,8 +150,24 @@
     compaction: true
     toolResultPruner: true
   config:
+    # ── 每轮工具结果节流：本部署已在 host 层生效，**不要在这里重复挂** ────────
+    # host bundle dsh-base/cordis.patch.yml:380-386 已挂 spill-local + spill-policy，
+    # 并配置 maxInlineBytes: 50000 —— 字段来自实际安装的 @deepseek-ai/dsh-spill-policy
+    # 0.1.5-rc.2（Config 为 { maxInlineBytes }），不是 0.2.x 的 maxInlineTokens。
+    # 该插件订阅 tools/post-execute；tools 是 host 单例，本 group 只 isolate compaction /
+    # toolResultPruner，不隔离 tools。因此 preset 再挂一份会变成双层洋葱裁剪：
+    # 内层把全文落盘、外层再裁一次并覆盖 notice 里的 locator —— 原文将不可恢复。
+    # 收紧每轮阈值只能在 host 层改 spill-policy 的 maxInlineBytes。
+    #
+    # 此处可做的安全收紧：把自动压缩提前，让 tool-result-pruner 更早清理长结果。
+    # thresholdRatio: 0.5（默认 0.8）；auto 默认 true（config.auto ?? true），
+    # retainRatio 默认 0.16 < 0.5，可通过 validateRatioRetention 校验；
+    # 顶层 config 走 BASIC_COMPACT_CONFIG_KEYS 白名单，写 headroomTokens 之类未知键
+    # 会抛 unknown key，使整个 preset 挂载失败。
     - id: compaction-basic
       name: '@deepseek-ai/dsh-compaction-basic'
+      config:
+        thresholdRatio: 0.5
 
     - id: command-compact
       name: '@deepseek-ai/dsh-command-compact'
