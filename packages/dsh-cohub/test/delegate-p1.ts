@@ -353,9 +353,13 @@ function check(name: string, cond: boolean) {
   // ⑥ 空串 / 纯空白 = 未配置（设置页清空字段会写回 ""）
   tool = createDelegateTool(ctx, () => [{ name: "co-fixer", reasoningEffort: "" }, { name: "co-explorer", reasoningEffort: "   " }]);
   await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec());
-  check("空串 reasoningEffort 归一为未配置（不传 agentOptions）", captured?.agentOptions === undefined);
+  // 归一化（normalizeReasoningEffort）已把空串/纯空白折成 undefined，故此后的行为应是
+  // 「P1-2 分层默认值回落」而非「不传 agentOptions」：co-fixer 只有 maxTokens，co-explorer 回落到 low。
+  check("空串 reasoningEffort 归一为未配置（不含 reasoningEffort 键，仅分层默认 maxTokens）",
+    captured?.agentOptions?.reasoningEffort === undefined && captured?.agentOptions?.maxTokens === 8192);
   await tool.execute({ skill: "co-explorer", prompt: "任务" }, makeExec());
-  check("纯空白 reasoningEffort 归一为未配置", captured?.agentOptions === undefined);
+  check("纯空白 reasoningEffort 归一为未配置（回落到分层默认 low，不把空白串传给 DSH）",
+    captured?.agentOptions?.reasoningEffort === "low");
 
   // ⑦ provider 配了但不可用 + 配了强度 → 连强度一起继承（保守，避免父模型不支持的硬失败）
   tool = createDelegateTool(ctx, () => [{ name: "co-fixer", provider: "not-available", reasoningEffort: "low" }]);
@@ -395,8 +399,12 @@ function check(name: string, cond: boolean) {
   check("delivery 显式传 caller（不用默认 parent）", spec?.delivery === "caller");
   check("label 在 spec 顶层（不在 request 内）", spec?.label === "delegate:co-fixer" && spec?.request?.label === undefined);
   check("signal 在 spec 顶层", spec?.signal instanceof AbortSignal || typeof spec?.signal?.aborted === "boolean");
-  check("request 不含 persona 字段（0.2.1 已删除）", spec?.request && !("persona" in spec.request));
-  check("request 不含 toolFilter 字段（0.2.1 已删除）", spec?.request && !("toolFilter" in spec.request));
+  check("request 不含 persona 字段（persona 前置到 prompt 首块）", spec?.request && !("persona" in spec.request));
+  // P1-1：toolFilter 仍被 SubagentStartRequest 接受（只是不再经模型工具层暴露），
+  // 故 delegate 现在按角色透传 deny 裁剪；co-fixer 属写类：不含 write，但含 subagent_fork。
+  check("request 透传 toolFilter（按角色 deny 裁剪）",
+    spec?.request?.toolFilter?.deny?.includes("subagent_fork") === true
+    && spec?.request?.toolFilter?.deny?.includes("write") !== true);
   check("persona 前置为 prompt 首个 text 块", spec?.request?.prompt?.[0]?.type === "text" && spec?.request?.prompt?.[0]?.text === DELEGATE_PERSONA);
   check("任务 prompt 顺延为第二块", spec?.request?.prompt?.[1]?.type === "text" && spec.request.prompt[1].text.includes("--- 你的具体任务 ---"));
   check("agentOptions 落到 request 内", spec?.request?.agentOptions?.provider === "deepseek-official");
