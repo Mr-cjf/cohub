@@ -1348,6 +1348,19 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       //      （缺省 enabled=false 时即完全走原前台路径，行为不变、向后兼容）
       //      兜底：jobs 服务缺失 / start() 拒绝（无 job controller 服务该 owner、超出每 owner
       //      并发上限 10、owner 不是存活 Agent 实例…）→ warn + 回退前台（对快调用完全透明）。
+      // 降级原因（诊断可见性）：后台不可用时的简短说明，供显式请求后台的调用方在返回文本里看到。
+      // 当前 DSH 进程不落盘 logger 输出，只打 warn 等于静默降级 → 必须回传到工具返回文本。
+      let bgFallbackReason: string | undefined;
+
+      // 只取 error.message 第一行并压平空白：既去掉堆栈噪音，也不把内部路径/长上下文外泄；截断到 200 字符。
+      const describeBgFallback = (error: unknown): string => {
+        const message = (error as any)?.message;
+        const raw = typeof message === "string" && message.length > 0 ? message : String(error);
+        const firstLine = (raw.split(/\r?\n/)[0] ?? "").replace(/\s+/g, " ").trim();
+        const text = firstLine.length > 0 ? firstLine : "unknown";
+        return text.length > 200 ? text.slice(0, 200) : text;
+      };
+
       const bgWanted = args.background === true
         || (args.background === undefined && background.enabled && background.defaultFor.includes(skill.name));
       if (bgWanted) {
@@ -1392,7 +1405,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             });
             if (typeof started === "string" && started.length > 0) jobId = started;
           } catch (error) {
-            ctx.logger?.warn?.("[cohub background] background delegate 不可用，回退前台：" + String(error));
+            bgFallbackReason = describeBgFallback(error);
+            ctx.logger?.warn?.("[cohub background-fallback] background delegate 不可用，回退前台：" + bgFallbackReason);
           }
           if (jobId !== undefined) {
             ctx.logger?.info?.("[cohub background] delegate 已注册为后台 job：" + jobId + "（skill=" + skill.name + "）");
@@ -1401,13 +1415,25 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
               + "或等自动唤醒（job 完成且你空闲时会自动开新一轮，最多连续 3 次）。"
               + "等待期间可以继续派发别的任务或推进其他工作。";
           }
+          // start() 未抛错但没给出 jobId：同样是降级，别让它静默
+          if (bgFallbackReason === undefined) {
+            bgFallbackReason = "jobs.start 未返回 jobId";
+            ctx.logger?.warn?.("[cohub background-fallback] " + bgFallbackReason + "，回退前台");
+          }
         } else {
-          ctx.logger?.warn?.("[cohub background] jobs 服务不可用（本组合未加载 dsh-jobs / dsh-tool-jobs），回退前台");
+          bgFallbackReason = "jobs 服务不可用（本组合未加载 dsh-jobs / dsh-tool-jobs）";
+          ctx.logger?.warn?.("[cohub background-fallback] " + bgFallbackReason + "，回退前台");
         }
       }
 
       // 前台同步路径：与加入后台模式之前完全一致
-      return await runAttempts(exec.signal);
+      const foregroundText = await runAttempts(exec.signal);
+      // 显式请求后台却降级 → 把原因附在**前台结果之后**回传（不能提前 return：
+      // 前台结果本身才是有用产出）。走配置默认的那一档不追加，避免给常规调用添噪音。
+      if (args.background === true && bgFallbackReason !== undefined) {
+        return foregroundText + "\n\n[后台不可用，已回退前台同步执行：" + bgFallbackReason + "]";
+      }
+      return foregroundText;
     },
   });
 }
