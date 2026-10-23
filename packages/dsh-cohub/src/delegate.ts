@@ -234,6 +234,36 @@ export function resolveSkillToolFilter(
   }
 }
 
+/**
+ * 用 restrictableNames 过滤 deny/allow 列表：只保留**真正可限制**的名字。
+ *
+ * 背景（实测根因）：`tools.restrict(filter)` 会对 filter 里每个名字做 restrictableNames
+ * 校验，不在名单里就 throw `unknown global tool ...`；而 restrictableNames 只含 inherited
+ * （global + 祖先层）、**排除 own 层**（dsh-tools `view()`：限制只裁 scope 继承来的东西，
+ * 永不裁它 own 层注册的）。preset 挂的工具在子 ctx 里成了 own 层工具 → 不在名单 →
+ * 每次 spawn 都先炸一次、再被 fail-soft 丢掉整个 filter 全量重试（既没裁到，又白挨一次失败）。
+ *
+ * 解法：下发前先求交集，把「失败」前移成「过滤」。裁不到就是不下发（等价全量工具），绝不报错。
+ *
+ * @param filter - 原始裁剪意图（deny 减法 / allow 白名单）。
+ * @param restrictableNames - 可限制名字集合；缺省（拿不到视图）时原样返回 filter（维持现有行为）。
+ * @returns 交集后的 filter；两边都为空（无可裁项）时 undefined = 不下发
+ *          （必须判空：`restrict({})` 会抛 "is a no-op" 错）。
+ */
+export function intersectWithRestrictable(
+  filter: { allow?: string[]; deny?: string[] } | undefined,
+  restrictableNames?: Set<string>,
+): { allow?: string[]; deny?: string[] } | undefined {
+  if (!filter || !restrictableNames) return filter;
+  const allow = filter.allow?.filter(name => restrictableNames.has(name));
+  const deny = filter.deny?.filter(name => restrictableNames.has(name));
+  const next: { allow?: string[]; deny?: string[] } = {
+    ...(allow !== undefined && allow.length > 0 ? { allow } : {}),
+    ...(deny !== undefined && deny.length > 0 ? { deny } : {}),
+  };
+  return next.allow !== undefined || next.deny !== undefined ? next : undefined;
+}
+
 /** 统一入口的 spawn 参数 */
 export interface SpawnRunSpec {
   label: string;
@@ -253,30 +283,115 @@ export interface SpawnRunSpec {
 const TOOL_FILTER_REJECTED = /unknown global tool|toolFilter|tool filter|capabilit/i;
 
 /**
+ * restrict() 报错文本里的「已知可限制名字」清单。
+ * 形如：`tools.restrict() names unknown global tool "x"; known global tools: a, b, c`
+ * —— restrict() 自己就把子 ctx 的 restrictableNames 全量列出来了。
+ */
+const RESTRICTABLE_NAMES_IN_ERROR = /known global tools:\s*([^\n;]*)/i;
+
+/**
+ * 从 restrict() 的错误文本解析 restrictableNames（子 ctx 的「可限制」名字全集）。
+ *
+ * 为什么走错误文本而不是公开 API：`view()`（产出 restrictableNames 的地方）在 dsh-tools
+ * 的类型里是 **private**，公开面只有 register / restrict / guard / get / schemas；而我们要的是
+ * **子 ctx** 的视图，子 ctx 由 subagent runtime 内部创建，本插件根本拿不到它。
+ * 唯一能如实反映「这个子 scope 允许裁哪些名字」的信息源，就是 restrict() 被拒时吐出的这份清单。
+ *
+ * @param message - 错误文本。
+ * @returns 解析到的名字集合；文本中没有该清单（如 provider 无能力类错误）时 undefined。
+ */
+export function parseRestrictableNames(message: string): Set<string> | undefined {
+  const matched = RESTRICTABLE_NAMES_IN_ERROR.exec(typeof message === "string" ? message : "");
+  if (!matched) return undefined;
+  const raw = matched[1].trim();
+  if (raw.length === 0 || raw === "(none)") return new Set<string>();
+  const names = raw
+    .split(",")
+    .map(name => name.trim().replace(/^"|"$/g, ""))
+    .filter(name => name.length > 0);
+  return new Set(names);
+}
+
+/**
+ * 进程内已学到的 restrictableNames。
+ *
+ * 语义：「只有本进程第一条 spawn 可能白跑一次」——首条 spawn 失败后学到清单，
+ * 之后每条 spawn 都在**下发前**求出交集，restrict() 不再因 own 层名字抛错，
+ * 也就不再触发「丢 filter + 全量重试」的降级路径。
+ * 失效处理：registry 变化导致交集后仍被拒时，下一次错误会刷成新清单（自愈）。
+ */
+let learnedRestrictableNames: Set<string> | undefined;
+
+/** 读取已学到的 restrictableNames（诊断 / 测试） */
+export function getLearnedRestrictableNames(): Set<string> | undefined {
+  return learnedRestrictableNames;
+}
+
+/** 清空学习缓存（测试隔离用） */
+export function resetLearnedRestrictableNames(): void {
+  learnedRestrictableNames = undefined;
+}
+
+/** 两份 filter 是否等价（用于判定「求交集后有无进展」，防死循环） */
+function sameToolFilter(
+  a: { allow?: string[]; deny?: string[] } | undefined,
+  b: { allow?: string[]; deny?: string[] } | undefined,
+): boolean {
+  const key = (f: { allow?: string[]; deny?: string[] } | undefined) =>
+    JSON.stringify([f?.allow ?? null, f?.deny ?? null]);
+  return key(a) === key(b);
+}
+
+/**
  * 跨版本 spawn 子代理的统一入口（对外）。
  *
- * 在 {@link startSubagentRunOnce} 外面包一层 fail-soft 重试：当 toolFilter 被
- * 服务端拒绝（`tools.restrict() names unknown global tool ...` 或 provider 不支持
- * toolFilter 能力）时，**去掉 filter 重试一次**，让委派照常跑（全量工具），
- * 只留一行 warn。裁剪是优化，不是功能前提。
+ * 两段式 fail-soft（把「失败」前移成「过滤」）：
+ *   ① **下发前**：已学过 restrictableNames 时先用它求交集，直接下发「能裁的那部分」；
+ *   ② 被拒时：从 restrict() 错误文本解析 restrictableNames → 求交集 → 用**更小的 filter 重试**
+ *      （而不是像旧版那样整个丢掉）。求交集后为空 / 无进展时，才退回全量工具（最后防线）。
+ *
+ * 因此：进程内第一条 spawn 最多白跑一次，之后每次都真裁；裁不到也绝不因 filter 失败。
  */
 export async function startSubagentRun(
   ctx: any,
   provider: string,
   spec: SpawnRunSpec,
 ): Promise<SubagentRunHandle> {
-  try {
-    return await startSubagentRunOnce(ctx, provider, spec);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const aborted = spec.signal?.aborted === true
-      || /abort/i.test(message);
-    if (spec.toolFilter !== undefined && !aborted && TOOL_FILTER_REJECTED.test(message)) {
-      ctx?.logger?.warn?.("[cohub toolfilter] 子代理工具表裁剪被拒绝，已回退全量工具重试：" + message);
-      return await startSubagentRunOnce(ctx, provider, { ...spec, toolFilter: undefined });
+  const wanted = spec.toolFilter;
+  let filter = wanted === undefined
+    ? undefined
+    : intersectWithRestrictable(wanted, learnedRestrictableNames);
+  let lastFilterError: unknown;
+
+  // 最多 3 次：① 用缓存交集试 → ② 学到清单后交集重试 → ③ 全量工具兜底
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await startSubagentRunOnce(ctx, provider, { ...spec, toolFilter: filter });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const aborted = spec.signal?.aborted === true || /abort/i.test(message);
+      // 没有 filter 可背锅 / 中止 / 非 filter 类错误 → 原样抛出（不掩盖真实故障）
+      if (filter === undefined || wanted === undefined || aborted || !TOOL_FILTER_REJECTED.test(message)) {
+        throw error;
+      }
+      lastFilterError = error;
+      const learned = parseRestrictableNames(message);
+      if (learned) learnedRestrictableNames = learned;
+      // 交集基于「原始意图」而非上一次的 filter：清单变大时可以重新裁出更多名字
+      const next = learned ? intersectWithRestrictable(wanted, learned) : undefined;
+      const progressed = next !== undefined && !sameToolFilter(next, filter);
+      ctx?.logger?.warn?.(
+        "[cohub toolfilter] 子代理工具表裁剪被拒绝：" + message
+        + (progressed
+          ? "；已按可限制名字求交集（deny=" + (next?.deny ?? []).join(",")
+            + (next?.allow ? " allow=" + next.allow.join(",") : "") + "）后重试"
+          : "；无可裁项，回退全量工具重试"),
+      );
+      filter = progressed ? next : undefined;
     }
-    throw error;
   }
+  // 三次都没成功：最后一次已是全量工具仍被拒 → 把最初的 filter 错误原样抛出（非裁剪之过）
+  throw lastFilterError ?? new Error("cohub: subagent spawn failed after toolFilter fallout");
 }
 
 /**
