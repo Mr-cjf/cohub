@@ -108,7 +108,7 @@ export const PARALLEL_TOOL_DISCIPLINE =
 
 /** delegate 委派时注入子代理的统一 persona 文本 */
 export const DELEGATE_PERSONA = "你是被委派的专职代理：严格遵循任务消息中的角色定义、关键约束、输出格式与工具指令，并完成末尾的具体任务。"
-  + "不要调用 skill 工具加载 co-orchestrator 技能——你的技能指令已包含在下方任务书中。"
+  + "你的首条用户消息（下方任务书）已含 `--- 你的具体任务 ---` 分隔符，即身份判据成立：不要调用 skill 工具加载 co-orchestrator 技能——技能指令已由 brief 注入。"
   + PARALLEL_TOOL_DISCIPLINE;
 
 /** 子代理 spawn transport 名（非 LLM provider；别跟 agentOptions.provider 搞混） */
