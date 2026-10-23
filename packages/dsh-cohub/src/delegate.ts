@@ -865,20 +865,37 @@ export function resolveOwnerSessionId(exec: any): string | undefined {
  * 取后台任务注册表服务（`ctx.jobs`，由 @deepseek-ai/dsh-jobs-local 提供；`dsh-tool-jobs`
  * 提供「控制器」使 `start()` 对该 owner 可用）。
  *
- * 取法与 result-budget 取 spillStore 完全一致：先走 ctx.get 非 inject 通道，再退到
+ * 取法与 result-budget 取 spillStore 一致：先走 ctx.get 非 inject 通道，再退到
  * ctx.reflect.get（cordis 内置 accessor）。**绝不直接读 ctx.jobs**——包装 loader 会触发
- * cordis 的 inject 强校验报错。都取不到时返回 undefined，由调用方降级到前台。
+ * cordis 的 inject 强校验报错。
+ *
+ * 解析顺序：**优先 owner（agent）的 ctx，其次插件 ctx**。dsh-jobs-local 的 `start()`
+ * 用 `servesOwner(spec.owner)` 按 scope / controller layer 判定该 owner 是否可后台化，
+ * 而 controller 是由 dsh-tool-jobs 挂到具体组合（agent scope）里的；只从插件 ctx（host 层）
+ * 解析实例会撞上跨 layer 的 controller 缺口并抛 "no job controller serves this agent"。
+ * 都取不到时返回 undefined，由调用方降级到前台。
+ *
+ * @param ctx 插件上下文（兜底通道）
+ * @param owner 任务 owner（`exec.agent`），其 `ctx` 才是权威解析起点
  */
-export function resolveJobsService(ctx: any): any {
-  try {
-    const viaGet = typeof ctx?.get === "function" ? ctx.get("jobs") : undefined;
-    if (viaGet !== undefined && viaGet !== null) return viaGet;
-  } catch { /* 落到 reflect 通道 */ }
-  try {
-    return ctx?.reflect?.get?.("jobs", false);
-  } catch {
+export function resolveJobsService(ctx: any, owner?: any): any {
+  const pick = (c: any) => {
+    if (!c) return undefined;
+    try {
+      const viaGet = typeof c.get === "function" ? c.get("jobs") : undefined;
+      if (viaGet !== undefined && viaGet !== null) return viaGet;
+    } catch { /* 落到 reflect 通道 */ }
+    try {
+      const viaReflect = c.reflect?.get?.("jobs", false);
+      if (viaReflect !== undefined && viaReflect !== null) return viaReflect;
+    } catch { /* 本层取不到，交给调用方的下一顺位 */ }
     return undefined;
-  }
+  };
+  // 关键：必须优先用 **owner（agent）的 ctx** —— dsh-jobs-local 的 start() 用
+  // servesOwner(spec.owner) 按 scope/controller layer 判定，从插件 ctx（host 层）
+  // 解析到的实例往往不覆盖该 agent scope 的 controller，会抛
+  // "no job controller serves this agent" 并导致无谓降级。插件 ctx 保留为兜底。
+  return pick(owner?.ctx) ?? pick(ctx);
 }
 
 /** 子代理结果预算处理的调用参数 */
@@ -1364,7 +1381,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       const bgWanted = args.background === true
         || (args.background === undefined && background.enabled && background.defaultFor.includes(skill.name));
       if (bgWanted) {
-        const jobs = resolveJobsService(ctx);
+        // 优先从 owner（exec.agent）的 ctx 取：servesOwner 按 agent scope 判定 controller，
+        // 只用插件 ctx（host 层）会取到不服务该 scope 的实例并抛错降级。
+        const jobs = resolveJobsService(ctx, parent);
         if (jobs !== undefined && typeof jobs.start === "function") {
           // job cancel / owner 释放 → abort 子代理；子代理 run.dispose() 由 runAttempts 的
           // finally 保证（run.result 结算后必执行），因此 kill 路径不泄漏子代理。
