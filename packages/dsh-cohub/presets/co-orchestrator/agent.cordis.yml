@@ -40,8 +40,10 @@
   isolate:
     workflowEngine: true
   config:
-    - id: workflow-worker-thread
-      name: '@deepseek-ai/dsh-workflow-worker-thread'
+    # 0.2.1 无 dsh-workflow-worker-thread（asar 内 0 条目）；引擎包名是 dsh-workflow-ptc。
+    # config.provider 已核实为 workflow-ptc Config 的合法键（z.string().default("spawn")）。
+    - id: workflow-ptc
+      name: '@deepseek-ai/dsh-workflow-ptc'
       config:
         provider: spawn
 
@@ -49,13 +51,12 @@
       name: '@deepseek-ai/dsh-tool-workflow'
 
 # ── 技能（co-* 技能目录由 dsh-cohub 全局注册，本 preset 只需加载工具） ──
-# 注意：catalogEnabled: false 关闭目录注入——Orchestrator 使用 delegate() 委派，
-# 从不通过 skill() 加载 co-* 技能，无需每步注入 14 个技能目录浪费 token。
+# 注意：0.2.1 的 dsh-tool-skill 没有关闭技能目录注入的配置项
+# （Config 仅 catalogDescriptionMaxLength）。技能目录每轮都会注入，这是既定成本；
+# 若要减少，只能缩短各技能的 description（见 scripts/generate-skills.ts）。
 # skill() 工具本身仍然注册，子代理（通过 delegate spawn）可正常使用。
 - id: tool-skill
   name: '@deepseek-ai/dsh-tool-skill'
-  config:
-    catalogEnabled: false
 
 # ── 任务与后台任务面板 ──────────────────────────────────────────────────
 - id: tool-todo
@@ -95,14 +96,12 @@
       config:
         provider: spawn
         toolName: subagent
-        backgroundMode: continuable
 
     - id: tool-subagent-fork
       name: '@deepseek-ai/dsh-tool-subagent'
       config:
         provider: fork
         toolName: subagent_fork
-        backgroundMode: continuable
 
     
 
@@ -154,8 +153,11 @@
     # 此处可做的安全收紧：把自动压缩提前，让 tool-result-pruner 更早清理长结果。
     # thresholdRatio: 0.5（默认 0.8）；auto 默认 true（config.auto ?? true），
     # retainRatio 默认 0.16 < 0.5，可通过 validateRatioRetention 校验；
-    # 顶层 config 走 BASIC_COMPACT_CONFIG_KEYS 白名单，写 headroomTokens 之类未知键
-    # 会抛 unknown key，使整个 preset 挂载失败。
+    # 顶层 config 走 BASIC_COMPACT_CONFIG_KEYS 白名单，未知键会抛 unknown key，
+    # 使整个 preset 挂载失败；但 headroomTokens 是合法键（0.2.1 Config 的第 2 个键，
+    # 默认 65536），不是未知键。
+    # 合法键以 asar 内 0.2.1-rc.2 的 Config 为准；
+    # ~/.dsh/profiles/node_modules 是 DSH Desktop 0.1.5，不可作为依据。
     - id: compaction-basic
       name: '@deepseek-ai/dsh-compaction-basic'
       config:

@@ -162,8 +162,11 @@
     # 此处可做的安全收紧：把自动压缩提前，让 tool-result-pruner 更早清理长结果。
     # thresholdRatio: 0.5（默认 0.8）；auto 默认 true（config.auto ?? true），
     # retainRatio 默认 0.16 < 0.5，可通过 validateRatioRetention 校验；
-    # 顶层 config 走 BASIC_COMPACT_CONFIG_KEYS 白名单，写 headroomTokens 之类未知键
-    # 会抛 unknown key，使整个 preset 挂载失败。
+    # 顶层 config 走 BASIC_COMPACT_CONFIG_KEYS 白名单，未知键会抛 unknown key，
+    # 使整个 preset 挂载失败；但 headroomTokens 是合法键（0.2.1 Config 的第 2 个键，
+    # 默认 65536），不是未知键。
+    # 合法键以 asar 内 0.2.1-rc.2 的 Config 为准；
+    # ~/.dsh/profiles/node_modules 是 DSH Desktop 0.1.5，不可作为依据。
     - id: compaction-basic
       name: '@deepseek-ai/dsh-compaction-basic'
       config:
@@ -211,7 +214,6 @@
         provider: spawn
         toolName: subagent
         modelSelectionSettings: true
-        backgroundMode: continuable
 
     # Fork omits model selection so provider/model stay equal to the parent and
     # the inherited history remains eligible for KV Cache reuse. This preset
@@ -222,7 +224,6 @@
       config:
         provider: fork
         toolName: subagent_fork
-        backgroundMode: continuable
 
     # Production dsh does not install these optional providers. Install the
     # matching Bundle in this Profile and restart the Host, then copy this
@@ -234,7 +235,6 @@
       config:
         provider: codex
         toolName: subagent_codex
-        backgroundMode: one-shot
         maxDepth: provider-managed
 
     - id: tool-subagent-claude-code
@@ -243,11 +243,12 @@
       config:
         provider: claude-code
         toolName: subagent_claude_code
-        backgroundMode: one-shot
         maxDepth: provider-managed
 
-    - id: workflow-worker-thread
-      name: '@deepseek-ai/dsh-workflow-worker-thread'
+    # 0.2.1 无 dsh-workflow-worker-thread（asar 内 0 条目）；引擎包名是 dsh-workflow-ptc。
+    # config.provider 已核实为 workflow-ptc Config 的合法键（z.string().default("spawn")）。
+    - id: workflow-ptc
+      name: '@deepseek-ai/dsh-workflow-ptc'
       config:
         provider: spawn
 
