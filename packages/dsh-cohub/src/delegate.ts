@@ -898,6 +898,58 @@ export function resolveJobsService(ctx: any, owner?: any): any {
   return pick(owner?.ctx) ?? pick(ctx);
 }
 
+/**
+ * 解析后台 job 的 owner —— dsh-jobs-local 只接受「存活的 Agent 实例」：
+ * `ensureOwnerCleanup(owner)`（lib/index.js:394-403）用 `agents.get(owner.id)` 校验实例身份、
+ * 用 `owner.ctx.effect` 挂释放回调，`servesOwner` / `scopeOf`（:281）用 `owner.ctx` 做 controller 分层。
+ * 因此 `owner.id` 必须是**字符串**、`owner.ctx` 必须可挂 effect。
+ *
+ * 实测把 `exec.agent` 原样当 owner 会以 `session "[object Object]" has no live agent` 降级：
+ * 该字段在部分 DSH 版本里不是 Agent 实例本身（`id` 是对象），却被当 session 标识使用。
+ * 故按官方契约探测：自身 → `.agent` / `.session.agent` / `.current` → agents 注册表按父 session id 反查。
+ * 全部失败时返回入参（保持原行为：jobs.start 抛错 → 回退前台并把原因回传）。
+ *
+ * @param parent 调用方 agent（`exec.agent`）
+ * @param ctx 插件上下文（取 agents 注册表的兜底通道）
+ */
+export function resolveJobOwner(parent: any, ctx: any): any {
+  const isAgentLike = (x: any): boolean => !!x && typeof x === "object"
+    && typeof x.id === "string" && x.id.length > 0 && x.ctx !== undefined;
+  if (isAgentLike(parent)) return parent;
+  for (const candidate of [parent?.agent, parent?.session?.agent, parent?.current]) {
+    if (isAgentLike(candidate)) return candidate;
+  }
+  // agents 注册表反查：jobs-local 用 agents.get(owner.id) 校验存活，同一注册表可把 session 映射回实例
+  const pickService = (c: any) => {
+    if (!c) return undefined;
+    try {
+      const viaGet = typeof c.get === "function" ? c.get("agents") : undefined;
+      if (viaGet !== undefined && viaGet !== null) return viaGet;
+    } catch { /* 落到 reflect 通道 */ }
+    try {
+      const viaReflect = c.reflect?.get?.("agents", false);
+      if (viaReflect !== undefined && viaReflect !== null) return viaReflect;
+    } catch { /* 本层取不到，交给下一顺位 */ }
+    return undefined;
+  };
+  const sessionId = resolveOwnerSessionId({ agent: parent });
+  const agents = pickService(parent) ?? pickService(ctx);
+  if (agents && sessionId) {
+    try {
+      const direct = typeof agents.get === "function" ? agents.get(sessionId) : undefined;
+      if (isAgentLike(direct)) return direct;
+    } catch { /* 键不是 session id：继续扫注册表 */ }
+    try {
+      const raw = typeof agents.list === "function" ? agents.list() : undefined;
+      const all: any[] = raw === undefined ? [] : (Array.isArray(raw) ? raw : Array.from(raw));
+      const found = all.find((a: any) => a?.id === sessionId
+        || a?.session?.id === sessionId || a?.session?.header?.id === sessionId);
+      if (isAgentLike(found)) return found;
+    } catch { /* 注册表不可枚举：放弃探测，回退原行为 */ }
+  }
+  return parent;
+}
+
 /** 子代理结果预算处理的调用参数 */
 export interface SubagentBudgetOptions {
   /** 本段字符上限 */
@@ -1383,7 +1435,13 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       if (bgWanted) {
         // 优先从 owner（exec.agent）的 ctx 取：servesOwner 按 agent scope 判定 controller，
         // 只用插件 ctx（host 层）会取到不服务该 scope 的实例并抛错降级。
-        const jobs = resolveJobsService(ctx, parent);
+        // owner 归一（见 resolveJobOwner）：jobs-local 只认「存活 Agent 实例」，
+        // 把 exec.agent 原样当 owner 会以 session "[object Object]" has no live agent 降级。
+        const jobOwner = resolveJobOwner(parent, ctx);
+        if (jobOwner !== parent) {
+          ctx.logger?.info?.("[cohub background] job owner 已归一为 spawn 用的 Agent 实例（exec.agent 非实例本身）");
+        }
+        const jobs = resolveJobsService(ctx, jobOwner);
         if (jobs !== undefined && typeof jobs.start === "function") {
           // job cancel / owner 释放 → abort 子代理；子代理 run.dispose() 由 runAttempts 的
           // finally 保证（run.result 结算后必执行），因此 kill 路径不泄漏子代理。
@@ -1395,8 +1453,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
               label: skill.name + ": " + String(args.prompt ?? "").slice(0, 60),
               // owner 必须是存活的 Agent 实例：jobs-local 用 agents.get(owner.id) === owner 校验
               // （lib/index.js:398），并用 owner.ctx 做 scope 分层（servesOwner，:281）。
-              // exec.agent 正是这个实例（同一对象也作为 spawn 的 parent）。
-              owner: parent,
+              // exec.agent 正是这个实例（同一对象也作为 spawn 的 parent）；resolveJobOwner 已按
+              // 官方契约（id 为字符串 + ctx 可挂 effect + agents.get(id) === owner）探测出实例。
+              owner: jobOwner,
               // outputLimitBytes 只在**渲染期**截断（保尾丢头）；结果已由 budgetSubagentResult
               // 裁到 budget.maxChars，这里给足余量以保证头部契约段不被吃掉。
               outputLimitBytes: Math.max(65_536, budget.maxChars * 4),
