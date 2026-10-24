@@ -950,6 +950,16 @@ export function resolveJobOwner(parent: any, ctx: any): any {
   return parent;
 }
 
+/** 0.2.x 契约：owner = 调用方 agent 的 session id 字符串；jobs 服务自己 agents.get(id) 解析实例。
+ *  0.1.x 只认实例、传字符串会被拒，故保留实例作为降级重试值。 */
+export function resolveJobOwnerId(parent: any): string | undefined {
+  const asId = (x: any) =>
+    typeof x === "string" && x.length > 0 ? x
+    : (typeof x?.id === "string" && x.id.length > 0 ? x.id
+    : (typeof x?.session?.id === "string" && x.session.id.length > 0 ? x.session.id : undefined));
+  return asId(parent) ?? asId(parent?.agent) ?? asId(parent?.session) ?? undefined;
+}
+
 /** 子代理结果预算处理的调用参数 */
 export interface SubagentBudgetOptions {
   /** 本段字符上限 */
@@ -1435,27 +1445,34 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       if (bgWanted) {
         // 优先从 owner（exec.agent）的 ctx 取：servesOwner 按 agent scope 判定 controller，
         // 只用插件 ctx（host 层）会取到不服务该 scope 的实例并抛错降级。
-        // owner 归一（见 resolveJobOwner）：jobs-local 只认「存活 Agent 实例」，
-        // 把 exec.agent 原样当 owner 会以 session "[object Object]" has no live agent 降级。
+        // 注意：resolveJobOwner 返回的是**实例**，只用于解析 jobs 服务（要用 owner.ctx 判 scope），
+        // 不再作为 start() 的 owner 传参 —— 传参见下方 jobOwnerId（0.2.x 要字符串）。
         const jobOwner = resolveJobOwner(parent, ctx);
         if (jobOwner !== parent) {
           ctx.logger?.info?.("[cohub background] job owner 已归一为 spawn 用的 Agent 实例（exec.agent 非实例本身）");
         }
         const jobs = resolveJobsService(ctx, jobOwner);
-        if (jobs !== undefined && typeof jobs.start === "function") {
+        // 0.2.x 契约（resolveOwner，asar lib/index.js:537）：spec.owner 是 **session id 字符串**，
+        // 服务端自己 `agents.get(session)` 解析回实例。传实例 → get("[object Object]") === undefined
+        // → 抛 `session "[object Object]" has no live agent`。官方调用方 dsh-tool-workflow 也传 parent.id。
+        // 拿不到 id 就不启动 job：传 undefined 会变成 unowned job（永不被 owner 释放回收），比降级前台更糟。
+        const jobOwnerId = resolveJobOwnerId(parent);
+        if (jobOwnerId === undefined) {
+          bgFallbackReason = "无法解析调用方 session id（background job owner 契约要求字符串）";
+          ctx.logger?.warn?.("[cohub background-fallback] " + bgFallbackReason + "，回退前台");
+        } else if (jobs !== undefined && typeof jobs.start === "function") {
           // job cancel / owner 释放 → abort 子代理；子代理 run.dispose() 由 runAttempts 的
           // finally 保证（run.result 结算后必执行），因此 kill 路径不泄漏子代理。
           const cancelAc = new AbortController();
           let jobId: string | undefined;
           try {
-            const started = jobs.start({
+            const startJob = (ownerValue: any) => jobs.start({
               kind: "delegate",
               label: skill.name + ": " + String(args.prompt ?? "").slice(0, 60),
-              // owner 必须是存活的 Agent 实例：jobs-local 用 agents.get(owner.id) === owner 校验
-              // （lib/index.js:398），并用 owner.ctx 做 scope 分层（servesOwner，:281）。
-              // exec.agent 正是这个实例（同一对象也作为 spawn 的 parent）；resolveJobOwner 已按
-              // 官方契约（id 为字符串 + ctx 可挂 effect + agents.get(id) === owner）探测出实例。
-              owner: jobOwner,
+              // owner 必须是 **session id 字符串**：0.2.x 的 resolveOwner（asar lib/index.js:413/537）
+              // 把 spec.owner 直接当键 `agents.get(session)` 查注册表，再用解析出的实例做
+              // servesOwner（:553）与 ensureOwnerCleanup（:802）。传实例会变成 [object Object] 键。
+              owner: ownerValue,
               // outputLimitBytes 只在**渲染期**截断（保尾丢头）；结果已由 budgetSubagentResult
               // 裁到 budget.maxChars，这里给足余量以保证头部契约段不被吃掉。
               outputLimitBytes: Math.max(65_536, budget.maxChars * 4),
@@ -1481,6 +1498,17 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
                 };
               },
             });
+            let started: unknown;
+            try {
+              started = startJob(jobOwnerId);
+            } catch (error) {
+              // 0.1.x 兼容：只认实例、传字符串会被拒 → 用实例再试一次。
+              // 安全性：start() 的**第一句**就是 resolveOwner（asar lib/index.js:413），
+              // 而 spec.run(handle) 在最后（:439）。resolveOwner 抛错时 producer 从未启动，
+              // 因此同一个 run 闭包被第二次 start() 复用不会重复 spawn 子代理。
+              if (!/is not the registered agent instance/i.test(String((error as any)?.message ?? error))) throw error;
+              started = startJob(jobOwner);
+            }
             if (typeof started === "string" && started.length > 0) jobId = started;
           } catch (error) {
             bgFallbackReason = describeBgFallback(error);
