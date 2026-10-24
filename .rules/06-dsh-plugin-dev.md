@@ -173,7 +173,16 @@
 
 `src/skills.ts` 与 `lib/` 均被 `.gitignore` 排除，**禁止手改**。修改技能内容必须编辑 `skills/*.md` 后重建。
 
-## 十一、参考
+## 十一、发版
+
+详细步骤见 `docs/npm-release-setup.md`（日常发版流程）+ `packages/oh-my-opencode-cohub/.opencode/rules/发版规范.md`（权威）。硬要点：
+
+- **禁止 `npm version`**：手改 `packages/dsh-cohub/package.json` 与 `package-lock.json` 的 `version`（lock 至少两处：顶层与 `packages[""].version`），否则 CI 的 `npm ci` 报 `EUSAGE`
+- **CHANGELOG 是前置**：`packages/dsh-cohub/CHANGELOG.md` 自 0.6.0 起才建立，发版先补条目并用独立 `docs:` commit
+- **tag**：`dsh-vX.Y.Z`，annotated（`git tag -a ... <main-SHA>`），打前用 `git tag -l` + `git ls-remote --tags` 双重查重
+- **发布只走 CI**：根 `.github/workflows/publish.yml` 用 OIDC `npm publish --provenance`，**不在本地 `npm publish`**
+
+## 十二、参考
 
 - 官方技能文档：
   - `C:\Users\14023\.dsh\.agent-presets\cohub-cordis\skills\cordis-plugin-development\SKILL.md`

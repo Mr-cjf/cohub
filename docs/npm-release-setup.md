@@ -47,22 +47,28 @@ npm 侧 Trusted Publisher 配置中的 workflow filename 参数只填 `publish.y
 
 ## 日常发版流程
 
-遵循仓库既有规范：
+权威流程见 `packages/oh-my-opencode-cohub/.opencode/rules/发版规范.md`（`AGENTS.md` 引为权威）；本节是面向本仓库两个 npm 包的落地摘要，**冲突时以发版规范为准**。
 
-1. 更新 `CHANGELOG.md`（在对应包的目录下）
-2. 提交所有改动
-3. 确认版本号未被 npm registry 占用：`npm view <包名> versions --json | grep <版本号>`
-4. 执行版本号升级：
+1. **更新 `CHANGELOG.md`（发版前置，不可跳过）** — 在对应包目录下按 Keep a Changelog 格式新增版本条目，区分「新增 / 修复 / 变更 / 移除」，用独立 `docs:` commit 提交。`packages/oh-my-opencode-cohub/CHANGELOG.md` 一直存在；`packages/dsh-cohub/CHANGELOG.md` 是 **0.6.0 才建立的**，此前发版没写过，后续必须先在它上面补条目再动版本号。
+2. **提交所有源码改动** — `feat:` / `fix:` 各自独立 commit，不要和版本号混在一起。
+3. **确认版本号未被占用** — 注册表侧 `npm view <包名> versions --json`；git 侧 `git tag -l "<前缀>X.Y.Z"` 与 `git ls-remote --tags origin "refs/tags/<前缀>X.Y.Z"`，**两者都必须为空**（其他分支可能已发布过该号）。已被占用就改用更高版本号，**严禁删除、移动或覆盖已有 tag**。
+4. **手改版本号（不要用 `npm version`）** — 直接编辑以下两处，保持一致：
+   - `packages/<包名>/package.json` 的 `version`
+   - `packages/<包名>/package-lock.json` 的 **顶层 `version`** 与 **`packages[""].version`**
+
+   然后独立提交：`git commit -m "chore: 版本号 X.Y.Z"`。
+5. **合并到 main 并核实 SHA** — `git fetch origin` + `git rev-parse origin/main`，确认 main 与 origin/main 一致。
+6. **打 annotated tag 并推送** — 对已核实的 main SHA 打标：
    ```bash
-   npm version patch   # 或 minor / major
-   ```
-5. 推送 tag：
-   ```bash
+   git tag -a "dsh-vX.Y.Z" -m "release X.Y.Z" <main-SHA>      # dsh-cohub
+   git tag -a "opencode-vX.Y.Z" -m "release X.Y.Z" <main-SHA> # oh-my-opencode-cohub
    git push --follow-tags
    ```
-6. CI 自动构建 + 发布（可在 GitHub Actions 页面观察进度）
+7. **CI 自动构建 + 发布** — 根 workflow 以 OIDC 身份 `npm publish --provenance`，可在 GitHub Actions 页面观察进度。**不要在本地运行 `npm publish`**。
 
-> ⚠️ `npm version` 会同时修改 `package.json` 版本号、创建 git commit 与 tag。如果仓库有未提交的 WIP 改动，建议先 `git stash`。
+> ⚠️ **为什么禁止 `npm version`**：它会自己改版本号、自己 commit、自己打 **lightweight** tag，并触发 `preversion` / `version` / `postversion` lifecycle，与我们「docs/chore 分提交 + annotated tag 带 message + tag 打在已核实的 main SHA 上」的手控流程直接冲突。版本号一律手改。
+
+> ⚠️ **lockfile 必须同步改**：CI 每个包都是 `npm ci`（`working-directory: packages/<包名>`，见 `.github/workflows/publish.yml:46` 与 `:84`）。`npm ci` 会校验 `package.json` 与 `package-lock.json` 的版本号是否一致，只改 `package.json` 而漏掉 lock 会直接 `EUSAGE` 失败（`package.json and package-lock.json are not in sync`），发布不触发——0.6.0 踩到过这一点。
 
 ## 如何查看/管理 Trusted Publisher
 
@@ -162,4 +168,5 @@ npm trust github <包名> --repo Mr-cjf/cohub --file publish.yml --allow-publish
 | `packages/oh-my-opencode-cohub/.github/workflows/publish.yml` | 已改写为说明性注释（不生效） |
 | `packages/dsh-cohub/.github/workflows/publish.yml` | 已改写为说明性注释（不生效） |
 | `packages/*/CHANGELOG.md` | 各包的变更日志 |
+| `packages/oh-my-opencode-cohub/.opencode/rules/发版规范.md` | 发版权威规范（与本文冲突时以此为准） |
 | `C:\Users\14023\.npmrc.bak-20260916` | 本机 `.npmrc` 备份（旧 token 已过期） |
