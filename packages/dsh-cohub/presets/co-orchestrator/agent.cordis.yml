@@ -142,13 +142,16 @@
     toolResultPruner: true
   config:
     # ── 每轮工具结果节流：本部署已在 host 层生效，**不要在这里重复挂** ────────
-    # host bundle dsh-base/cordis.patch.yml:380-386 已挂 spill-local + spill-policy，
-    # 并配置 maxInlineBytes: 50000 —— 字段来自实际安装的 @deepseek-ai/dsh-spill-policy
-    # 0.1.5-rc.2（Config 为 { maxInlineBytes }），不是 0.2.x 的 maxInlineTokens。
+    # host bundle dsh-base/cordis.patch.yml 已挂 spill-local + spill-policy，
+    # 并配置 maxInlineTokens: 12500 —— 字段来自运行时 0.2.1-rc.2（在
+    # DeepSeek Harness\resources\app.asar 内）的 @deepseek-ai/dsh-spill-policy，
+    # Config 为 { maxInlineTokens }，不是 maxInlineBytes。
+    # ⚠️ ~/.dsh/profiles/node_modules/@deepseek-ai/* 指向 DSH Desktop（另一产品）的
+    # 0.1.5-rc.2，**不可作为版本 / 字段依据**，一切以 app.asar 内 0.2.1-rc.2 为准。
     # 该插件订阅 tools/post-execute；tools 是 host 单例，本 group 只 isolate compaction /
     # toolResultPruner，不隔离 tools。因此 preset 再挂一份会变成双层洋葱裁剪：
     # 内层把全文落盘、外层再裁一次并覆盖 notice 里的 locator —— 原文将不可恢复。
-    # 收紧每轮阈值只能在 host 层改 spill-policy 的 maxInlineBytes。
+    # 收紧每轮阈值只能在 host 层改 spill-policy 的 maxInlineTokens。
     #
     # 此处可做的安全收紧：把自动压缩提前，让 tool-result-pruner 更早清理长结果。
     # thresholdRatio: 0.5（默认 0.8）；auto 默认 true（config.auto ?? true），
