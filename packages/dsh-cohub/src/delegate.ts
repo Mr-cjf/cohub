@@ -1479,17 +1479,22 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
               run: () => {
                 const done = (async () => {
                   try {
-                    // 结果先过 cohub 的 result-budget（含 spill locator）再写 job.output，
+                    // 结果先过 cohub 的 result-budget（含 spill locator）再写 job 终态结果，
                     // 否则 outputLimitBytes 渲染期截断会把 locator 一起截掉。
+                    // 字段名必须是 **result**：jobs-local 的 settle() 只读 outcome.result
+                    // （lib/index.js: `job.result = outcome.result`），tool-jobs 的 job_output
+                    // 再从 read().result 渲染正文。写 output → job.result === undefined →
+                    // job_output 恒为 "(no new output)"（job 能完成但结果取不到）。
                     const text = await runAttempts(cancelAc.signal);
-                    return { status: "completed", output: text };
+                    return { status: "completed", result: text };
                   } catch (error) {
                     // job 被 kill → 生产方按 killed 结算（jobs-local settle 为 first-wins，
                     // 终端状态由生产方给出，不由注册表改写）。
                     if (cancelAc.signal.aborted) {
                       return { status: "killed", detail: "delegate 已取消（job_kill / owner 释放）" };
                     }
-                    return { status: "failed", output: "", detail: String(error) };
+                    // 失败没有正文结果：原因放 detail（job_output/job_list 的 statusLine 会渲染它）。
+                    return { status: "failed", detail: String(error) };
                   }
                 })();
                 return {
