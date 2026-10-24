@@ -70,6 +70,73 @@ npm 侧 Trusted Publisher 配置中的 workflow filename 参数只填 `publish.y
 
 > ⚠️ **lockfile 必须同步改**：CI 每个包都是 `npm ci`（`working-directory: packages/<包名>`，见 `.github/workflows/publish.yml:46` 与 `:84`）。`npm ci` 会校验 `package.json` 与 `package-lock.json` 的版本号是否一致，只改 `package.json` 而漏掉 lock 会直接 `EUSAGE` 失败（`package.json and package-lock.json are not in sync`），发布不触发——0.6.0 踩到过这一点。
 
+## 发布后验证
+
+CI 显示 `published` **不等于**用户装得上——必须做一次「发版后重装验证」：能装成功 + 版本号正确 + 核心功能在。这是 OpenCode 侧规范「安装安全：发版后重装验证」在 dsh 侧的落地。
+
+### 验证方式：`dsh plugin --profile web add dsh-cohub@X.Y.Z`
+
+DSH 的插件安装**统一走 `dsh` CLI**，没有别的官方入口。
+
+**已实测的环境事实**（2026-10，`dsh --help` / `dsh plugin --help` 实跑输出）：
+
+| 事实 | 证据 |
+|------|------|
+| `dsh` CLI 存在 | `C:\Users\14023\AppData\Roaming\npm\dsh.ps1`（npm 全局包，`Get-Command dsh` 命中）。**不在** `~/.dsh/bin/`——那里只有 `github-mcp-server.exe` |
+| `dsh plugin` 是 pnpm 转发器 | `dsh plugin --help` 原文：*"manage a profile's plugins by forwarding the remaining arguments to pnpm in the profile directory"* |
+| 语法 | `dsh plugin --profile <name> <pnpm-args...>`；官方示例 *"dsh plugin --profile tui add &lt;package&gt;"* |
+| 两个 profile 都用 **pnpm** | `~/.dsh/profiles/{desktop,web}/` 下是 `pnpm-lock.yaml` + `pnpm-workspace.yaml`，**没有** `package-lock.json`；`web/node_modules/.modules.yaml` 记录 `"packageManager": "pnpm@12.14.0"`、`nodeLinker: hoisted` |
+| 安装目录无独立 CLI | `DeepSeek Harness\` 下只有 Electron 主程序 `DeepSeek Harness.exe`，**没有** `dsh.exe` / `dsh.cmd` |
+
+```bash
+# 首选：走 DSH CLI（= 在 profile 目录里 pnpm add，并自动登记 dsh.profile.bundles）
+dsh plugin --profile web add dsh-cohub@X.Y.Z
+
+# 等价手动方式（dsh CLI 不可用时；语义完全相同）
+cd ~/.dsh/profiles/web && pnpm add dsh-cohub@X.Y.Z
+```
+
+> **为什么验证用 `web` profile**：`~/.dsh/profiles/web/package.json` 的 `dependencies` 里 `dsh-cohub` 是 **registry 版本号**（`"0.5.1"`），装的就是 npm 发布产物。
+> `~/.dsh/profiles/desktop/package.json` 用的是 `link:C:/Users/14023/myproject/cohub/packages/dsh-cohub`——指向本地 checkout，**它验证不到 npm 产物**。要在 desktop 验证必须先临时改成版本号，那属于改本机 profile，不在发版流程内（也会打断你的本地开发链接）。
+
+> **自动登记 bundles（文档声称，未实测）**：`packages/dsh-cohub/README.md:22` 称 `dsh plugin add` 安装后会自动把声明 `dsh.bundle` 的依赖加入 `dsh.profile.bundles`。若装完重启发现插件没挂上，先手工确认 `~/.dsh/profiles/web/package.json` 的 `dsh.profile.bundles` 数组里是否有 `"dsh-cohub"`。
+
+### 验证什么（三条，缺一不可）
+
+**① 能装成功** — 上面的 `dsh plugin add` 不报错。`ERR_PNPM_*` / `404` 均视为发版失败（常见原因：CI 发的是空包、`registry` 镜像未同步、`minimumReleaseAge` 拦截了过新版本）。
+
+**② 版本号正确** — 读实际落盘的文件，不要只看命令回显：
+
+```bash
+# 检查 profile 里真正装进去的版本
+node -p "require('C:/Users/14023/.dsh/profiles/web/node_modules/dsh-cohub/package.json').version"
+# 期望输出：X.Y.Z
+```
+
+**③ 至少一个核心功能可用** — 重启该 profile（`dsh web`），在 GUI 里新建会话，确认 `delegate` / `delegate_batch` 工具存在且可调用。这两个工具由插件 `apply()` 注册，工具在 = 插件真的挂上了（比看日志可靠）。13 个 `co-*` 技能也应出现在技能列表中。
+
+### 不装 profile 的轻量检查：`npm pack --dry-run`
+
+只想确认 tarball 内容对、不想改动任何 profile 时，用这条（**已实测**：2026-10 对 `dsh-cohub@0.6.0` 实跑，输出 `total files: 13`、`lib/index.js 161.1kB`、`presets/` 齐全）：
+
+```bash
+cd "$(mktemp -d)"   # 装到临时目录，不碰任何 profile
+npm pack dsh-cohub@X.Y.Z --dry-run
+```
+
+重点看三样：`lib/index.js` 存在且体积正常（约 160kB，**不是 0 字节**）、`cordis.patch.yml` 在包里、`presets/` 子目录完整。CI 漏 `npm run build` 时，这里会看不到 `lib/`——这正是第 3 节「构建产物被 gitignore」那条坑的可观测信号。
+
+### 实测标注汇总
+
+| 内容 | 状态 |
+|------|------|
+| `dsh --help` / `dsh plugin --help` 的存在与语法 | ✅ **已实测**（真实输出） |
+| 两个 profile 用 pnpm、desktop 用 `link:`、web 用 registry 版本号 | ✅ **已实测**（读文件 + `.modules.yaml`） |
+| `npm pack --dry-run` 的输出形态与文件清单 | ✅ **已实测**（对 0.6.0 实跑） |
+| `dsh plugin --profile web add dsh-cohub@X.Y.Z` 端到端跑通 | ⚠️ **未实测**——本轮只做只读查证，未真的安装/切换任何 profile 的包 |
+| `dsh plugin add` 自动登记 `dsh.profile.bundles` | ⚠️ **未实测**（来源：`packages/dsh-cohub/README.md:22` 文档声称） |
+| `node -p require(...).version` 与 GUI 里见 `delegate` | ⚠️ **未实测**（标准做法，非本机实跑） |
+
 ## 如何查看/管理 Trusted Publisher
 
 ```bash
@@ -100,9 +167,18 @@ v4–v6 导出假 token `XXXXX-XXXXX-XXXXX-XXXXX` 到 `.npmrc`，污染环境变
 
 npm 侧的 workflow filename 参数填 `publish.yml`（不含 `.github/workflows/` 前缀）。npm 会自动拼接成完整的 workflow 路径做校验。
 
-### 5. 未发布的包无法预配 TP
+### 5. 未发布的包无法预配 TP（**仅限首次预配场景**）
 
-这是 npm API 层面的限制——配 TP 时 npm 会验证包是否存在。必须先 `npm publish` 发布一次（哪怕是 `0.0.1` 空包），再配 TP。
+这是 npm API 层面的限制——配 TP 时 npm 会验证包是否存在。因此**仅当首次为该包预配 Trusted Publisher 时**，才需要先发布一个占位的空包（如 `0.0.1`）让它"存在"，再配 TP。
+
+> ⚠️ **这是一次性的引导动作，不属于日常发版流程**——与上一节「日常发版流程」第 7 步「不要在本地运行 `npm publish`」**并不矛盾**，两者管的场景不同：
+>
+> | 场景 | 频率 | 由谁发布 |
+> |------|------|----------|
+> | 首次预配 TP 的占位空包 | **一次性**（每个包一生一次，`oh-my-opencode-cohub` / `dsh-cohub` 均已完成） | 可在本地发布，也可手工上传 |
+> | 正式版本发版 | 每次发版 | **一律由 CI**（OIDC `npm publish --provenance`），本地永不执行 `npm publish` |
+>
+> 日常发版**永远不要**因为「怕包不存在」而在本地 `npm publish`：TP 配好之后包已存在，CI 走 OIDC 即可。
 
 ## 本机已知环境事实
 

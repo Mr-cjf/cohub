@@ -181,6 +181,7 @@
 - **CHANGELOG 是前置**：`packages/dsh-cohub/CHANGELOG.md` 自 0.6.0 起才建立，发版先补条目并用独立 `docs:` commit
 - **tag**：`dsh-vX.Y.Z`，annotated（`git tag -a ... <main-SHA>`），打前用 `git tag -l` + `git ls-remote --tags` 双重查重
 - **发布只走 CI**：根 `.github/workflows/publish.yml` 用 OIDC `npm publish --provenance`，**不在本地 `npm publish`**
+- **发布后必须重装验证**：CI 显示 `published` ≠ 用户装得上。走 `dsh plugin --profile web add dsh-cohub@X.Y.Z`（`dsh plugin` 是 pnpm 转发器；web profile 装 registry 版本，desktop 用 `link:` 验证不到 npm 产物），再查 `node_modules/dsh-cohub/package.json` 的 `version` + 重启后 `delegate` 工具是否在。不装 profile 的轻量替代：临时目录 `npm pack dsh-cohub@X.Y.Z --dry-run` 看 `lib/index.js` 非空。详见 `docs/npm-release-setup.md` →「发布后验证」
 
 ## 十二、参考
 
