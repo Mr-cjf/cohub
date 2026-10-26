@@ -138,7 +138,8 @@ const ScheduleConfig = z.object({
 
 /** P1-3（子代理结果预算）：契约保留 + 预算裁剪 + 落盘定位。
  *  全部字段内建默认值 → 用户不改也能生效；enabled=false 完全回到「全文回传」的旧行为。
- *  字符上限按 3 字符/token 折算：6000 字符 ≈ 2000 tokens（父会话每轮都要重发，故取小预算）。 */
+ *  字符上限按 3 字符/token 折算：12000 字符 ≈ 4000 tokens（父会话每轮都要重发，故仍设上限；
+ *  但阈值过低会让父代理拿到 locator 却因禁读无权读取、只能重复委派，实测得不偿失）。 */
 const ResultBudgetConfig = z.object({
   /** 是否启用结果预算裁剪；默认 true */
   enabled: z.boolean().default(true),

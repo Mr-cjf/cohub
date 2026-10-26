@@ -21,8 +21,11 @@
 /** 每 token 折算字符数（保守口径：宁可早裁；中英混排实测约 2.5–4 字符/token）。 */
 export const CHARS_PER_TOKEN = 3;
 
-/** delegate 单次子代理结果上限（字符）：6000 ≈ 2000 tokens。 */
-export const DEFAULT_DELEGATE_RESULT_CHARS = 6_000;
+/** delegate 单次子代理结果上限（字符）：12000 ≈ 4000 tokens。 */
+// 依据（真实会话实测）：子代理典型输出 6–11k 字符（6,247 / 11,049），阈值过低会导致父代理拿到
+// locator 却无权读取（orchestrator 禁读文件），只能重新委派补信息——省下的传输开销被重复委派吃回去。
+// 12000 可覆盖绝大多数输出，避免走到「locator 却读不到」那条尴尬路径。
+export const DEFAULT_DELEGATE_RESULT_CHARS = 12_000;
 /** 失败路径 partial 的预算上限（字符）。 */
 export const DEFAULT_PARTIAL_BUDGET_CHARS = 3_000;
 /** delegate_batch 单个任务结果上限（字符）。 */
