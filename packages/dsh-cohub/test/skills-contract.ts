@@ -29,8 +29,8 @@ function group(title: string) {
 group("用例 1：orchestrator 验证节（范围 / 负责人 / 扩大条件）");
 check("验证节存在", orchestrator.includes("## 5. 验证"));
 check("验证范围由委派 prompt 明确", orchestrator.includes("验证范围由委派 prompt 明确"));
-check("负责人明确：co-fixer 编译测试", orchestrator.includes("co-fixer 编译测试"));
-check("负责人明确：co-oracle / co-designer 审查并行", orchestrator.includes("co-oracle 代码审查") && orchestrator.includes("co-designer UI 审查"));
+check("负责人明确：T1/T2 由 co-fixer 自验（build + 相关测试）即完成", orchestrator.includes("co-fixer 自验") && orchestrator.includes("不追加 co-oracle 全量审查"));
+check("追加条件：T3 / 公共导出等 → co-oracle；仅 UI 改动 → co-designer", orchestrator.includes("公共导出") && orchestrator.includes("权限与路径边界") && orchestrator.includes("只有 UI 改动的 T1/T2 才需 co-designer"));
 check("修改 Wave 不自测", orchestrator.includes("不自测"));
 check("批量修改后统一验证", orchestrator.includes("批量修改全部完成后统一验证"));
 check("失败先集中归因", orchestrator.includes("集中归因"));
