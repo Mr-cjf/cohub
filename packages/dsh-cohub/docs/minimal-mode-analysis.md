@@ -1,5 +1,8 @@
 # 极简模式分析与 cohub 优化决策记录
 
+> **2026-10-26 勘误**：本文关于「子代理只能继承父 preset」「DSH 不支持 per-child preset」的结论**已被 DSH 0.2.1-rc.2 推翻**——`SubagentStartRequest.agentPreset` 是一等字段，经 `presets.mount()` 生效；
+> cohub 已据此实现 `cohub-subagent-readonly` / `cohub-subagent-write` 两个子代理 preset。下文保留作为历史分析记录。
+
 ## 1. 背景
 用户观察到 DSH 的「极简模式」下模型能力"巨幅提升"，且模型思考中几乎不出现 "let me ..." 这类元叙述。本文记录对极简模式的分析结论、其能力提升的机制解释，以及据此对 dsh-cohub 插件所做的优化决策与依据。
 

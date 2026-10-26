@@ -279,7 +279,7 @@ cp presets/co-orchestrator/* ~/.dsh/.agent-presets/co-orchestrator/
 > pwsh -File scripts/deploy-preset.ps1 -PresetName co-orchestrator
 > ```
 
-在 GUI 的 agent preset 选择器中切换。注意（rc.6 限制）：子代理继承父代理的 preset 组合且 toolFilter 只能收窄，因此 preset 不硬性移除文件工具——「绝不亲自操作文件」由 co-orchestrator 技能在提示词层约束（与 OpenCode 原版一致）。
+在 GUI 的 agent preset 选择器中切换。注意：**DSH 0.2.1 起支持 per-child `agentPreset`**（`SubagentStartRequest.agentPreset` 为一等字段，子代理经 `presets.mount()` 独立组装），子代理不再继承父代理的 preset 组合与工具表——cohub 已用两个独立精简 preset（`cohub-subagent-readonly` / `cohub-subagent-write`）对子代理做**硬隔离**，故「绝不亲自操作文件」「只读代理不写文件」由工具面物理保证，不再只靠提示词。`toolFilter` 仍保留作为补充收窄手段（但它对子代理 own 层挂载的工具无效）。主代理侧「绝不亲自操作文件」继续由 co-orchestrator 技能在提示词层约束（与 OpenCode 原版一致）。
 
 **v0.3.0 修正（修复派发）**：原 preset 只挂 `tool-workflow`，缺 spawn/fork 委派工具行，主代理无法实际 spawn co-* 子代理。v0.3.0 补齐 `delegation-subagents` group（subagent / subagent_fork / control / list-agents / ralph）+ compaction group（防长会话爆 context）；persona「全部委派给专职子代理」才能落地。**前序版本中尝试用运行时 `tools.restrict({deny})` 物理收口文件 / Shell / 外网工具的做法已回退**——实测发现该 API 在 DSH 0.1.0-rc.6 上行为不符合预期，会连带影响委派工具，导致主代理无法派发；现回到「preset 不挂 fs/shell/web 工具行 + persona 软约束」方案。
 
