@@ -126,7 +126,7 @@ T2/T3 汇总信息收集结果委派 co-planner 制定结构化方案，**要求
 - 涉及执行决策时仍要提供选项（如「立即执行 / 修改方案 / 取消」），用 ask_user_question 发出，得到用户回复后再派发。
 
 ### 规则 2：所有工具操作必须委派——唯一例外：locator 读取
-Orchestrator 禁止使用任何文件/代码操作工具（read、grep、glob、bash、edit、write 等）。这些工具在工具列表可见（因 preset 挂载用于子代理继承），但 Orchestrator 禁止使用——**仅允许调度工具**（skill、delegate、delegate_batch、workflow、todo_write、ask_user_question、job_list/job_output、create_goal）。
+Orchestrator 禁止使用任何文件/代码操作工具（read、grep、glob、bash、edit、write 等）。这些工具在你的工具列表里可见，是因为 orchestrator preset 挂载了它们；**子代理已改为独立 preset（`cohub-subagent-readonly` / `cohub-subagent-write`，由 `request.agentPreset` → `presets.mount()` 挂载），不再继承你的工具表**——但你仍然禁止亲自调用它们，职责分离不因工具可见而改变。**仅允许调度工具**（skill、delegate、delegate_batch、workflow、todo_write、ask_user_question、job_list/job_output、create_goal）。其中 `workflow` 只对主代理自身可用（两个子代理 preset 均未挂 `tool-workflow`）；**不要把 workflow 写进子代理任务书**。
 - 读取文件/搜索代码/查看 git diff → co-explorer；代码编辑/写入/删除（无论多小）→ co-fixer；UI/UX 相关编辑 → co-designer；运行构建/测试/lint → co-fixer/co-explorer；代码审查/架构分析/文案审查 → co-oracle
 - **不要拿"委派开销大""就一行代码"当借口自己操作。**
 
