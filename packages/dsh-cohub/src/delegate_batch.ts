@@ -13,6 +13,8 @@ import {
   createEnvSig,
   resolveSkillToolFilter,
   resolveSkillAgentPreset,
+  formatSkillLabel,
+  DEFAULT_FALLBACK_SKILL,
   guardDelegationDepth,
   DELEGATE_PERSONA,
   DEFAULT_SPAWN_TRANSPORT,
@@ -31,10 +33,21 @@ import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 export interface DelegateBatchTask {
   /** 可选任务标识，用于结果映射；不提供时自动生成 task-0, task-1... */
   id?: string;
-  /** 必填，专职代理技能名，如 co-fixer / co-explorer / co-oracle */
+  /** 必填，专职代理技能名（必须是 co-* 代理名），如 co-fixer / co-explorer / co-oracle。
+   *  漏传会被参数校验直接拒绝；万一绕过校验（旧调用 / 手写 args），运行时兜底到 co-fixer 并 warn。 */
   skill: string;
   /** 必填，给该代理的具体任务描述（自包含，写全目标、文件路径、约束） */
   prompt: string;
+}
+
+/** 规范化后的批量任务：skill 已 trim 并兜底，taskId 已生成 */
+interface NormalizedBatchTask {
+  task: DelegateBatchTask;
+  taskId: string;
+  /** 规范化后的 skill 名（空值已兜底为 DEFAULT_FALLBACK_SKILL） */
+  requestedSkill: string;
+  /** 是否为「未提供 skill → 兜底」的情形（决定 label 里是否带 (default:co-fixer)） */
+  skillFallback: boolean;
 }
 
 /** 单个批量委派结果 */
@@ -96,14 +109,20 @@ export function createDelegateBatchTool(
       tasks: {
         type: "array",
         required: true,
-        description: "任务列表，每个任务包含 id（可选，用于结果映射）、skill（代理名）、prompt（具体任务描述）。上限由 schedule.maxParallelBatch 限制（默认 3，最大 20）。",
+        description: "任务列表，每个任务的 skill 与 prompt 均为必填（漏传 skill 会报 invalid arguments: missing required property \"tasks[i].skill\"）。"
+          + "上限由 schedule.maxParallelBatch 限制（默认 3，最大 20）。",
         items: {
           type: "object",
           additionalProperties: false,
           properties: {
             id: { type: "string", description: "可选任务标识，用于结果映射" },
-            skill: { type: "string", description: "必填，专职代理技能名，如 co-fixer / co-explorer / co-oracle" },
-            prompt: { type: "string", description: "必填，给该代理的具体任务描述" },
+            skill: {
+              type: "string",
+              required: true,
+              description: "必填，必须指定 co-* 代理名（co-fixer / co-explorer / co-oracle / co-planner 等）。"
+                + "漏传会导致 label 变成 \":undefined\" 并失去 preset 路由与工具裁剪，故直接判为非法参数",
+            },
+            prompt: { type: "string", required: true, description: "必填，给该代理的具体任务描述（自包含）" },
           },
         },
       },
@@ -142,15 +161,33 @@ export function createDelegateBatchTool(
       // 所有 task 共享同一份环境契约文本（只计算一次，避免重复 I/O）
       const contractText = envContract.enabled ? resolveContractText(envContract, envSig, ctx).text : "";
 
+      // 规范化每个 task 的 skill（schema 必填之外的**第二道防线**）：
+      // 旧调用（改必填之前的 args）或手写 args 仍可能漏传——绝不把 undefined 带进
+      // label / preset 解析 / 结果字段，一律 trim 后兜底 co-fixer 并打一条 warn。
+      const normalized: NormalizedBatchTask[] = tasks.map((task, index) => {
+        const taskId = task.id ?? `task-${index}`;
+        const raw = typeof task.skill === "string" ? task.skill.trim() : "";
+        const skillFallback = raw.length === 0;
+        if (skillFallback) {
+          ctx.logger?.warn?.(
+            "[cohub delegate_batch] task \"" + taskId + "\" 缺少 skill（收到 "
+            + JSON.stringify(task.skill ?? null) + "），已兜底为 " + DEFAULT_FALLBACK_SKILL
+            + "；schema 已要求 skill 必填，出现本告警说明调用绕过了参数校验",
+          );
+        }
+        return { task, taskId, requestedSkill: skillFallback ? DEFAULT_FALLBACK_SKILL : raw, skillFallback };
+      });
+
       // 并行启动所有子代理
       const starts = await Promise.allSettled(
-        tasks.map(async (task, index) => {
+        normalized.map(async ({ task, taskId, requestedSkill, skillFallback }) => {
           // spawn 起算时刻：单个 task 的超时预算从这里开始计（见下方 Promise.race），
           // 而不是从「逐个收集结果」的 await 时刻开始计——后者会让第 i 个 task 拿到
           // 从第 i-1 个 settle 起算的完整预算，整批最坏退化为 N × wallClockBudgetMs。
           const startedAt = Date.now();
-          const taskId = task.id ?? `task-${index}`;
-          const { skill, route } = resolveSkillAndRoute(task.skill, getRoutes, ctx, ctx.logger);
+          const { skill, route } = resolveSkillAndRoute(requestedSkill, getRoutes, ctx, ctx.logger);
+          // label / 结果里的 skill 片段：兜底时显式标 (default:co-fixer)，绝不出现 ":undefined"
+          const skillTag = formatSkillLabel(skill, skillFallback);
           const promptText = buildDelegatePrompt({
             skill,
             contractText,
@@ -177,7 +214,7 @@ export function createDelegateBatchTool(
 
           try {
             const run = await startSubagentRun(ctx, DEFAULT_SPAWN_TRANSPORT, {
-              label: `delegate_batch:${taskId}:${task.skill}`,
+              label: `delegate_batch:${taskId}:${skillTag}`,
               prompt: [{ type: "text", text: promptText }],
               parent,
               persona: DELEGATE_PERSONA,
@@ -188,20 +225,20 @@ export function createDelegateBatchTool(
               ...(agentOptions ? { agentOptions } : {}),
               signal: ac.signal,
             });
-            return { taskId, task, run, ac, onExecAbort, startedAt, startError: undefined };
+            return { taskId, skillName: skill.name, skillTag, task, run, ac, onExecAbort, startedAt, startError: undefined };
           } catch (startError) {
             // start 失败：清理 onExecAbort 监听器，返回带错误标记的对象
             if (onExecAbort && exec.signal) {
               try { exec.signal.removeEventListener("abort", onExecAbort); } catch { /* 可能已释放 */ }
             }
-            return { taskId, task, run: undefined, ac, onExecAbort: null, startedAt, startError };
+            return { taskId, skillName: skill.name, skillTag, task, run: undefined, ac, onExecAbort: null, startedAt, startError };
           }
         }),
       );
 
       // 收集结果（最外层 try-finally 确保所有 runs 被清理）
       const results: DelegateBatchResult[] = [];
-      const runs: Array<{ run: any; ac: AbortController; onExecAbort: (() => void) | null; taskId: string; task: DelegateBatchTask; startedAt: number }> = [];
+      const runs: Array<{ run: any; ac: AbortController; onExecAbort: (() => void) | null; taskId: string; skillName: string; skillTag: string; startedAt: number }> = [];
 
       try {
         for (const s of starts) {
@@ -214,21 +251,21 @@ export function createDelegateBatchTool(
             // start 失败：记录失败结果，不加入 runs 列表（没有 run 对象）
             results.push({
               id: val.taskId,
-              skill: val.task.skill,
+              skill: val.skillTag,
               status: "error",
               error: val.startError instanceof Error ? val.startError.message : String(val.startError),
             });
             continue;
           }
-          const { run, taskId, task, ac, onExecAbort, startedAt } = val;
-          runs.push({ run, taskId, task, ac, onExecAbort, startedAt });
+          const { run, taskId, skillName, skillTag, ac, onExecAbort, startedAt } = val;
+          runs.push({ run, taskId, skillName, skillTag, ac, onExecAbort, startedAt });
 
           // 防 unhandledRejection
           run.result.catch(() => {});
         }
 
         // 逐个 await run.result（带独立超时和独立 AbortController）
-        for (const { run, taskId, task, ac, onExecAbort, startedAt } of runs) {
+        for (const { run, taskId, skillName, skillTag, ac, startedAt } of runs) {
           let outcome: any;
           let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -257,15 +294,15 @@ export function createDelegateBatchTool(
               // P1-3：每个任务结果先各自预算裁剪（超预算时落盘定位），之后才参与总串拼接
               // 改动 3 同款：按 skill 分档取更小上限（co-planner 1500 字符；契约段仍优先保留）
               const resultText = await budgetSubagentResult(ctx, exec, contentText(outcome.output), {
-                maxChars: Math.min(budget.batchTaskMaxChars, resolveSkillResultMaxChars(budget, task.skill)),
+                maxChars: Math.min(budget.batchTaskMaxChars, resolveSkillResultMaxChars(budget, skillName)),
                 scope: "batch:task",
-                label: taskId + ":" + task.skill,
+                label: taskId + ":" + skillTag,
                 enabled: budget.enabled,
                 toolName: "delegate_batch",
               });
               results.push({
                 id: taskId,
-                skill: task.skill,
+                skill: skillTag,
                 status: "completed",
                 result: resultText,
               });
@@ -273,7 +310,7 @@ export function createDelegateBatchTool(
               const diag = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
               results.push({
                 id: taskId,
-                skill: task.skill,
+                skill: skillTag,
                 status: "failed",
                 error: `stopReason: ${outcome?.stopReason ?? "unknown"}`
                   + (diag === undefined ? "" : `; diagnostic: ${diag}`),
@@ -284,7 +321,7 @@ export function createDelegateBatchTool(
           } catch (e) {
             results.push({
               id: taskId,
-              skill: task.skill,
+              skill: skillTag,
               status: "error",
               error: e instanceof Error ? e.message : String(e),
             });

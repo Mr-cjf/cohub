@@ -206,6 +206,16 @@ const READ_ONLY_SKILLS = new Set([
 const WRITE_SKILLS = new Set(["co-fixer", "co-designer", "co-cordis"]);
 
 /**
+ * 未提供 skill（缺字段 / 空串 / 纯空白）时的兜底代理名。
+ *
+ * 实测事故：某次 delegate_batch 调用的某个 task 漏传 skill，原始 undefined 直接流进了
+ * descriptor label（产出 `delegate_batch:xxx:undefined`）、preset 解析（拿到 undefined =
+ * 不挂子代理 preset）与工具裁剪（退化成通用 deny 表）。schema 改成必填是第一道防线，
+ * 这里是第二道：任何绕过校验的旧调用 / 手写 args 都兜底到 co-fixer（修复类任务最常见）。
+ */
+export const DEFAULT_FALLBACK_SKILL = "co-fixer";
+
+/**
  * 按 skill 名解析子代理工具裁剪 filter（deny 减法）。
  *
  * fail-soft：任何构造异常都退回 undefined（= 全量工具，与改造前行为一致），
@@ -262,6 +272,8 @@ export const SUBAGENT_WRITE_PRESET = "cohub-subagent-write";
  * 按 skill 名解析子代理应挂载的独立 preset id。
  *
  * 语义（fail-soft 优先）：
+ *   - 空/未传 skill → write preset（等价兜底 co-fixer：漏传 skill 的委派多为实施类任务；
+ *     若返回 undefined 会退化成「继承父 preset」，把父的纯调度 persona 白烧一遍）
  *   - 只读类（explorer/librarian/observer/oracle/planner/council/rule-*）→ readonly preset
  *   - 实施类（fixer/designer/cordis）→ write preset
  *   - co-orchestrator 或任何未命中的名字 → undefined（= 继承父 preset，保持改动前行为）
@@ -276,7 +288,9 @@ export const SUBAGENT_WRITE_PRESET = "cohub-subagent-write";
 export function resolveSkillAgentPreset(skillName: string | undefined, enabled = true): string | undefined {
   if (!enabled) return undefined;
   const key = (skillName ?? "").trim();
-  if (key.length === 0 || key === "co-orchestrator") return undefined;
+  if (key === "co-orchestrator") return undefined;
+  // 空/纯空白 = 未提供 skill → 与 DEFAULT_FALLBACK_SKILL 对齐（实施类 preset）
+  if (key.length === 0) return SUBAGENT_WRITE_PRESET;
   if (READ_ONLY_SKILLS.has(key)) return SUBAGENT_READONLY_PRESET;
   if (WRITE_SKILLS.has(key)) return SUBAGENT_WRITE_PRESET;
   return undefined;
@@ -783,25 +797,46 @@ class StallWatchdog {
 /**
  * 按 skill 名精确匹配 COHUB_SKILLS；缺失或未知时兜底 co-fixer 并 warn。
  * 同时查找该 skill 的路由配置（找不到返回 undefined）。
- * 注意：路由查找使用原始 requestedSkill（可能为空/undefined），而非兜底后的 skill 名。
+ *
+ * 规范化：先 trim，空串/纯空白一律视为「未提供」。此前 `requestedSkill || "co-fixer"`
+ * 只挡得住空串，挡不住 `"   "`（truthy → 走 unknown skill 分支），也让空缺的 skill
+ * 直接以 undefined 进入 label 与 preset 解析（实测产出 `:undefined`）。
+ *
+ * 注意：路由查找使用规范化后的 requested（可能为空），而非兜底后的 skill 名 ——
+ * 兜底来的 co-fixer 不该冒领用户在路由表里为 co-fixer 配置的 provider/model。
+ *
+ * @returns fallback=true 表示 skill 缺失/空白、已兜底到 {@link DEFAULT_FALLBACK_SKILL}。
  */
 export function resolveSkillAndRoute(
   requestedSkill: string,
   getRoutes: SkillRouteSource,
   ctx: any,
   logger?: any,
-): { skill: CoHubSkill; route: SkillRouteConfig | undefined } {
-  const skillName = requestedSkill || "co-fixer";
+): { skill: CoHubSkill; route: SkillRouteConfig | undefined; fallback: boolean } {
+  const requested = (typeof requestedSkill === "string" ? requestedSkill : "").trim();
+  const skillName = requested || DEFAULT_FALLBACK_SKILL;
+  const fallback = requested.length === 0;
   let skill = COHUB_SKILLS.find(s => s.name === skillName);
   if (!skill) {
     (logger ?? ctx.logger)?.warn?.('delegate: unknown skill "' + skillName + '", falling back to co-fixer');
-    skill = COHUB_SKILLS.find(s => s.name === "co-fixer")!;
-  } else if (!requestedSkill) {
-    (logger ?? ctx.logger)?.info?.('delegate: skill not specified, defaulting to co-fixer');
+    skill = COHUB_SKILLS.find(s => s.name === DEFAULT_FALLBACK_SKILL)!;
+  } else if (fallback) {
+    (logger ?? ctx.logger)?.warn?.(
+      "delegate: skill 未提供（缺字段/空串/纯空白），已兜底为 " + DEFAULT_FALLBACK_SKILL
+      + "；schema 已要求必填，出现本告警说明调用绕过了参数校验",
+    );
   }
-  // 路由查找使用原始 requestedSkill（可能为空），而非 skillName（兜底后）
-  const route = (getRoutes() ?? []).find(s => s.name === requestedSkill);
-  return { skill, route };
+  // 路由查找使用规范化后的 requested（可能为空），而非 skillName（兜底后）
+  const route = (getRoutes() ?? []).find(s => s.name === requested);
+  return { skill, route, fallback };
+}
+
+/**
+ * 生成 descriptor label 里的 skill 片段：兜底时显式标注 `(default:co-fixer)`，
+ * 绝不把 undefined/空串塞进 label（label 是事后排查的唯一锚点）。
+ */
+export function formatSkillLabel(skill: CoHubSkill, fallback: boolean): string {
+  return fallback ? skill.name + " (default:" + DEFAULT_FALLBACK_SKILL + ")" : skill.name;
 }
 
 /**
@@ -1364,7 +1399,10 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
     parameters: {
       skill: {
         type: "string",
-        description: "专职代理技能名，如 co-fixer/co-explorer/co-oracle。缺省时默认 co-fixer",
+        required: true,
+        description: "必填，专职代理技能名，必须是 co-* 代理名（co-fixer/co-explorer/co-oracle/co-planner 等）。"
+          + "缺省会报错 invalid arguments: missing required property \"skill\"——不填就无法路由 provider/model，"
+          + "也挂不上该角色的子代理 preset 与工具裁剪",
       },
       prompt: {
         type: "string",
@@ -1401,13 +1439,15 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       ctx.logger?.info?.("[cohub schedule] 生效调度参数：batch=" + (schedule?.maxParallelBatch ?? 3)
         + " wallMs=" + (schedule?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS));
 
-      // ① 按 skill 名精确匹配技能 + 查找路由配置（共享函数）
-      const { skill, route } = resolveSkillAndRoute(args.skill, getRoutes, ctx);
+      // ① 按 skill 名精确匹配技能 + 查找路由配置（共享函数；skill 缺失/空白会兜底 co-fixer 并 warn）
+      const { skill, route, fallback: skillFallback } = resolveSkillAndRoute(args.skill, getRoutes, ctx);
+      // label 里的 skill 片段：兜底时显式标 (default:co-fixer)，绝不出现 ":undefined"
+      const skillTag = formatSkillLabel(skill, skillFallback);
 
       // ③ 注入该 skill 的精简指令（brief）+ 用户具体任务（spawn 不继承父上下文，必须自包含）
       const brief = skill.brief?.trim();
       if (!brief) {
-        ctx.logger?.warn?.('delegate: skill "' + args.skill + '" 缺少 brief，回退完整 content');
+        ctx.logger?.warn?.('delegate: skill "' + skillTag + '" 缺少 brief，回退完整 content');
       }
 
       // ④ 构造 agentOptions（共享函数；provider 未配 model 时解析该 provider 的默认模型；
@@ -1510,7 +1550,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           let run: any;
           try {
             run = await startSubagentRun(ctx, DEFAULT_SPAWN_TRANSPORT, {
-              label: "delegate:" + args.skill,
+              label: "delegate:" + skillTag,
               prompt: [{ type: "text", text: promptText }],
               parent,
               persona: DELEGATE_PERSONA,
@@ -1563,7 +1603,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             return await budgetSubagentResult(ctx, exec, contentText(outcome.output), {
               maxChars: resolveSkillResultMaxChars(budget, skill.name),
               scope: "delegate",
-              label: args.skill,
+              label: skillTag,
               enabled: budget.enabled,
             });
           }
@@ -1578,7 +1618,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             ? applyResultBudget(partialRaw, {
               maxChars: budget.partialMaxChars,
               scope: "delegate:partial",
-              label: args.skill,
+              label: skillTag,
               locatorFallback: "未落盘（失败路径不写盘）",
             }).text
             : partialRaw;
@@ -1602,7 +1642,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           ...(lastDiagnostic === undefined ? {} : { diagnostic: lastDiagnostic }),
           partial: lastPartial,
           ...(lastPartialBudget === lastPartial ? {} : { partialBudget: lastPartialBudget }),
-          skill: args.skill,
+          // 规范化后的 skill（兜底时即 co-fixer），不让 undefined 流进结构化诊断
+          skill: skill.name,
           retries,
           ...(stallState.last ? { stall: stallState.last } : {}),
         };
