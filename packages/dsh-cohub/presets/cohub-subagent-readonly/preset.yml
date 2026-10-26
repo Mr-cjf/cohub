@@ -1,0 +1,2 @@
+name: CoHub 子代理·只读（cohub-subagent-readonly）
+description: cohub 编排体系的只读子代理专用 preset：co-explorer / co-librarian / co-observer / co-oracle / co-planner / co-council / co-rule-* 使用；无写盘、无 Shell、无委派类工具。

@@ -12,6 +12,7 @@ import {
   createEnvContract,
   createEnvSig,
   resolveSkillToolFilter,
+  resolveSkillAgentPreset,
   guardDelegationDepth,
   DELEGATE_PERSONA,
   DEFAULT_SPAWN_TRANSPORT,
@@ -76,11 +77,14 @@ export function createDelegateBatchTool(
     const budget = resolveResultBudget(settingsNow.resultBudget ?? config.resultBudget);
     // P1-1（子代理工具表裁剪）：默认开启；settings 未提供时回落 config
     const toolFilterEnabled = (settingsNow.toolFilter ?? config.toolFilter)?.enabled ?? true;
+    // 子代理独立精简 preset：默认开启（settings 优先，config 兜底）
+    const presetEnabled = (settingsNow.delegateSubagentPreset ?? config.delegateSubagentPreset)?.enabled ?? true;
     return {
       wallClockBudgetMs: Math.max(0, scheduleCfg?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS),
       maxParallelBatch: Math.min(rawMaxParallel, MAX_BATCH_SIZE),
       budget,
       toolFilterEnabled,
+      presetEnabled,
     };
   }
 
@@ -121,7 +125,7 @@ export function createDelegateBatchTool(
         throw new Error(depthRejection);
       }
 
-      const { wallClockBudgetMs, maxParallelBatch, budget, toolFilterEnabled } = resolveRuntimeConfig();
+      const { wallClockBudgetMs, maxParallelBatch, budget, toolFilterEnabled, presetEnabled } = resolveRuntimeConfig();
       const tasks = args.tasks ?? [];
 
       if (tasks.length === 0) {
@@ -155,6 +159,8 @@ export function createDelegateBatchTool(
           const agentOptions = await buildAgentOptions(route, ctx, skill.name);
           // P1-1：按角色裁剪子代理工具表（deny 减法；构造失败已 fail-soft 成全量工具）
           const toolFilter = resolveSkillToolFilter(skill.name, toolFilterEnabled, ctx.logger);
+          // 子代理独立精简 preset：每个 task 按各自的 skill 解析（undefined = 继承父 preset）
+          const agentPreset = resolveSkillAgentPreset(skill.name, presetEnabled);
 
           // 每个 task 独立的 AbortController
           const ac = new AbortController();
@@ -177,6 +183,8 @@ export function createDelegateBatchTool(
               persona: DELEGATE_PERSONA,
               // P1-1：工具表裁剪（undefined 时不透传，等价于全量工具）
               ...(toolFilter !== undefined ? { toolFilter } : {}),
+              // 子代理独立精简 preset（undefined 时不透传 = 继承父 preset）
+              ...(agentPreset !== undefined ? { agentPreset } : {}),
               ...(agentOptions ? { agentOptions } : {}),
               signal: ac.signal,
             });

@@ -1,0 +1,2 @@
+name: CoHub 子代理·可写（cohub-subagent-write）
+description: cohub 编排体系的实施类子代理专用 preset：co-fixer / co-designer / co-cordis 使用；含文件读写与 Shell，但不含任何委派类工具。

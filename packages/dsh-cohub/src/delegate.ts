@@ -91,6 +91,12 @@ export interface DelegateConfig {
   toolFilter?: {
     enabled?: boolean;
   };
+  /** 子代理独立精简 preset（按 skill 映射 readonly / write 两个内置 preset）：
+   *  默认开启。关闭后子代理回到「继承父 preset」的旧行为（人设与工具表全量继承）。
+   *  preset 缺失 / 挂载失败时**自动降级继承父 preset**，绝不因此让委派失败。 */
+  delegateSubagentPreset?: {
+    enabled?: boolean;
+  };
   /** 后台 job 模式（background delegate）：默认关闭 → 完全保持前台同步行为。
    *  开启后 delegate 把这次运行注册为 DSH 后台 job 并立即返回 jobId，
    *  主代理用 job_output 取结果（或等完成时自动唤醒），等待期间可并行推进其他工作。
@@ -235,9 +241,49 @@ export function resolveSkillToolFilter(
   }
 }
 
+// ── 子代理独立精简 preset ────────────────────────────────────────────────
+//
+// 根因（实测）：此前子代理完整继承父 preset co-orchestrator —— 每个子代理都背着一份
+// 「你是主调度者、绝不亲自操作文件」的 persona（≈2.4k tokens/子代理白烧），工具表里还
+// 带着 delegate / delegate_batch / subagent / subagent_fork / workflow 等委派类工具。
+//
+// 修法：DSH 0.2.1 的 SubagentStartRequest.agentPreset 是一等字段，child 创建时
+// `presets.mount(childCtx, id)`（dsh-subagent lib/types/child-agent.js applyChildComposition），
+// 官方 dsh-tool-subagent 的 Config.agentPreset 走的就是这条路。cohub 自己构造 request，
+// 因此直接传 id 即可，无需 allowlist。两个 preset 随包安装在 ~/.dsh/.agent-presets/。
+
+/** 只读子代理 preset（包内 presets/cohub-subagent-readonly；tool-fs 关掉 write/edit，不挂 shell） */
+export const SUBAGENT_READONLY_PRESET = "cohub-subagent-readonly";
+
+/** 实施类子代理 preset（包内 presets/cohub-subagent-write；含 write/edit + shell，无委派工具） */
+export const SUBAGENT_WRITE_PRESET = "cohub-subagent-write";
+
+/**
+ * 按 skill 名解析子代理应挂载的独立 preset id。
+ *
+ * 语义（fail-soft 优先）：
+ *   - 只读类（explorer/librarian/observer/oracle/planner/council/rule-*）→ readonly preset
+ *   - 实施类（fixer/designer/cordis）→ write preset
+ *   - co-orchestrator 或任何未命中的名字 → undefined（= 继承父 preset，保持改动前行为）
+ *
+ * 为什么 co-orchestrator 返回 undefined：它本身是委派发起方，被委派时仍需完整工具面；
+ * 而且「未知 skill 一律不换 preset」是保守选择 —— 宁可多继承，不可让委派因 preset 缺失而失败。
+ *
+ * @param skillName - 规范化后的 skill 名（如 co-fixer）。
+ * @param enabled - 总开关（Config.delegateSubagentPreset.enabled，默认 true）。
+ * @returns preset id；undefined 表示不指定（继承父）。
+ */
+export function resolveSkillAgentPreset(skillName: string | undefined, enabled = true): string | undefined {
+  if (!enabled) return undefined;
+  const key = (skillName ?? "").trim();
+  if (key.length === 0 || key === "co-orchestrator") return undefined;
+  if (READ_ONLY_SKILLS.has(key)) return SUBAGENT_READONLY_PRESET;
+  if (WRITE_SKILLS.has(key)) return SUBAGENT_WRITE_PRESET;
+  return undefined;
+}
+
 /**
  * 用 restrictableNames 过滤 deny/allow 列表：只保留**真正可限制**的名字。
- *
  * 背景（实测根因）：`tools.restrict(filter)` 会对 filter 里每个名字做 restrictableNames
  * 校验，不在名单里就 throw `unknown global tool ...`；而 restrictableNames 只含 inherited
  * （global + 祖先层）、**排除 own 层**（dsh-tools `view()`：限制只裁 scope 继承来的东西，
@@ -276,11 +322,30 @@ export interface SpawnRunSpec {
   /** P1-1 子代理工具表裁剪（deny 减法，见 resolveSkillToolFilter）。
    *  0.2.0 / 0.2.1 的 SubagentStartRequest 均接受 toolFilter。 */
   toolFilter?: { allow?: string[]; deny?: string[] };
+  /** 子代理独立 agent preset id（见 resolveSkillAgentPreset）。
+   *  DSH 0.2.1 起 SubagentStartRequest.agentPreset 是一等字段：child 创建时走
+   *  presets.mount(childCtx, id) 硬切换组合，**不再继承父 preset** 的 persona 与工具表
+   *  （dsh-subagent lib/types/child-agent.js applyChildComposition）。缺省 = 继承父（旧行为）。 */
+  agentPreset?: string;
   agentOptions?: Record<string, unknown>;
   signal?: AbortSignal;
 }
 
-/** toolFilter 被拒的可识别特征：restrict() 报未知全局工具名，或 provider 无该能力 */
+/**
+ * agentPreset 被拒 / 不可用的可识别特征 —— fail-soft 触发条件。
+ *
+ * 覆盖实测到的三类真实文本：
+ *   ① preset 未安装：preset registry 抛 `RemoteError('agent-preset/not-found',
+ *      'Unknown agent preset: <id>')`（见 dsh-agent-preset-registry lib/types/index.js）；
+ *   ② preset 挂载失败：`agent-preset/invalid` + 失败行详情；
+ *   ③ 运行时缺服务 / provider 无该能力：子代理 runtime 抛 `PRESET_UNAVAILABLE` /
+ *      `UNSUPPORTED_CAPABILITY`（"...does not support independent agent preset selection"）。
+ * 另加宽松兜底 `preset.*unavailable|preset revision`，覆盖跨版本措辞变化。
+ */
+const PRESET_REJECTED = /PRESET_UNAVAILABLE|agent-preset\/(not-found|invalid)|Unknown agent preset|agent preset|preset revision|preset.*unavailable/i;
+
+/**
+ * toolFilter 被拒的可识别特征：restrict() 报未知全局工具名，或 provider 无该能力 */
 const TOOL_FILTER_REJECTED = /unknown global tool|toolFilter|tool filter|capabilit/i;
 
 /**
@@ -358,6 +423,38 @@ export async function startSubagentRun(
   provider: string,
   spec: SpawnRunSpec,
 ): Promise<SubagentRunHandle> {
+  // 未指定 preset → 原样走（行为与改造前完全一致）
+  if (spec.agentPreset === undefined) return spawnWithToolFilterFallout(ctx, provider, spec);
+  try {
+    return await spawnWithToolFilterFallout(ctx, provider, spec);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const aborted = spec.signal?.aborted === true || /abort/i.test(message);
+    // 非 preset 类错误 / 中止 → 原样抛出（不掩盖真实故障）
+    if (aborted || !PRESET_REJECTED.test(message)) throw error;
+    // fail-soft：去掉 agentPreset 重试一次 → 子代理继承父 preset（本次改动之前的旧行为）。
+    // 绝不因 preset 缺失（老安装、用户删了目录、preset 挂载失败）导致委派失败。
+    ctx?.logger?.warn?.(
+      "[cohub preset] 子代理 preset \"" + spec.agentPreset + "\" 不可用，已降级为继承父 preset 重试："
+      + message.slice(0, 300) + "（委派继续，不阻断）",
+    );
+    return spawnWithToolFilterFallout(ctx, provider, { ...spec, agentPreset: undefined });
+  }
+}
+
+/**
+ * 带 toolFilter fail-soft 的实际 spawn 实现（原 startSubagentRun 主体，未改动语义）。
+ *
+ * 两段式 fail-soft（把「失败」前移成「过滤」）：
+ *   ① **下发前**：已学过 restrictableNames 时先用它求交集，直接下发「能裁的那部分」；
+ *   ② 被拒时：从 restrict() 错误文本解析 restrictableNames → 求交集 → 用**更小的 filter 重试**
+ *      （而不是像旧版那样整个丢掉）。求交集后为空 / 无进展时，才退回全量工具（最后防线）。
+ */
+async function spawnWithToolFilterFallout(
+  ctx: any,
+  provider: string,
+  spec: SpawnRunSpec,
+): Promise<SubagentRunHandle> {
   const wanted = spec.toolFilter;
   let filter = wanted === undefined
     ? undefined
@@ -430,6 +527,7 @@ async function startSubagentRunOnce(
       request: {
         prompt,
         parent: spec.parent,
+        ...(spec.agentPreset !== undefined ? { agentPreset: spec.agentPreset } : {}),
         ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
         ...(spec.toolFilter !== undefined ? { toolFilter: spec.toolFilter } : {}),
       },
@@ -450,6 +548,7 @@ async function startSubagentRunOnce(
     parent: spec.parent,
     ...(spec.persona !== undefined ? { persona: spec.persona } : {}),
     ...(spec.toolFilter !== undefined ? { toolFilter: spec.toolFilter } : {}),
+    ...(spec.agentPreset !== undefined ? { agentPreset: spec.agentPreset } : {}),
     ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
     signal,
   });
@@ -1245,7 +1344,10 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         ? bgCfg.defaultFor.filter((n: unknown): n is string => typeof n === "string" && n.length > 0)
         : [],
     };
-    return { retry, stall, schedule: scheduleCfg, budget, background };
+    // 子代理独立精简 preset：默认开启（settings 优先，config 兜底；缺省 true = 新行为）
+    const presetCfg = settingsNow.delegateSubagentPreset ?? config.delegateSubagentPreset;
+    const subagentPresetEnabled = presetCfg?.enabled ?? true;
+    return { retry, stall, schedule: scheduleCfg, budget, background, subagentPresetEnabled };
   }
 
   // P3-2（N1）：环境契约持久化配置归一（默认 auto；无缓存时行为不变；读写失败静默降级）
@@ -1294,7 +1396,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       }
 
       // P3-3（N3）：每次调用解析生效配置（settings > config > 保守默认）；RETRYABLE 随 retryableReasons 动态
-      const { retry, stall, schedule, budget, background } = resolveRuntimeConfig();
+      const { retry, stall, schedule, budget, background, subagentPresetEnabled } = resolveRuntimeConfig();
       const RETRYABLE = new Set(retry.retryableReasons);
       ctx.logger?.info?.("[cohub schedule] 生效调度参数：batch=" + (schedule?.maxParallelBatch ?? 3)
         + " wallMs=" + (schedule?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS));
@@ -1315,6 +1417,10 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       // ④b P1-1 子代理工具表裁剪：按规范化后的 skill 名查 deny 表（开关默认开；
       //     构造失败已在 resolveSkillToolFilter 内 fail-soft 成 undefined = 全量工具）
       const toolFilter = resolveSkillToolFilter(skill.name, config.toolFilter?.enabled ?? true, ctx.logger);
+
+      // ④c 子代理独立精简 preset（按 skill 映射 readonly / write）：undefined = 继承父 preset。
+      //     preset 缺失 / 挂载失败由 startSubagentRun 的 fail-soft 重试兜底（去掉 id 再试一次）。
+      const agentPreset = resolveSkillAgentPreset(skill.name, subagentPresetEnabled);
 
       // ⑤ 执行器环境契约注入（共享函数）：指纹只算一次，契约解析与随后的学习者共用
       const fp = envFingerprint();
@@ -1410,6 +1516,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
               persona: DELEGATE_PERSONA,
               // P1-1：工具表裁剪（undefined 时不透传，等价于全量工具）
               ...(toolFilter !== undefined ? { toolFilter } : {}),
+              // 子代理独立精简 preset（undefined 时不透传 = 继承父 preset）
+              ...(agentPreset !== undefined ? { agentPreset } : {}),
               ...(agentOptions ? { agentOptions } : {}),
               signal,
             });

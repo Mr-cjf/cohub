@@ -92,8 +92,26 @@ for (const name of presetNames) {
   for (const id of ["tool-fs", "tool-skill", "tool-todo"]) {
     check(`含 ${id} 行`, byId.has(id));
   }
-  // ③ 至少一行 shell 工具（平台门控）
-  check("含 shell 工具行（tool-bash 或 tool-pwsh）", byId.has("tool-bash") || byId.has("tool-pwsh"));
+  // ③ shell 工具行（平台门控）：实施类 preset 必须有；只读子代理 preset 按设计
+  //    **不得**挂 shell（cohub-subagent-readonly 的真只读保证靠「不注册 write/edit +
+  //    不挂 shell」，见 delegate.ts 的 resolveSkillAgentPreset）。
+  const wantsShell = !name.endsWith("-readonly");
+  check(
+    wantsShell ? "含 shell 工具行（tool-bash 或 tool-pwsh）" : "只读 preset 不挂 shell 工具行（真只读）",
+    wantsShell
+      ? byId.has("tool-bash") || byId.has("tool-pwsh")
+      : !(byId.has("tool-bash") || byId.has("tool-pwsh")),
+  );
+  // ③b 子代理 preset 的硬隔离断言：只读版关 write/edit，两个版本都不挂委派类工具行
+  if (name.startsWith("cohub-subagent-")) {
+    if (name.endsWith("-readonly")) {
+      const fs = byId.get("tool-fs") ?? "";
+      check("只读 preset 的 tool-fs 关闭 write/edit", /write:\s*false/.test(fs) && /edit:\s*false/.test(fs));
+    }
+    for (const id of ["delegation", "delegation-subagents", "tool-subagent", "tool-subagent-fork", "tool-workflow"]) {
+      check(`子代理 preset 不挂 ${id}`, !byId.has(id));
+    }
+  }
 
   // ④ 禁止挂载 tool-cordis：它在 Host 进程级 inspect 注册表（CordisInspectRegistryService）
   //    里按 id 占位，而官方 `cordis`（创造模式）preset 也挂同一行；两个 preset 在同一进程

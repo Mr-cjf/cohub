@@ -176,6 +176,15 @@ const ToolFilterConfig = z.object({
   enabled: z.boolean().default(true),
 }).default({});
 
+/** 子代理独立精简 preset（按 skill 映射 cohub-subagent-readonly / cohub-subagent-write）。
+ *  默认开启：子代理不再继承父 preset co-orchestrator（省下每子代理 ≈2.4k tokens 的
+ *  错位人设），工具表也不再带 delegate / subagent / workflow 等委派类工具。
+ *  preset 缺失或挂载失败时自动降级为「继承父 preset」，绝不阻断委派。 */
+const DelegateSubagentPresetConfig = z.object({
+  /** 总开关；默认 true。设为 false = 回到子代理完整继承父 preset 的旧行为 */
+  enabled: z.boolean().default(true),
+}).default({});
+
 export const name = "cohub";
 export const inject = ["systemPrompt", "skills", "tools", "sessionProjections", "llm", "subagents"];
 
@@ -209,6 +218,9 @@ export const Config = z.object({
   delegateBackground: DelegateBackgroundConfig.volatile(),
   /** 子代理工具表裁剪（P1-1）：按角色 deny 裁剪，默认开启，失败自动回退全量工具 */
   toolFilter: ToolFilterConfig,
+  /** 子代理独立精简 preset：按 skill 映射 readonly / write preset，默认开启。
+   *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
+  delegateSubagentPreset: DelegateSubagentPresetConfig.volatile(),
   /** 是否把内置 agent preset 安装/升级到用户 preset root（~/.dsh/.agent-presets/）。
    *  默认 true。设为 false 后本插件不再动该目录（已安装的 preset 不会自动删除，
    *  需要时手动清理 ~/.dsh/.agent-presets/ 下对应目录）。 */
@@ -309,6 +321,7 @@ export function apply(ctx: any, config: any) {
     delegateRetry: config.delegateRetry.get(),
     resultBudget: config.resultBudget.get(),
     delegateBackground: config.delegateBackground.get(),
+    delegateSubagentPreset: config.delegateSubagentPreset.get(),
   });
   const currentSkills = () => config.skills.get();
 
@@ -327,6 +340,7 @@ export function apply(ctx: any, config: any) {
     delegateRetry: config.delegateRetry,
     envSignatures: config.envSignatures,
     toolFilter: config.toolFilter,
+    delegateSubagentPreset: config.delegateSubagentPreset,
   }, () => currentSettings()));
 
   // ④c delegate_batch 工具（批量并行委派）：一次调用并行启动多个子代理
@@ -337,6 +351,7 @@ export function apply(ctx: any, config: any) {
     delegateRetry: config.delegateRetry,
     envSignatures: config.envSignatures,
     toolFilter: config.toolFilter,
+    delegateSubagentPreset: config.delegateSubagentPreset,
   }, () => currentSettings()));
 
 // ④b 调度参数注入：已移除（2026-09-01）。
