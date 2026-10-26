@@ -123,6 +123,9 @@ export function createDelegateBatchTool(
         return `delegate_batch: 任务数 ${tasks.length} 超过上限 ${maxParallelBatch}，请分批执行。`;
       }
 
+      // 批次计时起点：统计行「总耗时」的两个时间点之一（并发的 Promise.allSettled 从这里之后启动）
+      const batchStartedAt = Date.now();
+
       // 所有 task 共享同一份环境契约文本（只计算一次，避免重复 I/O）
       const contractText = envContract.enabled ? resolveContractText(envContract, envSig, ctx).text : "";
 
@@ -282,9 +285,17 @@ export function createDelegateBatchTool(
         }
       }
 
+      // 批次计时终点：所有 task 均已 settle（成功/失败/超时/启动失败）后的时间点
+      const batchElapsedMs = Date.now() - batchStartedAt;
+
       // 格式化输出
       const completed = results.filter(r => r.status === "completed");
       const failed = results.filter(r => r.status !== "completed");
+
+      // 统计行：自报并行度与总耗时，让「到底并行没并行」当场可见。
+      // **独立前置、不参与 result-budget 裁剪**：下方 output 才进 applyResultBudget，
+      // 本行在裁剪完成后才拼到最终返回值最前面，因此任何裁剪路径都切不到它。
+      const statsLine = `并发 ${tasks.length} 个子代理 · ${completed.length}/${tasks.length} 完成 · 总耗时 ${(batchElapsedMs / 1000).toFixed(1)}s\n\n`;
 
       let output = "--- delegate_batch 结果 ---\n";
       output += `总计: ${results.length} 个任务 | 完成: ${completed.length} | 失败: ${failed.length}\n\n`;
@@ -325,7 +336,7 @@ export function createDelegateBatchTool(
         );
       }
 
-      return output;
+      return statsLine + output;
     },
   });
 }

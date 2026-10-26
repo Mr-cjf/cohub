@@ -1524,7 +1524,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             return "已在后台启动：" + skill.name + "（job: " + jobId + "）。"
               + "取结果：job_output({ job_id: \"" + jobId + "\", wait: true })；"
               + "或等自动唤醒（job 完成且你空闲时会自动开新一轮，最多连续 3 次）。"
-              + "等待期间可以继续派发别的任务或推进其他工作。";
+              + "等待期间可以继续派发别的任务或推进其他工作（后台任务不计入当前批次耗时）。";
           }
           // start() 未抛错但没给出 jobId：同样是降级，别让它静默
           if (bgFallbackReason === undefined) {
