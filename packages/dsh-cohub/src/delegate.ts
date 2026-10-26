@@ -26,6 +26,7 @@ import {
   approxTokens,
   budgetResultWithSpill,
   resolveResultBudget,
+  resolveSkillResultMaxChars,
   type ResultBudgetConfig,
 } from "./result-budget.ts";
 
@@ -847,6 +848,78 @@ export async function buildAgentOptions(
   return options;
 }
 
+// ── 嵌套委派上限（depth guard） ──────────────────────────────────────────
+//
+// 依据（真实会话实测）：一条 `main → planner(1) → oracle(2) → explorer(3) → 更深(4)` 的
+// 4 层嵌套链，最深层跑 59s **只调了一次 skill 就结束**——每多一层，子代理就要各自重建一份
+// 完整上下文（系统提示 + 工具表 + skill brief），产出却逐层稀薄，是纯开销。
+//
+// 数据来源（已核对 DSH 本体 asar 内 `@deepseek-ai/dsh-subagent/lib/types/depth.js`）：
+//   export function delegationDepthOf(agent) {
+//     const runtime = agent.options.subagentDepth;
+//     ...
+//     return Math.max(agent.session.header.delegationDepth ?? 0, runtime ?? 0);
+//   }
+// 即官方口径是「会话 header 里持久化的 delegationDepth」与「运行期 options.subagentDepth」
+// 取较大者。session header 就是会话日志首行那个 `{"type":"session",...}` 对象，实测确实带
+// `delegationDepth` 字段（主会话为 0），本插件取父会话 id 时用的 `exec.agent.session.header.id`
+// 与该对象是同一处，故 `agent.session.header.delegationDepth` 是可靠主来源。
+//
+// 三态：拿得到 → depth ≥ MAX 时**直接拒绝**；拿不到 → 只 warn、不拦截（避免误伤老宿主）。
+
+/** 嵌套委派上限：1 = 子代理不可再派子代理（主代理 depth=0 仍可派 1 层） */
+export const MAX_DELEGATION_DEPTH = 1;
+
+/**
+ * 取当前 agent 的嵌套委派深度（0 = 主代理；1 = 一层子代理）。
+ *
+ * 逐层探测，任一层能给出合法值即返回；同时读 header（持久化）与 options（运行期），
+ * 取较大者以复刻官方 `delegationDepthOf` 的 Math.max 语义。
+ *
+ * 兜底：header 明确标记 `origin === "subagent"` 却没写深度时按 1 层处理——子会话的
+ * header 由 DSH 自己写入（`origin: "subagent"` 与 `delegationDepth` 总是同时出现），
+ * 因此这条兜底只在极老版本上才会生效，语义仍是「我是子代理」。
+ *
+ * @param agent 调用方 agent（`exec.agent`）
+ * @returns 深度；所有候选都取不到时 undefined（调用方据此只 warn、不拦截）
+ */
+export function resolveDelegationDepth(agent: any): number | undefined {
+  const header = agent?.session?.header;
+  const candidates: unknown[] = [
+    header?.delegationDepth,        // 主来源：会话 header 里持久化的深度
+    agent?.options?.subagentDepth,  // 运行期镜像（官方取两者较大者）
+    agent?.session?.delegationDepth, // 防御：某些版本把深度挂在 session 本体上
+  ];
+  let depth: number | undefined;
+  for (const value of candidates) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) continue;
+    depth = depth === undefined ? value : Math.max(depth, value);
+  }
+  if (depth === undefined && header?.origin === "subagent") return MAX_DELEGATION_DEPTH;
+  return depth;
+}
+
+/**
+ * 嵌套委派守卫：子代理（depth ≥ MAX_DELEGATION_DEPTH）再派子代理时返回拒绝文案。
+ *
+ * 只读判定，无副作用（拿不到深度时打一条 `[cohub depth-guard]` warn 后放行）。
+ *
+ * @param agent 调用方 agent（`exec.agent`）
+ * @param logger 可选日志器（仅用于 warn）
+ * @returns 拒绝文案；undefined = 放行
+ */
+export function guardDelegationDepth(agent: any, logger?: any): string | undefined {
+  const depth = resolveDelegationDepth(agent);
+  if (depth === undefined) {
+    logger?.warn?.("[cohub depth-guard] 无法读取当前 agent 的嵌套委派深度"
+      + "（session.header.delegationDepth 缺失），本次放行、不做硬拦截");
+    return undefined;
+  }
+  if (depth < MAX_DELEGATION_DEPTH) return undefined;
+  return "拒绝：子代理不可再派子代理（当前嵌套 depth=" + depth + "，上限 " + MAX_DELEGATION_DEPTH
+    + "）。请自己用 read/grep/glob 获取信息，或把需求回传主代理。";
+}
+
 /**
  * 取父会话 id（spill 落盘的归属命名空间）。
  *
@@ -1212,6 +1285,14 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       const parent = exec?.agent;
       if (!parent) throw new Error("delegate requires a calling agent (exec.agent was undefined)");
 
+      // 嵌套委派守卫：depth ≥ MAX_DELEGATION_DEPTH（自己就是子代理）时直接拒绝，不再 spawn。
+      // 拒绝必须是硬失败（抛错）——返回成功文本会让子代理误以为已派出，继续等一个不存在的子代理。
+      const depthRejection = guardDelegationDepth(parent, ctx.logger);
+      if (depthRejection !== undefined) {
+        ctx.logger?.warn?.("[cohub depth-guard] " + depthRejection + "（skill=" + String(args.skill) + "）");
+        throw new Error(depthRejection);
+      }
+
       // P3-3（N3）：每次调用解析生效配置（settings > config > 保守默认）；RETRYABLE 随 retryableReasons 动态
       const { retry, stall, schedule, budget, background } = resolveRuntimeConfig();
       const RETRYABLE = new Set(retry.retryableReasons);
@@ -1370,8 +1451,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           if (outcome?.stopReason === "completed") {
             // P1-3：结果先经「契约保留 + 预算裁剪 + 落盘定位」再回传，
             // 避免子代理全文永久驻留父会话历史并被每轮重发。
+            // 改动 3：按 skill 分档取更小上限（co-planner 硬压到 1500 字符；契约段仍优先保留）。
             return await budgetSubagentResult(ctx, exec, contentText(outcome.output), {
-              maxChars: budget.maxChars,
+              maxChars: resolveSkillResultMaxChars(budget, skill.name),
               scope: "delegate",
               label: args.skill,
               enabled: budget.enabled,

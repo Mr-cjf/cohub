@@ -61,6 +61,38 @@ export interface ResolvedResultBudget {
 /** 单个字符数配置的最小可用值：低于它会产生「越裁越长」的畸形输出。 */
 const MIN_BUDGET_CHARS = 200;
 
+/**
+ * 少数角色的**自身**结果上限（skill → 字符数查表）。
+ *
+ * 与全局档 `config.resultBudget.maxChars` 的关系：**取更小者**。全局档是用户给所有子代理
+ * 设的宽上限，本表是某些角色的硬上限——用户把全局档调大不该让这些角色重新回到长输出
+ * （那正是要治的病），故不受全局档放宽影响。
+ *
+ * 依据（真实会话实测）：一次 co-planner 委派里，工具只占 268s，**422s 是模型自己生成**，
+ * 其中 step6 单步 265s / 10,076 output tokens——方案正文越长，生成越久，且全文永久驻留
+ * 父会话历史被每轮重发。故把 co-planner 的输出硬压到 1500 字符（超长子任务清单改落文件）。
+ */
+export const SKILL_RESULT_BUDGET_CHARS: Readonly<Record<string, number>> = {
+  "co-planner": 1_500,
+};
+
+/**
+ * 解析某 skill 的生效结果上限（字符）。
+ *
+ * 未命中查表 → 原样返回全局档（行为不变，零风险）；命中 → `min(全局档, 分档值)`，
+ * 并抬到 MIN_BUDGET_CHARS 以保证裁剪逻辑仍能保留契约段。
+ *
+ * @param budget 已归一的预算配置（resolveResultBudget 的输出）
+ * @param skillName skill 名（可能为空 / 未知 / 未指定）
+ * @returns 该 skill 本次结果的字符上限
+ */
+export function resolveSkillResultMaxChars(budget: ResolvedResultBudget, skillName?: string): number {
+  const key = typeof skillName === "string" ? skillName.trim() : "";
+  const tier = key.length > 0 ? SKILL_RESULT_BUDGET_CHARS[key] : undefined;
+  if (tier === undefined) return budget.maxChars;
+  return Math.max(MIN_BUDGET_CHARS, Math.min(budget.maxChars, tier));
+}
+
 /** 契约段识别：XML 风格标签（大小写不敏感） */
 const XML_TAGS: readonly string[] = ["summary", "results", "answer", "changes", "verification", "risk"];
 /** 命中这两个就优先采用（任务书：取到 results / answer 优先用它） */

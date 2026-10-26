@@ -12,6 +12,7 @@ import {
   createEnvContract,
   createEnvSig,
   resolveSkillToolFilter,
+  guardDelegationDepth,
   DELEGATE_PERSONA,
   DEFAULT_SPAWN_TRANSPORT,
   startSubagentRun,
@@ -20,7 +21,7 @@ import {
   type DelegateConfig,
   type SkillRouteConfig,
 } from "./delegate.ts";
-import { applyResultBudget, approxTokens, resolveResultBudget } from "./result-budget.ts";
+import { applyResultBudget, approxTokens, resolveResultBudget, resolveSkillResultMaxChars } from "./result-budget.ts";
 import type { CoHubSkill } from "./skills.ts";
 import { contentText } from "./text-utils.ts";
 import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
@@ -111,6 +112,14 @@ export function createDelegateBatchTool(
     async execute(args: { tasks: DelegateBatchTask[] }, exec: any) {
       const parent = exec?.agent;
       if (!parent) throw new Error("delegate_batch requires a calling agent (exec.agent was undefined)");
+
+      // 嵌套委派守卫（与 delegate 同一判定）：子代理不可再派子代理。
+      // 整批拒绝而非逐条跳过——一批全是同层子代理，跳过只会让调用方误判为「任务失败」。
+      const depthRejection = guardDelegationDepth(parent, ctx.logger);
+      if (depthRejection !== undefined) {
+        ctx.logger?.warn?.("[cohub depth-guard] delegate_batch：" + depthRejection);
+        throw new Error(depthRejection);
+      }
 
       const { wallClockBudgetMs, maxParallelBatch, budget, toolFilterEnabled } = resolveRuntimeConfig();
       const tasks = args.tasks ?? [];
@@ -238,8 +247,9 @@ export function createDelegateBatchTool(
 
             if (outcome?.stopReason === "completed") {
               // P1-3：每个任务结果先各自预算裁剪（超预算时落盘定位），之后才参与总串拼接
+              // 改动 3 同款：按 skill 分档取更小上限（co-planner 1500 字符；契约段仍优先保留）
               const resultText = await budgetSubagentResult(ctx, exec, contentText(outcome.output), {
-                maxChars: budget.batchTaskMaxChars,
+                maxChars: Math.min(budget.batchTaskMaxChars, resolveSkillResultMaxChars(budget, task.skill)),
                 scope: "batch:task",
                 label: taskId + ":" + task.skill,
                 enabled: budget.enabled,
