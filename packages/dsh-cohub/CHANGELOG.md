@@ -2,6 +2,12 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.8.1] - 2026-10-26
+
+### 修复
+
+- **`delegate_batch` 的 `skill` 改为必填，漏传不再静默降级**：此前某个 task 漏写 `skill` 只会静默产出一个 `delegate_batch:xxx:undefined` 的子代理——既没有 preset 路由，也没有按角色裁剪工具表，等于派出去一个「谁都不是」的执行者，事后只能从 label 里的 `undefined` 看出问题。现在缺 `skill` 的调用会在参数校验阶段直接报 `invalid arguments: missing required property "tasks[i].skill"`；即使旧调用绕过校验，运行时也会打一条 warn 并兜底到 `co-fixer`，label 显示 `co-fixer (default:co-fixer)`。单个 `delegate` 的 `skill` 同样标为必填（此前技能文档声称必填，schema 实际未校验）。对使用者的影响：写错的委派当场报错，而不是悄悄退化成低效子代理；升级后漏传 `skill` 的旧脚本会被拒绝，需要补上代理名。
+
 ## [0.8.0] - 2026-10-26
 
 ### 新增
