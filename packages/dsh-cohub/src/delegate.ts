@@ -29,6 +29,7 @@ import {
   resolveSkillResultMaxChars,
   type ResultBudgetConfig,
 } from "./result-budget.ts";
+import { maybeDeferTodoNudge } from "./todo-nudge.ts";
 
 /** 单个 skill 的路由配置（来自组合层 cordis.patch.yml 或 DSH settings 的 cohub.skills） */
 export interface SkillRouteConfig {
@@ -2042,6 +2043,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
 
       // 前台同步路径：与加入后台模式之前完全一致
       const foregroundText = await runAttempts(exec.signal);
+      // 委派已拿到结果 → 注入「立刻 todo_write 回写」提醒（fail-soft，宿主不支持就静默跳过）。
+      // 上面 jobId 分支不加：那里任务只是排队/启动未完成，提醒语义不成立。
+      maybeDeferTodoNudge(exec);
       // 显式请求后台却降级 → 把原因附在**前台结果之后**回传（不能提前 return：
       // 前台结果本身才是有用产出）。走配置默认的那一档不追加，避免给常规调用添噪音。
       if (args.background === true && bgFallbackReason !== undefined) {

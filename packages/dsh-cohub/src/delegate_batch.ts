@@ -28,6 +28,7 @@ import { applyResultBudget, approxTokens, resolveResultBudget, resolveSkillResul
 import type { CoHubSkill } from "./skills.ts";
 import { contentText } from "./text-utils.ts";
 import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
+import { maybeDeferTodoNudge } from "./todo-nudge.ts";
 
 /** 单个批量委派任务 */
 export interface DelegateBatchTask {
@@ -389,6 +390,9 @@ export function createDelegateBatchTool(
           + " 字符，已裁剪；各任务全文见各自的 locator。仅告警，不阻断。",
         );
       }
+
+      // 批量结果已成型 → 注入「立刻 todo_write 回写」提醒（fail-soft，宿主不支持就静默跳过）
+      maybeDeferTodoNudge(exec);
 
       return statsLine + output;
     },
