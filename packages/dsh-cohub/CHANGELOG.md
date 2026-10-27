@@ -2,6 +2,19 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.9.2] - 2026-10-27
+
+### 修复
+
+- **裸装时 `schemastery` 旧版缺 `volatile` 导致整个插件导入失败**：`peerDependencies` 里 `@deepseek-ai/schemastery` 的下限原本是 `^3.18.1`，而 `Schema.prototype.volatile` 自 **3.18.4** 才提供；更关键的是它同时被登记在 `peerDependenciesMeta.optional`，npm 既不会自动安装也不做版本校验，于是解析到 3.18.1～3.18.3 时，`src/index.ts` 里 6 处 `.volatile()` 在**模块顶层求值**就抛 `TypeError`，插件连加载都进不去。现把下限提到 `^3.18.4`。对使用者的影响：`npm install dsh-cohub` 的裸装场景不再因为一个次版本差就整包导入失败。
+- **`schemastery` 从 `peerDependenciesMeta` 移除，改为必需 peer**：此前标 `optional: true` 意味着「宿主没装也不报错」，实际后果是缺失/过旧都被静默放过，问题延迟到运行期才以 `TypeError` 形式爆出来。对使用者的影响：依赖不对时在安装阶段就能被发现，而不是等插件加载时才崩。
+- **新增 `volatileSchema()` 包装 6 处 `.volatile()` 调用**：`skills` / `delegateRetry` / `schedule` / `resultBudget` / `delegateBackground` / `delegateSubagentPreset` 统一经该 helper 标记——旧版 `schemastery` 环境下降级为**普通配置字段**（失去热更新投影，但功能可用），而不是在模块顶层直接抛错。对使用者的影响：即便宿主锁死在旧版 `schemastery`，插件也能正常加载并工作，只是这几个字段不再享受设置页热更新。
+
+### 新增
+
+- **委派返回后自动注入 `todo` 回写提醒（`src/todo-nudge.ts`）**：`delegate` 与 `delegate_batch` 拿到结果后，经官方 `ToolRunContext.deferContext()` 把一条 plugin-sourced user 上下文挂到本次工具结果之后（`tool/result` 落盘才追加，不抢正文位置），正文是一条可立即执行的动作指令「立刻 `todo_write` 回写对应项状态」。同会话最多注入 2 次（`WeakMap` 按 `exec.agent` 计数），后台 job 分支不注入（那里任务只是排队，提醒语义不成立）。全程 fail-soft：宿主没有 `deferContext` 或构造被拒即静默跳过，绝不影响委派结果。对使用者的影响：子代理做完后，编排者的 `todo` 面板不再长期停在「进行中」——提醒会跟着委派结果一起到达，最多两次，不刷屏。
+- **编排流程写入 `todo` 状态维护纪律（`skills/orchestrator.md`）**：明确「状态维护归父代理」（派发前置 `in_progress`、未开始项保持 `pending`，子代理不碰面板）、「单项完成立即回写」（每项验收通过即标 `completed`，同批可合并但必须在下一批派发前写回）、「收尾对账硬性要求」（最终回复前再调一次 `todo_write`，不得遗留任何 `in_progress`）。对使用者的影响：编排过程的状态面板与实际进度一致，不再出现「活干完了面板还亮着」的错觉。
+
 ## [0.9.1] - 2026-10-27
 
 ### 修复
