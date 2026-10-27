@@ -12,6 +12,7 @@ import {
   type EnvSignatureCache,
 } from "../src/env-signatures.ts";
 import { createDelegateTool } from "../src/delegate.ts";
+import { normalizeErrorSignature } from "../src/error-signature.mjs";
 
 const DELEGATE_DEFAULT_MARKER = "--- 执行器环境契约（通用原则 + 探测式自适应） ---";
 const VERIFIED_MARKER = "--- 执行器环境契约（本环境已验证） ---";
@@ -342,6 +343,43 @@ function makeTmpDir(): string {
   const pickedManualNoFacts = pickEnvContractText({ envSig: { use: "manual", contract: { moduleLoading: "unknown", topLevelAwait: true, wallClockLimitMs: 600_000, hasJobTracking: true } }, cached: makeCache({ contract: { moduleLoading: "require", topLevelAwait: true, wallClockLimitMs: 600_000, hasJobTracking: true } }), fingerprint: fp });
   check("pick: manual 无事实 → 落回缓存", pickedManualNoFacts.source === "cache");
   check("pick: 缺省 errorCategories 非空", DEFAULT_ERROR_CATEGORIES.length > 0);
+}
+
+// ---- 用例 9：error-signature 的 digits 选项（keep 保留数字区分度 / 默认归一） ----
+{
+  console.log("===== 用例 9：error-signature digits 选项 =====");
+  // digits:'keep' → 数字保留，不同端口/文件名得到不同签名
+  const keepP1 = normalizeErrorSignature("port 8080 failed", { digits: "keep" });
+  const keepP2 = normalizeErrorSignature("port 9090 failed", { digits: "keep" });
+  check("keep: port 8080 vs 9090 不同", keepP1 !== keepP2);
+  check("keep: 保留原文数字", keepP1 === "err:port 8080 failed" && keepP2 === "err:port 9090 failed");
+
+  // 默认（不传 opts）→ 数字归一，两条并成一类
+  const defP1 = normalizeErrorSignature("port 8080 failed");
+  const defP2 = normalizeErrorSignature("port 9090 failed");
+  check("默认: port 8080 vs 9090 相同", defP1 === defP2);
+  check("默认: 数字替换为 #", defP1 === "err:port # failed");
+
+  // 显式 {digits:'#'} 与默认同口径
+  const hashP1 = normalizeErrorSignature("port 8080 failed", { digits: "#" });
+  const hashP2 = normalizeErrorSignature("port 9090 failed", { digits: "#" });
+  check("digits:'#': 两条相同", hashP1 === hashP2 && hashP1 === defP1);
+
+  // 文件名场景
+  const keepF1 = normalizeErrorSignature("a-1234.txt", { digits: "keep" });
+  const keepF2 = normalizeErrorSignature("a-5678.txt", { digits: "keep" });
+  check("keep: a-1234.txt vs a-5678.txt 不同", keepF1 !== keepF2);
+  const defF1 = normalizeErrorSignature("a-1234.txt");
+  const defF2 = normalizeErrorSignature("a-5678.txt");
+  check("默认: a-1234.txt vs a-5678.txt 相同", defF1 === defF2 && defF1 === "err:a-#.txt");
+
+  // object 分支同样受 digits 控制
+  const objKeep = normalizeErrorSignature({ error: "connect 8080 refused" }, { digits: "keep" });
+  const objKeep2 = normalizeErrorSignature({ error: "connect 9090 refused" }, { digits: "keep" });
+  check("object 分支 keep: 不同", objKeep !== objKeep2);
+  const objDef = normalizeErrorSignature({ error: "connect 8080 refused" });
+  const objDef2 = normalizeErrorSignature({ error: "connect 9090 refused" });
+  check("object 分支默认: 相同", objDef === objDef2 && objDef === "err:connect # refused");
 }
 
 // 清理临时目录

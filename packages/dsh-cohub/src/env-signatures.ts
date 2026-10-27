@@ -18,9 +18,11 @@ import { dirname } from "node:path";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
 import { DEFAULT_ENV_CONTRACT } from "./env-contract.ts";
 import { contentText } from "./text-utils.ts";
+import { normalizeErrorSignature } from "./error-signature.mjs";
 
 /** 缓存文件版本（结构不兼容时整体作废） */
-export const CACHE_VERSION = 1;
+// v2: 统一错误签名算法（结构优先 + 数字归一 + 240 截断），旧缓存自动失效重学
+export const CACHE_VERSION = 2;
 
 /** 缓存缺省 TTL：7 天（到期重探，防环境静默升级） */
 export const DEFAULT_TTL_MS = 604_800_000;
@@ -258,20 +260,9 @@ export function pickEnvContractText(args: {
   return { text: DEFAULT_ENV_CONTRACT, source: "default" };
 }
 
-/** 归一化错误签名（tool/result data → 可比较字符串；无法提取返回 null） */
-export function normalizeErrorSignature(data: any): string | null {
-  if (!data || typeof data !== "object") return null;
-  const err = data.error;
-  if (typeof err === "string" && err.trim()) return "err:" + err.trim().slice(0, 120);
-  if (err && typeof err === "object") {
-    const msg = typeof (err as any).message === "string" ? (err as any).message : "";
-    const code = typeof (err as any).code === "string" ? (err as any).code : "";
-    if (msg || code) return "err:" + (code ? code + " " : "") + msg.slice(0, 120);
-  }
-  const text = contentText(data?.message?.content).trim();
-  if (text) return "err:" + text.slice(0, 120);
-  return data?.message?.isError === true ? "err:unknown" : null;
-}
+/** 归一化错误签名（tool/result data → 可比较字符串；无法提取返回 null）
+ *  实现已统一到 src/error-signature.mjs（与 scripts/audit-session.mjs 共用同一算法），此处仅保持对外导出名不变。 */
+export { normalizeErrorSignature };
 
 /** 是否为「环境契约类」错误（归一化签名命中任一类别子串，大小写不敏感；仅作观测分类） */
 export function classifyEnvContractError(signature: string, categories?: string[]): boolean {

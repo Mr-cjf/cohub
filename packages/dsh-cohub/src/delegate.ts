@@ -63,6 +63,25 @@ export interface StallInfo {
   diagnostics: string;
 }
 
+/**
+ * 一次 delegate attempt 的观测记录（P4）：每次 attempt 结束（成功/失败/超时/中止）上报一次。
+ * 字段是 `AttemptRecord`（review-types.ts）的子集/兼容视图：skill+attempt(1-based)+
+ * childSessionId+startedAt+endedAt 可直接对照；outcome 为其自由文本 outcome 的枚举化版本。
+ */
+export interface DelegateAttemptRecord {
+  skill: string;
+  /** 1-based 第几次尝试（= 循环内 attempt 索引 + 1）。 */
+  attempt: number;
+  /** 子会话 id；成功路径为 run.id（契约上等于子会话 session.id），拿不到时为空串。 */
+  childSessionId: string;
+  startedAt: number;
+  endedAt: number;
+  outcome: "completed" | "failed" | "timeout" | "aborted";
+  stopReason?: string;
+}
+/** 可选观测者：不传 = 完全零行为变化（所有调用点仅在非空时才执行）。 */
+export interface DelegateObserver { onAttempt?(r: DelegateAttemptRecord): void }
+
 /** delegate 工具配置（来自插件 Config 的 delegateEnvContract / delegateRetry；未配置时用内置保守默认） */
 export interface DelegateConfig {
   /** P1-1 执行器环境契约注入：默认开、可关闭、文本可覆盖 */
@@ -926,7 +945,8 @@ class StallWatchdog {
       this.s.lastToolResultAt = now;
       if (isError) {
         // S1：归一化签名连续相同 → 连续计数；签名变化 → 重置为 1
-        const sig = normalizeErrorSignature(d) ?? "err:unknown";
+        // S1 停滞检测依赖签名区分度，不做数字归一，否则不同数值错误会被并成一类而误判停滞
+        const sig = normalizeErrorSignature(d, { digits: "keep" }) ?? "err:unknown";
         this.s.consecutiveErrors = sig === this.s.lastErrorSig ? this.s.consecutiveErrors + 1 : 1;
         this.s.lastErrorSig = sig;
         // S4：同工具名+同参数且结果错误 → 连击；key 变化重置
@@ -1615,7 +1635,11 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
 
     isConcurrencySafe: () => true,
 
-    async execute(args: { skill: string; prompt: string; background?: boolean }, exec: any) {
+    async execute(
+      args: { skill: string; prompt: string; background?: boolean },
+      exec: any,
+      observer?: DelegateObserver,
+    ) {
       const parent = exec?.agent;
       if (!parent) throw new Error("delegate requires a calling agent (exec.agent was undefined)");
 
@@ -1692,6 +1716,33 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         let retries = 0;
 
         for (let attempt = 0; attempt <= retry.maxRetries; attempt++) {
+          // P4（observer）：本 attempt 的起止时间与 1-based 序号；四条出口（成功/失败/超时/中止）
+          // 统一经 reportAttempt 上报，observer 缺省时该函数立即 return（零行为变化）。
+          const attemptStartedAt = Date.now();
+          const attemptNo = attempt + 1;
+          const reportAttempt = (
+            childSessionId: string,
+            outcome: DelegateAttemptRecord["outcome"],
+            stopReason?: string,
+          ): void => {
+            const onAttempt = observer?.onAttempt;
+            if (!onAttempt) return;
+            try {
+              onAttempt.call(observer, {
+                skill: skill.name,
+                attempt: attemptNo,
+                childSessionId,
+                startedAt: attemptStartedAt,
+                endedAt: Date.now(),
+                outcome,
+                ...(stopReason === undefined ? {} : { stopReason }),
+              });
+            } catch (error) {
+              // 观测者抛错绝不能中断委派：只 warn，调用方的返回/抛错路径保持原样
+              ctx.logger?.warn?.("[cohub observer] onAttempt 抛出异常（已忽略）："
+                + String((error as any)?.message ?? error));
+            }
+          };
           const stallNote = stallState.last ? "；停滞诊断：" + stallState.last.diagnostics : "";
           const retryNote = attempt > 0
             ? "\n\n[重试 #" + attempt + "] 上一次执行中止，原因：" + lastReason
@@ -1772,11 +1823,16 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
               lastDiagnostic = undefined;
               lastPartial = "";
               stallState.last = stallInfo;
+              // P4：spawn 期间中止 —— 无子会话 id（run 未创建）
+              if (stallInfo) reportAttempt("", "timeout", "aborted");
+              else reportAttempt("", "aborted", "aborted");
               if (!RETRYABLE.has(lastReason) || attempt >= retry.maxRetries) break;
               retries++;
               await new Promise(r => setTimeout(r, retry.retryDelayMs));
               continue;
             }
+            // P4：spawn 失败（非中止）—— 异常路径同样上报一次
+            reportAttempt("", "failed", String((error as any)?.message ?? error));
             throw error;
           }
           if (watchdog) watchdog.bind(run.id);
@@ -1785,6 +1841,10 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           let outcome: any;
           try {
             outcome = await run.result;
+          } catch (error) {
+            // P4：运行期拒绝也是失败出口（finally 已负责清理资源）
+            reportAttempt(String(run?.id ?? ""), "failed", "error");
+            throw error;
           } finally {
             if (learner) {
               if (learner.flush()) {
@@ -1798,6 +1858,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           }
 
           if (outcome?.stopReason === "completed") {
+            // P4：成功路径 —— childSessionId 用 run.id（契约上等于子会话 session.id）
+            reportAttempt(String(run?.id ?? ""), "completed", "completed");
             // P1-3：结果先经「契约保留 + 预算裁剪 + 落盘定位」再回传，
             // 避免子代理全文永久驻留父会话历史并被每轮重发。
             // 改动 3：按 skill 分档取更小上限（co-planner 硬压到 1500 字符；契约段仍优先保留）。
@@ -1828,6 +1890,11 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             }).text
             : partialRaw;
           stallState.last = stallInfo;
+          // P4：非成功出口 —— 停滞看门狗触发即归为 timeout，其余按 lastReason 判定 aborted/failed
+          const attemptOutcome: DelegateAttemptRecord["outcome"] = stallInfo
+            ? "timeout"
+            : (lastReason === "aborted" ? "aborted" : "failed");
+          reportAttempt(String(run?.id ?? ""), attemptOutcome, lastReason);
           // N2：停滞触发的中止仅在 recoverable=true 时按可重试中止处理；否则直接失败
           if (stallInfo && !stall.recoverable) break;
           if (!RETRYABLE.has(lastReason) || attempt >= retry.maxRetries) break;

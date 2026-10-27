@@ -11,7 +11,6 @@
  * 检测规则（--rules 内联 JSON 或 --rules-file 文件，缺省内置通用规则）：
  *   {
  *     "errorCategories": { "<scope>::<类别名>" 或 "<类别名>": [子串 或 "/正则/" 或 {"regex":"..."}] },
- *     "blindPatterns": ["/正则/", ...],   // 缺省空：所有非超时/非中止类别都参与盲试判定
  *     "timeoutKey": "timeout",            // 超时错误关键词（大小写不敏感）
  *     "perSessionBlindThreshold": 2       // 同会话同类错误 ≥ 阈值 且 之后有成功/改写法 → 一次重复盲试
  *   }
@@ -27,16 +26,17 @@
  * 环境签名（envSignatures）：自动提取本会话的错误类别签名、超时数值、工具名清单，
  *   供"基线按会话重测"与跨环境对比（不把本环境观测当通用规则）。
  *
- * 仅使用 Node 内置模块；不修改任何运行时源码。
+ * 仅使用 Node 内置模块（另含同仓相对路径 import src/error-signature.mjs：纯 ESM、零依赖，
+ *   仅为与运行时共用同一套错误签名归一算法，不引入任何第三方包）；不修改任何运行时源码。
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { normalizeErrorSignature } from '../src/error-signature.mjs';
 
 /* ---------- 默认规则 ---------- */
 
 const DEFAULT_RULES = Object.freeze({
   errorCategories: {}, // 空 = 用通用类别（code-run:<mode> / interrupted / other）
-  blindPatterns: [],   // 空 = 所有非超时/非中止类别参与盲试
   timeoutKey: 'timeout',
   perSessionBlindThreshold: 2,
 });
@@ -56,7 +56,6 @@ const HELP = `audit-session.mjs — DSH 会话审计 / 回归脚本
 检测规则 schema:
   {
     "errorCategories": { "<scope>::<类别>" | "<类别>": [子串 | "/正则/" | {"regex":"..."}] },
-    "blindPatterns": ["/正则/", ...],
     "timeoutKey": "timeout",
     "perSessionBlindThreshold": 2
   }
@@ -150,12 +149,6 @@ function inspectResult(o) {
   return { isError, text: texts.join('\n') };
 }
 
-/** 归一化错误签名（用于 errors.categories 与环境签名；只归一数字，不猜语义） */
-function normalizeErrorText(text) {
-  const first = String(text).split(/\r?\n/)[0].trim().replace(/^Error:\s*/, '');
-  return first.replace(/\d+/g, '#').slice(0, 240);
-}
-
 /** 模式匹配：字符串=子串(忽略大小写)；"/.../" 或 {regex:"..."}=正则 */
 function patternMatches(p, text) {
   if (p && typeof p === 'object' && typeof p.regex === 'string') {
@@ -218,7 +211,6 @@ function parseRules(argv) {
     }
   }
   if (merged.errorCategories !== undefined) rules.errorCategories = merged.errorCategories;
-  if (merged.blindPatterns !== undefined) rules.blindPatterns = merged.blindPatterns;
   if (merged.timeoutKey !== undefined) rules.timeoutKey = String(merged.timeoutKey);
   if (merged.perSessionBlindThreshold !== undefined) {
     const n = Number(merged.perSessionBlindThreshold);
@@ -255,13 +247,6 @@ function isBlindCandidate(category, rules) {
   if (c.includes('abort')) return false;
   if (c.includes('interrupted')) return false;
   return true;
-}
-
-/** 该错误文本是否命中 blindPatterns（非空时仅命中者参与盲试） */
-function matchesBlindPatterns(text, rules) {
-  const pats = rules.blindPatterns || [];
-  if (!pats.length) return true;
-  return pats.some((p) => patternMatches(p, text));
 }
 
 /** 从事件流提取角色：subagent/descriptor.label "delegate:co-fixer" → co-fixer；根 → root */
@@ -356,7 +341,7 @@ function analyzeSession(file, rules, isRoot) {
     const cat = resolveErrorCategory(text, tool || 'unknown', rules);
     byBlind.set(cat, (byBlind.get(cat) || 0) + 1);
     seq.push({ ok: false, cat });
-    const detail = normalizeErrorText(text);
+    const detail = normalizeErrorSignature(text) ?? '';
     byDetail.set(detail, (byDetail.get(detail) || 0) + 1);
   }
 

@@ -17,6 +17,8 @@ import { COHUB_SKILLS } from "./skills";
 import { createCouncilTool } from "./council";
 import { createDelegateTool } from "./delegate";
 import { createDelegateBatchTool } from "./delegate_batch.ts";
+import { createReviewCollector } from "./review-collector.ts";
+import { registerReviewCommand } from "./review-command.ts";
 import { COUNCIL_TIMEOUT_MS, WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 import {
   DEFAULT_BATCH_TASK_CHARS,
@@ -404,4 +406,30 @@ export function apply(ctx: any, config: any) {
     });
     return off;
   }, "cohub.tokenMeter()");
+
+  // ⑧ 复盘采集器（A2）：监听 session/event，turn/end 时零 LLM 采集轮次统计并排队落盘。
+  //    enabled/debounceMs 暂按硬编码缺省（本任务不新增 Config 字段，避免 guard-schema 联动）；
+  //    effect 返回 dispose，插件卸载时摘监听并清理定时器。
+  ctx.effect(() => {
+    const collector = createReviewCollector(ctx, { enabled: true, debounceMs: 200 });
+    return () => collector.dispose();
+  }, "cohub.reviewCollector()");
+
+  // ⑨ `/cohub-review` 命令（零 turn、不经过模型）：立即返回，异步跑一次 LLM 分析生成 MD 报告。
+  //    局部注入：commands + sessionQuery 两者都就绪时才挂命令；缺任一则不挂，
+  //    但绝不影响主插件（全局 inject 不含这两项，否则 fiber 会停在 INACTIVE）。
+  const mountReviewCommand = (child: any) => {
+    try {
+      registerReviewCommand(child);
+    } catch (error) {
+      ctx.logger?.warn?.("[cohub review] 命令挂载失败（忽略）：" + String((error as any)?.message ?? error));
+    }
+  };
+  if (typeof (ctx as any).inject === "function") {
+    (ctx as any).inject(["commands", "sessionQuery"], mountReviewCommand);
+  } else {
+    // 极简 stub 上下文（部分测试/嵌入式宿主）无 inject：退化为直接挂载，
+    // review-command 内部对缺失服务的访问都有 try/catch 与可选链，不会抛。
+    mountReviewCommand(ctx);
+  }
 }
