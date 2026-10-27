@@ -142,6 +142,11 @@ export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
   if (typeof analysis.error === "string" && analysis.error.length > 0) {
     lines.push(`- 分析错误说明：${analysis.error}`);
   }
+  // 诊断线索：原始输出留档长度（区分「被 maxTokens 截断」与「格式错误」）
+  if (typeof analysis.rawOutputLength === "number" && Number.isFinite(analysis.rawOutputLength)) {
+    const kept = typeof analysis.rawOutput === "string" ? analysis.rawOutput.length : 0;
+    lines.push(`- 模型原始输出：全长 ${num(analysis.rawOutputLength)} 字，报告内留档前 ${num(kept)} 字（见 JSON 的 analysis.rawOutput）`);
+  }
   if (statusRaw === "failed") {
     lines.push("- 本轮**没有产生任何模型结论**：findings 为空是分析失败的结果，不代表本次会话没有值得复盘之处。");
   }

@@ -19,10 +19,21 @@ import type { Finding, ReviewReport } from "./review-types.ts";
 
 /** 喂给 LLM 的摘要字符上限（超限截断并标记 inputTruncated） */
 const DIGEST_LIMIT_CHARS = 12000;
-/** 单次分析的最大输出 token */
-const ANALYSIS_MAX_TOKENS = 2000;
+/**
+ * 单次分析的最大输出 token。
+ * 真机实测：13 个会话 / 14 个 turn 的摘要要求输出 ≤12 条 findings，每条含中文结论 +
+ * evidence 数组 + limitations，2000 token（约 2000～3000 汉字/ASCII 混合）**必然在数组中途截断**，
+ * 而截断输出没有结尾 `]` → 旧解析器直接判失败（B-2 未闭环的真实原因）。
+ * 5000 足够 12 条中文 findings 收尾，且仍远低于主流模型的输出上限，成本可控。
+ */
+const ANALYSIS_MAX_TOKENS = 5000;
+/** 解析失败时留档的原始输出字符数（够定位「截断」还是「格式错误」） */
+const RAW_OUTPUT_KEEP_CHARS = 2000;
 /** 子会话读取上限（防御异常血缘树把内存拖爆） */
 const MAX_CHILD_SESSIONS = 50;
+
+/** 上溯根会话的最大层数（防御异常血缘树） */
+const MAX_ROOT_ASCEND = 32;
 
 /** 宽松取会话 id（不同版本 SessionRecord 字段名不同） */
 function idOf(rec: any): string | undefined {
@@ -162,19 +173,105 @@ function buildDigest(report: ReviewReport): { text: string; digest: string; trun
   return { text, digest, truncated };
 }
 
-/** 从模型输出里提取 JSON 数组（容忍 ```json 围栏与前后噪声） */
-function extractJsonArray(text: string): unknown[] | null {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
-  const body = fenced ? fenced[1] : text;
-  const start = body.indexOf("[");
-  const end = body.lastIndexOf("]");
-  if (start < 0 || end <= start) return null;
+/** 剥掉 Markdown 围栏（```json / ```）；围栏未闭合（被截断）时返回原文 */
+function stripFence(text: string): string {
+  const fenced = /```(?:json|JSON)?\s*([\s\S]*?)```/.exec(text);
+  return fenced ? fenced[1] : text;
+}
+
+/** 从 text[start]（必须是 `[` 或 `{`）开始扫描，返回与其配对的收尾括号下标；未配平返回 -1（疑似截断） */
+function scanBalanced(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === "[" || ch === "{") depth++;
+    else if (ch === "]" || ch === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** 严格解析成数组；非数组或报错返回 null */
+function tryParseArray(text: string): unknown[] | null {
   try {
-    const parsed = JSON.parse(body.slice(start, end + 1));
+    const parsed = JSON.parse(text);
     return Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * 抢救式提取：从 start（外层 `[`）开始逐个扫描**完整**的 `{...}` 对象并单独解析。
+ * 用于「外层数组没闭合（被 maxTokens 截断）」或「整体 JSON 非法」时，至少保住能用的部分。
+ * 单个对象自身被截断（scanBalanced 返回 -1）即停止——后面不可能再有完整对象。
+ */
+function salvageObjects(text: string, start: number): unknown[] {
+  const out: unknown[] = [];
+  let i = start + 1;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "]") break;
+    if (ch === "{") {
+      const end = scanBalanced(text, i);
+      if (end < 0) break;
+      const one = text.slice(i, end + 1);
+      try {
+        out.push(JSON.parse(one));
+      } catch {
+        try {
+          out.push(JSON.parse(one.replace(/,\s*([\]}])/g, "$1")));
+        } catch { /* 单条坏 → 跳过，继续下一个完整对象 */ }
+      }
+      i = end + 1;
+      continue;
+    }
+    i++;
+  }
+  return out;
+}
+
+/**
+ * 从模型输出里提取 JSON 数组。容忍：Markdown 围栏、前后说明文字、尾随逗号、输出被截断。
+ *
+ * 真机根因：旧实现用 `lastIndexOf("]")` 找结尾，**输出被 maxTokens 截断时根本没有 `]`**，
+ * 于是 slice(start, -1+1) 拿到的是"从 `[` 到倒数第 1 个字符"的半截 JSON，必然 parse 失败，
+ * 整份 findings 被丢弃。现在改为括号配对扫描 + 逐对象抢救，并把 truncated 上报给报告。
+ */
+export function extractJsonArray(text: unknown): { items: unknown[] | null; truncated: boolean } {
+  const empty = { items: null, truncated: false };
+  if (typeof text !== "string" || text.length === 0) return empty;
+  const body = stripFence(text);
+  const start = body.indexOf("[");
+  if (start < 0) return empty;
+
+  const end = scanBalanced(body, start);
+  if (end > start) {
+    const candidate = body.slice(start, end + 1);
+    const strict = tryParseArray(candidate);
+    if (strict) return { items: strict, truncated: false };
+    // 尾随逗号等常见非严格写法：去掉 ] } 前的逗号再试
+    const repaired = tryParseArray(candidate.replace(/,\s*([\]}])/g, "$1"));
+    if (repaired) return { items: repaired, truncated: false };
+    // 整体非法（某条对象坏）→ 逐对象抢救，仍算「非截断」
+    const salvaged = salvageObjects(body, start);
+    return { items: salvaged.length > 0 ? salvaged : null, truncated: false };
+  }
+
+  // 没有配对的 `]` → 输出疑似被 maxTokens 截断：抢救所有完整对象
+  const salvaged = salvageObjects(body, start);
+  return { items: salvaged.length > 0 ? salvaged : null, truncated: true };
 }
 
 /** 真实事件定位点：该 seq 所属 turn（继承最近一次 data.turn）与该 seq 上的工具 callId（非工具事件为 null）。 */
@@ -401,6 +498,41 @@ async function callAnalysis(
   }
 }
 
+/**
+ * 把「发起命令的会话」上溯到真正的根会话，再返回根会话的 readSession 结果。
+ *
+ * P1（stats 与 report 不同源）：采集器用 resolveRootSessionId 沿 parentSession 上溯，
+ * report 过去却直接把发起会话当 root —— 在子会话里执行 `/cohub-review` 时两者就会指向不同会话，
+ * 落盘目录里的 stats.json 与 report 的 rootSessionId 对不上。此处统一为同一语义。
+ * 任一环读取失败即就地收口（把当前层当根），不编造、不阻断复盘。
+ */
+async function readRootSession(
+  ctx: any,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<{ sessionId: string; read: any }> {
+  let current = sessionId;
+  let read = await ctx.sessionQuery.readSession(current, signal);
+  const seen = new Set<string>([current]);
+  for (let depth = 0; depth < MAX_ROOT_ASCEND; depth++) {
+    const parent = parentOf(read);
+    if (typeof parent !== "string" || parent.length === 0) break;
+    if (seen.has(parent)) break; // 环链：就地收口
+    let parentRead: any;
+    try {
+      parentRead = await ctx.sessionQuery.readSession(parent, signal);
+    } catch (error) {
+      ctx.logger?.warn?.("[cohub review] 上溯父会话失败，以 " + current + " 为根："
+        + String((error as any)?.message ?? error));
+      break;
+    }
+    seen.add(parent);
+    current = parent;
+    read = parentRead;
+  }
+  return { sessionId: current, read };
+}
+
 /** 主分析流程：读会话 → buildReport → （可选）单次 LLM → 落盘 */
 async function runAnalysis(
   ctx: any,
@@ -410,8 +542,9 @@ async function runAnalysis(
   withLlm: boolean,
 ): Promise<void> {
   const signal: AbortSignal | undefined = undefined;
-  const rootRead = await ctx.sessionQuery.readSession(sessionId, signal);
-  const root = toSessionEvents(rootRead, sessionId);
+  // 与采集器同一套 root 判定：上溯到真根，保证 stats.json 与 report 的 rootSessionId 同源
+  const { sessionId: rootId, read: rootRead } = await readRootSession(ctx, sessionId, signal);
+  const root = toSessionEvents(rootRead, rootId);
 
   const childIds = await findChildIds(ctx, root.sessionId, signal);
   const children: SessionEvents[] = [];
@@ -445,19 +578,35 @@ async function runAnalysis(
     analysis.model = result.model;
     if (result.ok) {
       analysis.invocations = 1;
-      const rawItems = extractJsonArray(result.raw);
-      if (rawItems) {
+      const extracted = extractJsonArray(result.raw);
+      const rawItems = extracted.items;
+      if (rawItems !== null) {
         const index = buildEvidenceIndex([root, ...children]);
         report.findings = normalizeFindings(rawItems, index, root.sessionId);
-        analysis.status = "completed";
         const dropped = rawItems.length - report.findings.length;
-        if (dropped > 0) {
-          analysis.error = "模型返回 " + rawItems.length + " 条结论，" + dropped + " 条因证据无法校验被丢弃。";
+        // 输出被截断时即使解析成功也不算 completed：结论不完整，须人工复核
+        if (extracted.truncated) {
+          analysis.status = "interrupted";
+          analysis.error = "模型输出疑似被 maxTokens 截断：已抢救出 " + report.findings.length
+            + " 条完整结论（其余丢失，建议提高 maxTokens 或减少会话数）。"
+            + (dropped > 0 ? "另有 " + dropped + " 条因证据无法校验被丢弃。" : "");
+        } else {
+          analysis.status = "completed";
+          if (dropped > 0) {
+            analysis.error = "模型返回 " + rawItems.length + " 条结论，" + dropped + " 条因证据无法校验被丢弃。";
+          }
         }
       } else {
-        analysis.error = "模型输出无法解析为 JSON 数组，findings 留空。原始输出前 200 字："
-          + result.raw.slice(0, 200);
+        analysis.status = "failed";
+        analysis.error = "模型输出无法解析为 JSON 数组，findings 留空（原始输出见 analysis.rawOutput）。";
         ctx.logger?.warn?.("[cohub review] " + analysis.error);
+      }
+      // 解析失败 / 截断时留原始输出，用于下次判断「截断」还是「格式错误」
+      if (analysis.status !== "completed") {
+        analysis.rawOutput = result.raw.slice(0, RAW_OUTPUT_KEEP_CHARS);
+        analysis.rawOutputLength = result.raw.length;
+        ctx.logger?.warn?.("[cohub review] 模型输出长度 " + result.raw.length
+          + "，末 40 字：" + result.raw.slice(-40));
       }
     } else {
       analysis.status = "failed";

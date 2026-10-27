@@ -13,6 +13,37 @@
 import type { ToolRecord, TurnSummary, UsageRecord } from "./review-types.ts";
 import { loadStats, saveStats, REVIEW_STATS_VERSION, type ReviewStatsFile } from "./review-store.ts";
 
+/**
+ * 【共用 root 判定】沿 parentSession 链上溯到顶，返回真正的根会话 id。
+ *
+ * 采集器与 `/cohub-review` 命令**必须**用同一个判定，否则会出现「stats 落在 A 根、
+ * report 落在 B 根」的不同源问题（真机 P1：report.rootSessionId=session-c9cd5d0c，
+ * 而 9 份 stats.json 的 rootSessionId 全是 session-0e158565）。
+ *
+ * 旧实现只做**单跳**折叠（`parentSessionId ?? sessionId`）：根 → 子 → 孙 时，
+ * 孙会话会被归到「子」而不是真根，与 report 的上溯结果不一致。
+ *
+ * @param sessionId 起点会话 id
+ * @param parentOf  取父会话 id 的回调（取不到返回 null/undefined）
+ * @param maxDepth  防御异常血缘树（自环/超深链）
+ */
+export function resolveRootSessionId(
+  sessionId: string,
+  parentOf: (id: string) => string | null | undefined,
+  maxDepth = 32,
+): string {
+  let current = sessionId;
+  const seen = new Set<string>([current]);
+  for (let depth = 0; depth < maxDepth; depth++) {
+    const parent = parentOf(current);
+    if (typeof parent !== "string" || parent.length === 0) return current;
+    if (seen.has(parent)) return current; // 自环/环链：停在当前层，不无限上溯
+    seen.add(parent);
+    current = parent;
+  }
+  return current;
+}
+
 /** 采集器配置（A2 不接 Config，全部走硬编码缺省；由后续任务接 Config 覆盖） */
 export interface ReviewCollectorOptions {
   /** 是否启用采集（缺省 true，false 时只返回空壳、不挂监听） */
@@ -150,6 +181,8 @@ export function createReviewCollector(ctx: any, opts: ReviewCollectorOptions = {
   const enabled = opts.enabled !== false;
   const debounceMs = Math.max(0, Math.trunc(opts.debounceMs ?? 200));
   const states = new Map<string, SessionState>();
+  /** sessionId → 父会话 id（只存已见会话，供 root 上溯） */
+  const parents = new Map<string, string | null>();
   const queues = new Map<string, Promise<void>>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   let off: (() => void) | null = null;
@@ -157,6 +190,13 @@ export function createReviewCollector(ctx: any, opts: ReviewCollectorOptions = {
 
   const warn = (msg: string) => {
     try { ctx?.logger?.warn?.("[cohub review] " + msg); } catch { /* 日志失败不影响采集 */ }
+  };
+
+  /** 重算所有已见会话的 rootSessionId（新会话可能补全上溯链，顺序无关） */
+  const rerootAll = () => {
+    for (const st of states.values()) {
+      st.rootSessionId = resolveRootSessionId(st.sessionId, id => parents.get(id));
+    }
   };
 
   const stateOf = (sessionId: string, session: any): SessionState => {
@@ -167,11 +207,14 @@ export function createReviewCollector(ctx: any, opts: ReviewCollectorOptions = {
       const cwd = typeof cwdRaw === "string" && cwdRaw ? cwdRaw : null;
       const parentRaw = header?.parentSession;
       const parentSessionId = typeof parentRaw === "string" && parentRaw ? parentRaw : null;
+      parents.set(sessionId, parentSessionId);
       st = {
         sessionId,
         cwd,
         parentSessionId,
-        rootSessionId: parentSessionId ?? sessionId,
+        // 与 report 同一套判定：沿 parentSession 链上溯到顶（多级子会话折叠到真根，
+        // 而不是旧实现的单跳 parentSessionId ?? sessionId）。
+        rootSessionId: resolveRootSessionId(sessionId, id => parents.get(id)),
         seenSeqs: new Set<number>(),
         turns: new Map<number, TurnAcc>(),
         childSessions: new Set<string>(),
@@ -209,11 +252,15 @@ export function createReviewCollector(ctx: any, opts: ReviewCollectorOptions = {
       for (const t of turns) merged.set(t.turn, t);
       const gaps = new Set<string>(existing?.gaps ?? []);
       for (const g of st.gaps) gaps.add(g);
+      // 落盘前按当前已知父链重算 root：子会话可能晚于父会话到达，
+      // 只靠首次定型会把「当时还不认识父」的会话错记成自己的 root。
+      const rootSessionId = resolveRootSessionId(st.sessionId, id => parents.get(id));
+      st.rootSessionId = rootSessionId;
       const stats: ReviewStatsFile = {
         version: REVIEW_STATS_VERSION,
         sessionId: st.sessionId,
         cwd: st.cwd,
-        rootSessionId: st.rootSessionId,
+        rootSessionId,
         gaps: [...gaps],
         updatedAt: new Date().toISOString(),
         turns: [...merged.values()].sort((a, b) => a.turn - b.turn),
@@ -362,6 +409,8 @@ export function createReviewCollector(ctx: any, opts: ReviewCollectorOptions = {
       off = ctx.on("session/event", (session: any, event: any) => {
         try {
           consume(session, event);
+          // 新会话首次出现可能补全上溯链 → 重算全部会话的 root（幂等，成本 O(n)）
+          rerootAll();
           const sid = session?.id;
           const parentId = states.get(sid)?.parentSessionId;
           if (typeof sid === "string" && typeof parentId === "string") registerChild(sid, parentId);

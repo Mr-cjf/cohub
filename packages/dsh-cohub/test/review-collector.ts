@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 const homeRoot = mkdtempSync(join(tmpdir(), "cohub-review-home-"));
 process.env.DSH_HOME = homeRoot;
 
-const { createReviewCollector } = await import("../src/review-collector.ts");
+const { createReviewCollector, resolveRootSessionId } = await import("../src/review-collector.ts");
 const { saveStats, loadStats, reviewStorePath, cwdDirName, sessionDirName, REVIEW_STATS_VERSION } =
   await import("../src/review-store.ts");
 
@@ -230,6 +230,42 @@ const tmpDirs: string[] = [homeRoot];
   writeFileSync(dirname(blocked), "x", "utf8");
   check("写失败静默返回 false", (await saveStats(cwd, sid3, { ...stats, sessionId: sid3 })) === false);
   check("写失败不抛错且无目标文件", !existsSync(blocked));
+}
+
+// ---- 用例 6b：多级子会话上溯到真根（P1：stats 与 report 同源） ----
+{
+  console.log("===== 用例 6b：多级子会话归一真根 =====");
+  const ctx = makeCtx();
+  const collector = createReviewCollector(ctx, { enabled: true, debounceMs: 0 });
+  const rootId = "root-deep";
+  const midId = "mid-deep";
+  const leafId = "leaf-deep";
+  const root = sessionOf(rootId, "C:\\work\\proj");
+  const mid = sessionOf(midId, "C:\\work\\proj", rootId);
+  const leaf = sessionOf(leafId, "C:\\work\\proj", midId); // 孙会话：父是 mid 而非 root
+  // 乱序到达：孙先到（此时上溯链还不完整），验证落盘前重算能纠正为真根
+  for (const [s, base] of [[leaf, 7000], [mid, 7100], [root, 7200]] as const) {
+    ctx.emit(s, ev("turn/start", 1, base, { turn: 1 }));
+    ctx.emit(s, ev("turn/end", 2, base + 50, { turn: 1, reason: { kind: "completed" } }));
+  }
+  await collector.flush();
+  collector.dispose();
+
+  check("根会话 rootSessionId 是自己", loadStats("C:\\work\\proj", rootId)?.rootSessionId === rootId);
+  check("一级子会话 rootSessionId 是真根", loadStats("C:\\work\\proj", midId)?.rootSessionId === rootId);
+  check("二级子会话 rootSessionId 是真根（非单跳 mid）", loadStats("C:\\work\\proj", leafId)?.rootSessionId === rootId);
+  check("子会话 sessionId 仍为自己（不覆盖身份）", loadStats("C:\\work\\proj", leafId)?.sessionId === leafId);
+}
+
+// ---- 用例 6c：resolveRootSessionId 上溯语义（自环/未知父不挂死） ----
+{
+  console.log("===== 用例 6c：resolveRootSessionId 语义 =====");
+  const parents = new Map<string, string>([["a", "b"], ["b", "c"], ["loop1", "loop2"], ["loop2", "loop1"]]);
+  const resolve = (id: string) => resolveRootSessionId(id, x => parents.get(x));
+  check("三级链 a→b→c 解析到 c", resolve("a") === "c");
+  check("链顶 c 解析到自己", resolve("c") === "c");
+  check("未知会话解析到自己", resolve("nobody") === "nobody");
+  check("自环不死循环且落在环内", ["loop1", "loop2"].includes(resolve("loop1")));
 }
 
 // 清理临时目录

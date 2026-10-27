@@ -59,6 +59,13 @@ export interface ReviewReport {
      * 过去只 logger.warn，用户在报告里毫无线索（B-2）。仅作说明，不影响结论证据纪律。
      */
     error?: string;
+    /**
+     * 模型原始输出前 2000 字（仅解析失败或疑似截断时保留）。
+     * 只存 error 里的一小段无法区分「截断」与「格式错误」，故把原始输出留档定位问题。
+     */
+    rawOutput?: string;
+    /** 模型原始输出的完整字符长度；与 rawOutput.length 对比即可判断是否被裁剪过。 */
+    rawOutputLength?: number;
   };
 }
 
