@@ -343,6 +343,69 @@ export interface SpawnRunSpec {
   agentPreset?: string;
   agentOptions?: Record<string, unknown>;
   signal?: AbortSignal;
+  /** 降级原因的收集槽（可选）。
+   *
+   *  preset / toolFilter 的 fail-soft 会往这里 push 一条原因，由调用方在
+   *  **result-budget 裁剪之后**拼到工具返回文本末尾——当前 DSH 进程不落盘 logger 输出，
+   *  只打 warn 等于静默降级（preset 未声明、toolFilter 失效都不会被用户看到）。
+   *  不传 = 保持旧行为（仅 warn），因此 delegate_batch / council 的调用面完全不受影响。
+   *  注意是可变的共享数组：startSubagentRun 内部重试复用同一引用。 */
+  degradeNotes?: DegradeNote[];
+}
+
+/** 一条降级提示（结构化，便于单条/多条合并成一行，不分散在多处拼字符串）。 */
+export interface DegradeNote {
+  /** 降级环节标识（去重键：同一环节多次重试只保留最后一次） */
+  id: "preset" | "toolfilter";
+  /** 简短标题，如「子代理 preset 未生效」 */
+  what: string;
+  /** 后果说明，如「已降级为继承父 preset」 */
+  effect: string;
+  /** 原因（已截断到 200 字符的第一行） */
+  reason: string;
+}
+
+/**
+ * 降级原因文本归一：只取 error.message 第一行并压平空白，截断到 200 字符。
+ *
+ * 既去掉堆栈噪音，也不把内部路径/长上下文外泄。与后台降级（describeBgFallback）
+ * 同一套取法 —— 那条路径已经证明「原因必须回到工具返回文本」才看得见。
+ */
+function describeDegradeReason(error: unknown): string {
+  const message = (error as any)?.message;
+  const raw = typeof message === "string" && message.length > 0 ? message : String(error);
+  const firstLine = (raw.split(/\r?\n/)[0] ?? "").replace(/\s+/g, " ").trim();
+  const text = firstLine.length > 0 ? firstLine : "unknown";
+  return text.length > 200 ? text.slice(0, 200) : text;
+}
+
+/**
+ * 把收集到的降级原因拼成返回文本末尾的一段（**无降级时返回空串**，
+ * 因此正常路径的返回文本逐字不变）。
+ *
+ *   单条 → "\n\n[<what>，<effect>：<reason>]"
+ *   多条 → "\n\n[降级提示：<what>，<effect>（<reason>）；<what2>，<effect2>（<reason2>）]"
+ */
+export function formatDegradeNotes(notes: readonly DegradeNote[] | undefined): string {
+  if (notes === undefined || notes.length === 0) return "";
+  if (notes.length === 1) {
+    const only = notes[0]!;
+    return "\n\n[" + only.what + "，" + only.effect + "：" + only.reason + "]";
+  }
+  return "\n\n[降级提示：" + notes.map(n => n.what + "，" + n.effect + "（" + n.reason + "）").join("；") + "]";
+}
+
+/**
+ * 覆盖式登记一条降级原因（同一 id 只保留最后一次）。
+ *
+ * 为什么覆盖而不是累加：spawn 的 fail-soft 会重试多次，同一个环节的降级会重复出现；
+ * 累加只会让返回文本变长、信号变糊。notes 为 undefined（调用方不要诊断）时静默跳过。
+ */
+function upsertDegradeNote(notes: DegradeNote[] | undefined, note: DegradeNote): void {
+  if (notes === undefined) return;
+  const index = notes.findIndex(n => n.id === note.id);
+  if (index >= 0) notes[index] = note;
+  else notes.push(note);
 }
 
 /**
@@ -448,6 +511,14 @@ export async function startSubagentRun(
     if (aborted || !PRESET_REJECTED.test(message)) throw error;
     // fail-soft：去掉 agentPreset 重试一次 → 子代理继承父 preset（本次改动之前的旧行为）。
     // 绝不因 preset 缺失（老安装、用户删了目录、preset 挂载失败）导致委派失败。
+    // 同时把原因登记到 spec.degradeNotes：当前 DSH 进程不落盘日志，只打 warn 等于静默降级。
+    const reason = describeDegradeReason(error);
+    upsertDegradeNote(spec.degradeNotes, {
+      id: "preset",
+      what: "子代理 preset 未生效",
+      effect: "已降级为继承父 preset",
+      reason,
+    });
     ctx?.logger?.warn?.(
       "[cohub preset] 子代理 preset \"" + spec.agentPreset + "\" 不可用，已降级为继承父 preset 重试："
       + message.slice(0, 300) + "（委派继续，不阻断）",
@@ -478,7 +549,20 @@ async function spawnWithToolFilterFallout(
   // 最多 3 次：① 用缓存交集试 → ② 学到清单后交集重试 → ③ 全量工具兜底
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      return await startSubagentRunOnce(ctx, provider, { ...spec, toolFilter: filter });
+      const handle = await startSubagentRunOnce(ctx, provider, { ...spec, toolFilter: filter });
+      // 真的降级了才登记：原本想裁（wanted 有值）但最终没下发任何 filter = 子代理用全量工具。
+      // 放在「成功后」而不是循环里的赋值点：中途失败/抛错时不该产出降级提示。
+      if (wanted !== undefined && filter === undefined) {
+        upsertDegradeNote(spec.degradeNotes, {
+          id: "toolfilter",
+          what: "工具裁剪未生效",
+          effect: "子代理使用全量工具",
+          reason: lastFilterError === undefined
+            ? "可限制工具清单交集为空，无可裁项"
+            : describeDegradeReason(lastFilterError),
+        });
+      }
+      return handle;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const aborted = spec.signal?.aborted === true || /abort/i.test(message);
@@ -1458,6 +1542,11 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       //     构造失败已在 resolveSkillToolFilter 内 fail-soft 成 undefined = 全量工具）
       const toolFilter = resolveSkillToolFilter(skill.name, config.toolFilter?.enabled ?? true, ctx.logger);
 
+      // 降级原因收集槽：preset / toolFilter 的 fail-soft 各登记一条，最终由
+      // runAttempts 在 result-budget 裁剪**之后**拼到返回文本末尾（当前进程不落盘日志，
+      // 只打 warn 等于静默失败 —— 今天为此时踩坑：preset 未声明 / toolFilter 失效都看不见）。
+      const degradeNotes: DegradeNote[] = [];
+
       // ④c 子代理独立精简 preset（按 skill 映射 readonly / write）：undefined = 继承父 preset。
       //     preset 缺失 / 挂载失败由 startSubagentRun 的 fail-soft 重试兜底（去掉 id 再试一次）。
       const agentPreset = resolveSkillAgentPreset(skill.name, subagentPresetEnabled);
@@ -1560,6 +1649,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
               ...(agentPreset !== undefined ? { agentPreset } : {}),
               ...(agentOptions ? { agentOptions } : {}),
               signal,
+              // preset / toolFilter 的 fail-soft 往这里登记降级原因（不传则仅 warn，旧行为）
+              degradeNotes,
             });
           } catch (error) {
             // T3：spawn 前/期间中止（prePublicationAbort）可能使 start() 抛错——归一为 aborted 处理
@@ -1600,12 +1691,16 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             // P1-3：结果先经「契约保留 + 预算裁剪 + 落盘定位」再回传，
             // 避免子代理全文永久驻留父会话历史并被每轮重发。
             // 改动 3：按 skill 分档取更小上限（co-planner 硬压到 1500 字符；契约段仍优先保留）。
-            return await budgetSubagentResult(ctx, exec, contentText(outcome.output), {
+            const budgeted = await budgetSubagentResult(ctx, exec, contentText(outcome.output), {
               maxChars: resolveSkillResultMaxChars(budget, skill.name),
               scope: "delegate",
               label: skillTag,
               enabled: budget.enabled,
             });
+            // 降级提示必须拼在 budgeted **之后**（与 delegate_batch 统计行同一位置逻辑）：
+            // 放进再被裁剪的文本里就会被 applyResultBudget 切掉，等于又回到静默降级。
+            // 无降级时 formatDegradeNotes 返回空串 → 正常路径返回文本逐字不变。
+            return budgeted + formatDegradeNotes(degradeNotes);
           }
           lastReason = String(outcome?.stopReason ?? "unknown");
           lastDiagnostic = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
