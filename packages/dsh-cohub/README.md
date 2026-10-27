@@ -1,6 +1,6 @@
 # dsh-cohub
 
-> 本文对应 **v0.10.0**；完整变更历史见 [CHANGELOG.md](./CHANGELOG.md)。
+> 本文对应 **v0.10.1**；完整变更历史见 [CHANGELOG.md](./CHANGELOG.md)。
 
 DeepSeek Harness 版（对照 [OpenCode 版](../oh-my-opencode-cohub/)）：中文智能体编排插件。
 把「纯调度模式 + 13 个技能（12 个代理编排体系 + co-cordis 组合创作）+ 多模型共识 + 运行期调度韧性」移植到 DSH 原生能力之上。
