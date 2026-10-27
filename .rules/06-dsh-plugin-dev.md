@@ -192,3 +192,72 @@
 - DSL 完整参考：`packages/dsh-cohub/.opencode/rules/defineTool-schema.md`
 - 包源码与构建：`packages/dsh-cohub/src/`、`packages/dsh-cohub/README.md`
 - **版本敏感**：本项目 `peerDependencies` 锁定 13 个 `@deepseek-ai/dsh-*` 为 `^0.1.0-rc.6`（外加 `@deepseek-ai/cordis` / `@deepseek-ai/schemastery` / `react`）。DSH 处于 rc 阶段，SDK 接口可能变更。`rc.6` 是 **SDK 层独立版本线**，**不可**与 DSH Desktop 外壳版本号（2.0.11）直接对标。升级依赖后需重新校对本规范。
+
+## 十三、常见故障与排查
+
+以下四条均为 0.10.x 开发中真机实测踩到的坑，写法和 6.3 的 v0.4.9 复盘一致：现象 → 根因 → 修法，各带证据出处。
+
+### 13.1 工具 / 命令注册成功 ≠ 能正常调用
+
+**现象**：`/cohub-review` 注册后在 `/api/commands/list` 里能看到，但执行时永远返回
+
+> `{"ok":false,"error":{"code":"gateway/internal","message":"command ... must return a CommandResult"}}`
+
+用户看不到任何提示。
+
+**根因**：`CommandDefinition.handler` 的返回值必须是 `CommandResult`（`{ kind: 'success' | 'error', text }`），只返回 `{ text }` 会在运行时被 `normalizeResult` 拒绝。`bun build` 与类型检查都不报错，因为返回类型写的是 `unknown` 或宽松对象。
+
+**验证方法**：不要只看「命令出现在注册列表」，必须**真实执行一次**并检查返回的 `result.kind`。
+
+### 13.2 fire-and-forget 里的异常必须落盘
+
+**现象**：`/cohub-review` 返回「正在生成报告…」成功文案，但磁盘上只有采集统计、没有任何报告，日志里也查不到错误。
+
+**根因**：报告生成是 fire-and-forget 异步任务，中间某步（`readSession` 的 live / replay 校验）抛错，被最外层 `catch` 吞成一条 `logger.warn`。而 warn 只走 stderr，**不落盘**——在 `~/.dsh/logs/` 里根本找不到，错误证据彻底丢失。
+
+**修法**：异步任务的三层兜底——
+
+1. 每步失败能降级就降级（如会话读不到就产出空报告并标记不完整）
+2. 任何未捕获异常写 `error-<时间戳>.json` 落盘
+3. 同时追加到 `_errors.log`
+
+**判断标准**：如果一次失败不会在磁盘上留下任何痕迹，这个错误处理就是不合格的。
+
+### 13.3 LLM 结构化输出的两处陷阱
+
+**现象**：复盘分析的 findings 全部为空，但 `analysis.error` 里附带的模型原始输出开头是合法的 JSON 数组。
+
+**根因有两个，且会叠加**：
+
+1. **输出被 maxTokens 截断**——13 个会话的统计摘要要输出十几条结论，2000 token 远远不够
+2. **解析用「最后一个 `]`」定位数组结尾**——输出被截断时根本没有 `]`，`lastIndexOf` 返回 -1，解析直接返回 null 并丢弃整份结果，且不报错
+
+**修法**：
+
+1. `maxTokens` 按输出规模设足（结构化输出建议 4000-6000）
+2. 解析改为**括号配对扫描**（正确处理字符串内的转义），支持剥 Markdown 围栏、修尾随逗号
+3. 截断时**逐个抢救完整对象**并标记 `interrupted`，而不是全丢
+4. 失败时把 `rawOutput`（前 2000 字）与 `rawOutputLength` 落进报告，否则无法判断是截断还是格式问题
+
+**判断标准**：解析失败时必须能回答「模型到底输出了什么、有没有被截断」。
+
+### 13.4 发版前必须确认 tag 没被打过，且 tag 指向含改动的提交
+
+**现象**：`0.10.0` 发布到 npm 后才发现内容残缺——缺了三个本应包含的功能。
+
+**根因**：`dsh-v0.10.0` tag 在开发过程中就被打过并推送，指向的提交早于后续三项改动；`publish.yml` 的 `actions/checkout` 不带 ref 参数，取的是**tag 指向的 commit**，于是后续改动全部没进包。同版本号不可重发，只能发 `0.10.1` 补救并在 CHANGELOG 里说明。
+
+**发版前必须逐条确认**：
+
+1. `git status --porcelain` 为空
+2. `git show HEAD:packages/<pkg>/package.json | grep '"version"'` 与预期版本一致
+3. `git ls-remote --tags origin | grep <tag>` **无输出**（远程没打过）
+4. `git tag -l "<tag>"` **无输出**（本地没打过）
+5. README 锚点与 package.json 版本一致（CI 会校验）
+6. **确认 tag 指向的 commit 含全部要发的改动**——用 `git log --oneline <上次tag>..HEAD` 核对
+
+**发布后验证**：CI 显示 `success` 不等于能装。必须 `npm pack <pkg>@<version>` 解包，用 grep 逐个确认**本版新增的关键符号**确实在 `lib/index.js` 里。
+
+注意 npm 有约 1-2 分钟传播延迟，`npm view` 首次查不到是正常的，别急着判定失败。
+
+出处：0.10.0 → 0.10.1 实际事故（`packages/dsh-cohub/CHANGELOG.md`）；本章 13.4 是对第十一章「发版」tag 检查的双重查重条款的补充。
