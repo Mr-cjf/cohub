@@ -14,6 +14,7 @@ import { dirname } from "node:path";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
 import { buildReport, type SessionEvents } from "./review-report.ts";
 import { renderMarkdown } from "./review-render.ts";
+import { updateIndex, writeProjectCopy } from "./review-index.ts";
 import { reviewStorePath } from "./review-store.ts";
 import type { Finding, ReviewReport } from "./review-types.ts";
 
@@ -182,12 +183,12 @@ function appendErrorLog(cwd: string | null | undefined, sessionId: string, messa
   } catch { /* 日志失败不影响主流程 */ }
 }
 
-/** 落盘一份 error-<ts>.json（与 report 同目录），返回是否写成功 */
+/** 落盘一份 error-<ts>.json（与 report 同目录），返回写成功的绝对路径（失败 null） */
 function writeErrorRecord(
   cwd: string | null | undefined,
   sessionId: string,
   error: unknown,
-): boolean {
+): string | null {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const payload = {
     error: String((error as any)?.message ?? error),
@@ -196,7 +197,8 @@ function writeErrorRecord(
     cwd: cwd ?? null,
     timestamp: new Date().toISOString(),
   };
-  return writeTextAtomic(reviewStorePath(cwd, sessionId, "error-" + stamp + ".json"), JSON.stringify(payload, null, 2));
+  const file = reviewStorePath(cwd, sessionId, "error-" + stamp + ".json");
+  return writeTextAtomic(file, JSON.stringify(payload, null, 2)) ? file : null;
 }
 
 /** 把报告压成 LLM 输入摘要（只含统计数字 + 缺口，不含消息正文） */
@@ -624,9 +626,25 @@ async function runAnalysis(
   try {
     await runAnalysisInner(ctx, agent, sessionId, cwdHint, withLlm, signal);
   } catch (error) {
-    const wrote = writeErrorRecord(cwdHint, sessionId, error);
-    ctx.logger?.warn?.("[cohub review] 分析失败（error-*.json " + (wrote ? "已" : "未") + "落盘）："
+    const errorPath = writeErrorRecord(cwdHint, sessionId, error);
+    ctx.logger?.warn?.("[cohub review] 分析失败（error-*.json " + (errorPath !== null ? "已" : "未") + "落盘）："
       + String((error as any)?.message ?? error));
+    // 失败也要进索引：用户能一眼看出哪个项目的最近一次复盘失败了
+    if (errorPath !== null) {
+      try {
+        updateIndex({
+          cwd: cwdHint,
+          sessionId,
+          status: "failed",
+          findings: 0,
+          sessions: 0,
+          jsonPath: errorPath,
+          mdPath: null,
+          projectCopyPath: null,
+          note: "本次复盘整体失败，仅落盘 error 记录：" + String((error as any)?.message ?? error).slice(0, 200),
+        });
+      } catch { /* 索引失败不影响错误记录 */ }
+    }
     throw error;
   } finally {
     clearTimeout(timer);
@@ -732,6 +750,32 @@ async function runAnalysisInner(
     ctx.logger?.warn?.("[cohub review] 报告落盘失败：json=" + jsonPath + " md=" + mdPath);
   } else {
     ctx.logger.info?.("[cohub review] 报告已生成：" + mdPath);
+  }
+
+  // 附产两步（都 fail-soft，绝不影响上面的主报告落盘）：
+  //   1. 项目内副本 <cwd>/.cohub/reviews/report-<stamp>.md（复用已渲染的 md，不二次渲染）；
+  //   2. 全局索引 index.json + INDEX.md（失败的报告也会出现在索引里，便于定位哪次失败）。
+  const copy = writeProjectCopy(cwd, md, stamp);
+  if (copy.path !== null) {
+    ctx.logger.info?.("[cohub review] 项目内副本：" + copy.path);
+  } else if (copy.note !== null) {
+    ctx.logger?.warn?.("[cohub review] 未写项目内副本：" + copy.note);
+  }
+  try {
+    const indexed = updateIndex({
+      cwd,
+      sessionId,
+      status: analysis.status,
+      findings: Array.isArray(report.findings) ? report.findings.length : 0,
+      sessions: Array.isArray(report.sessions) ? report.sessions.length : 0,
+      jsonPath,
+      mdPath: mdOk ? mdPath : null,
+      projectCopyPath: copy.path,
+      note: copy.note ?? undefined, // 与既有 .gitignore 冲突的提示也写进索引
+    });
+    if (!indexed) ctx.logger?.warn?.("[cohub review] 复盘索引更新失败（不影响报告）");
+  } catch (error) {
+    ctx.logger?.warn?.("[cohub review] 复盘索引更新异常：" + String((error as any)?.message ?? error));
   }
 }
 
