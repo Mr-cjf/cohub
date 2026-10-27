@@ -784,3 +784,17 @@ DSH 本机配置自检 —— C:\Users\14023\.dsh
 6. **章节 6.1 的 `provider` 名字（`guiyi` / `guiyi1` / `tokenproto` / `minimax-cn`）依赖同文件里 `llm-pi-ai` 的 provider 定义**（`apiKeyEnv: GUIYI_API_KEY` 等）与对应环境变量。换机器时必须一起搬，否则 13 个技能路由全部解析失败。
 7. **`compaction-basic.thresholdRatio: 0.5`** 目前在**文件式 preset** 里（`~/.dsh/.agent-presets/co-orchestrator/agent.cordis.yml` 第 167 行），而声明式 preset（`cordis.patch.yml` 内那份 `compaction-basic`）**没有**这个 config 行（用默认 0.8）。也就是说两套 co-orchestrator 的压缩激进度不同 —— 这是并存遗留，**需人工确认**是否有意为之。
 8. **`dsh-taskboard.json` / `dsh-taskboard-templates.json` 数据文件仍在 `~/.dsh/` 下**（86 + 2,564 字节），属卸载残留。本机保留未动；重建时不需要。
+9. **子代理仍能看到 `delegate` / `delegate_batch`**（节流残余，约 750 字符/请求）。
+   - **现象**：只读子代理（`cohub-subagent-readonly`）实测 24 个工具，其中仍包含 `delegate` 与 `delegate_batch`；可写子代理同样包含。
+   - **为什么留着**：
+     - 这两个工具由 cohub 在 `src/index.ts` 用 **host-plane `ctx.tools.register()`** 注册，落在 global 层，**不受 preset 插件行隔离**（preset 只能决定「挂不挂插件行」，管不到代码里直接注册的工具）。
+     - 理论上 `toolFilter` → `childCtx.tools.restrict()` 可以裁（`dsh-tools` 的 `view()` 把 global 层计入 `restrictableNames`），代码逻辑也已写对（`resolveSkillToolFilter('co-explorer', true)` 确实返回含 `delegate` 的 deny 表）。
+     - 但**实测未生效且不可观测**：会话日志的 `request/header` 结构只有 `{header: {config, adapterDefaults, tools}}`，**不记录 toolFilter**，因此无法确认是「未下发」、「下发被静默忽略」还是「下发了但 restrict 对 global 层无效」。
+     - 彻底解决需拆成独立插件包（`dsh-cohub/delegate-plugin` 子入口 + preset 插件行挂载），估计 **160 行 / 5 个文件**；曾尝试一次，中途 `stopReason: error`，为 750 字符冒此风险不划算。
+   - **影响多大**：
+     - 只影响子代理，不影响主会话。约 **750 字符/请求**（两个工具的 schema），占子代理每请求总量（约 8k）的 **≈9%**。
+     - **安全性无风险**：子代理即使调用也会被 `guardDelegationDepth` 拒绝（depth ≥ 1），属「有壳无弹」。
+   - **将来怎么解**（按性价比排序）：
+     1. **先补可观测性**：在 `delegate.ts` 的 `spawnWithToolFilterFallout` 里，每次下发 filter 后记一条 `degradeNotes`（或在子代理会话里打一条带 deny 内容的日志），先搞清楚到底断在哪一环 —— 一行改动，零风险。
+     2. **再试 toolFilter 修复**：确认断点后可能只是几行；若证实 restrict 对 global 层无效，则放弃这条路。
+     3. **最后才考虑拆插件**（方案 A）：新开分支实施，基线干净时再做。
