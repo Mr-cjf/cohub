@@ -591,6 +591,119 @@ async function spawnWithToolFilterFallout(
 }
 
 /**
+ * 探测式取 `ctx.agents` 服务（DSH 0.2.x 的 AgentRegistry）。
+ *
+ * 为什么不直接 `ctx.agents`：cohub 插件的 `inject` 列表里**没有** agents
+ * （index.ts: `["systemPrompt","skills","tools","sessionProjections","llm","subagents"]`），
+ * 而 cordis 的 Context proxy 对未 inject 的服务名会抛
+ * `cannot get property "agents" without inject`。故先走非强校验通道：
+ *   ① `ctx.get("agents")`（Cordis 4 把 reflect.get 混入 Context，非 strict）；
+ *   ② `ctx.reflect.get("agents", false)`（strict=false：不要求提供方 fiber 活跃）；
+ *   ③ 最后才试属性访问（测试桩 / 后续 inject 补齐时可用）。
+ *
+ * @param ctx 插件上下文
+ * @returns AgentRegistry 实例（含 get/list/roots/isOwnedBy）；全通道失败返回 undefined（fail-soft）
+ */
+function resolveAgentsService(ctx: any): any {
+  const pick = (fn: () => any): any => {
+    try {
+      const value = fn();
+      return value === null ? undefined : value;
+    } catch { return undefined; }
+  };
+  const viaGet = pick(() => (typeof ctx?.get === "function" ? ctx.get("agents") : undefined));
+  if (viaGet !== undefined) return viaGet;
+  const viaReflect = pick(() => ctx?.reflect?.get?.("agents", false));
+  if (viaReflect !== undefined) return viaReflect;
+  return pick(() => ctx?.agents);
+}
+
+/**
+ * 直接对「已创建的子代理 scope」施加工具裁剪 —— 绕开运行时不消费 toolFilter 的问题。
+ *
+ * 根因（0.2.1-rc.3 实测，app.asar 内 dsh-subagent lib/index.js）：
+ *   `startActivation` 组装子代理组合时写的是
+ *     composition: { agentPreset: request.agentPreset }
+ *   而 `applyChildComposition` 里 `if (composition.toolFilter !== void 0) tools.restrict(...)`
+ *   只有在 composition 携带 toolFilter 时才会执行。于是 request.toolFilter 被**静默丢弃**：
+ *   restrict 从未被调用 → 既不裁剪、也不抛错 → 不进入 spawnWithToolFilterFallout 的失败分支
+ *   → 连降级提示都不会登记。这正是「只读子代理仍能看到 delegate/delegate_batch 且无提示」的原因。
+ *
+ * 修法：cohub 自己在 child 发布后取 `agents.get(childId).ctx.tools.restrict(filter)`。
+ *   restrict 本来就是 scope-local 的层追加，语义与运行时内部那条完全一致（且晚追加同样有效，
+ *   因为 view() 每次按 scope 链实时求值）。
+ *
+ * fail-soft：拿不到 scope / 被拒 / 交集为空都只登记一条降级提示（绝不阻断委派），
+ *   保证失败一定在工具返回文本里可见。
+ */
+function applyChildToolFilterDirectly(
+  ctx: any,
+  childId: string | undefined,
+  filter: { allow?: string[]; deny?: string[] } | undefined,
+  degradeNotes: DegradeNote[] | undefined,
+): void {
+  if (filter === undefined) return;
+  const noteFailure = (reason: string): void => {
+    upsertDegradeNote(degradeNotes, {
+      id: "toolfilter",
+      what: "工具裁剪未生效",
+      effect: "子代理使用全量工具（仍可见 delegate/delegate_batch 等）",
+      reason,
+    });
+  };
+  const agents = resolveAgentsService(ctx);
+  if (agents === undefined) {
+    // 静默跳过而非降级：走到本函数的一定是 0.2.1+ 的 startActivation 分支，而
+    // startActivation 内部就用 `ownerCtx.agents.create()` 建子代理（lib/index.js:1815），
+    // 故真实宿主必然存在 agents 服务；取不到只可能是单测桩 / 未来服务改名。
+    // 这种情况登记「裁剪未生效」属于对外部环境的误报，故不下发提示（仍不阻断委派）。
+    return;
+  }
+  if (childId === undefined) return;
+  let child: any;
+  let tools: any;
+  try {
+    child = agents.get(childId);
+    // 必须用**属性访问**取 child ctx 上的 tools：它走 cordis 的 Context proxy，
+    // 把 child 自己的 scoped ctx 作为调用上下文（createTraceable(ctx, …)），
+    // restrict() 内部的 scopeOf(this.ctx) 才能拿到 child 的 scope。
+    // 反过来 `child.ctx.get("tools")` 会以 ReflectService 所属的 root ctx 绑定，
+    // scopeOf → undefined → 直接抛 "requires a scoped context"。
+    tools = child?.ctx?.tools;
+  } catch {
+    tools = undefined;
+  }
+  if (tools === undefined || typeof tools.restrict !== "function") {
+    noteFailure(child === undefined
+      ? "子代理创建后未在 agents 注册表中存活（无法施加 restrict）"
+      : "子代理 ctx 上取不到 tools 服务（无法施加 restrict）");
+    return;
+  }
+  try {
+    tools.restrict(filter);
+    return;
+  } catch (error) {
+    // 与 spawnWithToolFilterFallout 同一套自愈：从错误文本学可限制名字 → 求交集 → 重试一次
+    const message = error instanceof Error ? error.message : String(error);
+    const learned = parseRestrictableNames(message);
+    if (learned !== undefined) {
+      learnedRestrictableNames = learned;
+      const next = intersectWithRestrictable(filter, learned);
+      if (next !== undefined) {
+        try {
+          tools.restrict(next);
+          return;
+        } catch (retryError) {
+          noteFailure(describeDegradeReason(retryError));
+          return;
+        }
+      }
+    }
+    noteFailure(describeDegradeReason(error));
+  }
+}
+
+/**
  * 跨版本 spawn 子代理的实际实现。
  *
  * DSH 0.2.1 运行时 SubagentRuntime 移除了 start(provider, request)，改为 startActivation(spec)：
@@ -632,6 +745,10 @@ async function startSubagentRunOnce(
       signal,
       delivery: "caller",
     });
+    // request.toolFilter 在 0.2.1-rc.3 的 startActivation 里**不被消费**（其内部
+    // composition 只组装 { agentPreset: request.agentPreset }），所以必须由 cohub 自己
+    // 对子 scope 施加 restrict —— 见 applyChildToolFilterDirectly 的长注释。
+    applyChildToolFilterDirectly(ctx, receipt.childId, spec.toolFilter, spec.degradeNotes);
     return {
       id: receipt.childId,
       result: receipt.result,
