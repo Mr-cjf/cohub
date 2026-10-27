@@ -19,6 +19,7 @@ import { createDelegateTool } from "./delegate";
 import { createDelegateBatchTool } from "./delegate_batch.ts";
 import { createReviewCollector } from "./review-collector.ts";
 import { registerReviewCommand } from "./review-command.ts";
+import { registerTodoGate } from "./todo-gate.ts";
 import { COUNCIL_TIMEOUT_MS, WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 import {
   DEFAULT_BATCH_TASK_CHARS,
@@ -425,6 +426,12 @@ export function apply(ctx: any, config: any) {
     const collector = createReviewCollector(ctx, { enabled: true, debounceMs: 200 });
     return () => collector.dispose();
   }, "cohub.reviewCollector()");
+
+  // ⑩ turn-stopping 收尾闸门：turn 即将关闭且 todo 投影仍有 in_progress 时，用 agent.steer()
+  //    再走一步逼模型回写状态。官方语义见 todo-gate.ts 头部注释（@mode serial + 被 await）。
+  //    注册包在 effect 内并返回 off → 插件卸载时自动摘监听（todo-gate.ts 的 ⑧）。
+  //    纯副作用增强：内部全程 try/catch 吞错，任何失败都不得影响 turn 关闭。
+  ctx.effect(() => registerTodoGate(ctx), "cohub.todoGate()");
 
   // ⑨ `/cohub-review` 命令（零 turn、不经过模型）：立即返回，异步跑一次 LLM 分析生成 MD 报告。
   //    局部注入：commands + sessionQuery 两者都就绪时才挂命令；缺任一则不挂，
