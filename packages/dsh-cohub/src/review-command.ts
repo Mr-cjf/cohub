@@ -9,7 +9,7 @@
 //   · 落盘路径复用 review-store.ts 的 reviewStorePath（.tmp → rename 原子替换）；
 //   · 不对 Session/Event 载荷做 JSON.stringify / structuredClone，只取叶子字段（.rules/06:117）。
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
 import { buildReport, type SessionEvents } from "./review-report.ts";
@@ -31,6 +31,10 @@ const ANALYSIS_MAX_TOKENS = 5000;
 const RAW_OUTPUT_KEEP_CHARS = 2000;
 /** 子会话读取上限（防御异常血缘树把内存拖爆） */
 const MAX_CHILD_SESSIONS = 50;
+/** filterSessions 逐层 BFS 的最大调用次数（防御血缘树爆炸；每层一次查询） */
+const MAX_CHILD_FILTER_CALLS = 20;
+/** 单次复盘的整体超时（读会话 + LLM 全链路；阻断「无界挂死」） */
+const ANALYSIS_TIMEOUT_MS = 60_000;
 
 /** 上溯根会话的最大层数（防御异常血缘树） */
 const MAX_ROOT_ASCEND = 32;
@@ -97,7 +101,35 @@ async function findChildIds(ctx: any, rootId: string, signal?: AbortSignal): Pro
   }
   if (ids.size > 0) return [...ids].slice(0, MAX_CHILD_SESSIONS);
 
-  // 退化路径：全量列举，按 parentSession 链从根做 BFS
+  // 退化路径 1：filterSessions({ parentSessionId }) 做 BFS，只查「某个父会话的子会话」，
+  // 避免 listSessions 的全量列举（该 cwd 实测 690 个会话）。调用次数受 MAX_CHILD_FILTER_CALLS 限制。
+  try {
+    const filter = ctx?.sessionQuery?.filterSessions;
+    if (typeof filter === "function") {
+      const queue = [rootId];
+      let calls = 0;
+      while (queue.length > 0 && ids.size < MAX_CHILD_SESSIONS && calls < MAX_CHILD_FILTER_CALLS) {
+        const parentId = queue.shift() as string;
+        calls++;
+        const listed = await filter.call(ctx.sessionQuery, { parentSessionId: parentId }, signal);
+        const records: any[] = Array.isArray(listed) ? listed : [];
+        for (const rec of records) {
+          const id = idOf(rec);
+          if (!id || id === rootId || ids.has(id)) continue;
+          ids.add(id);
+          queue.push(id);
+          if (ids.size >= MAX_CHILD_SESSIONS) break;
+        }
+      }
+    }
+  } catch (error) {
+    ctx.logger?.warn?.("[cohub review] filterSessions 失败：" + String((error as any)?.message ?? error));
+  }
+  if (ids.size > 0) return [...ids].slice(0, MAX_CHILD_SESSIONS);
+
+  // 退化路径 2：全量列举，按 parentSession 链从根做 BFS。
+  // 代价：该 cwd 下可能有数百个会话（实测 690 个），全部列举并建表，O(N) 内存 + 一次全量读；
+  // 仅在 traceSession 与 filterSessions 都不可用/为空时走到这里。
   try {
     const list = await ctx.sessionQuery.listSessions(signal);
     const records: any[] = Array.isArray(list) ? list : [];
@@ -139,6 +171,32 @@ function writeTextAtomic(file: string, text: string): boolean {
     } catch { /* 清理失败不影响主流程 */ }
     return false;
   }
+}
+
+/** 把错误追加到 <reviews>/<cwdHash>/_errors.log（一行一条，绝不抛错） */
+function appendErrorLog(cwd: string | null | undefined, sessionId: string, message: string): void {
+  try {
+    const logPath = reviewStorePath(cwd, sessionId, "_errors.log");
+    mkdirSync(dirname(logPath), { recursive: true });
+    appendFileSync(logPath, new Date().toISOString() + "\t" + sessionId + "\t" + message.replace(/\s+/g, " ").slice(0, 500) + "\n", "utf8");
+  } catch { /* 日志失败不影响主流程 */ }
+}
+
+/** 落盘一份 error-<ts>.json（与 report 同目录），返回是否写成功 */
+function writeErrorRecord(
+  cwd: string | null | undefined,
+  sessionId: string,
+  error: unknown,
+): boolean {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const payload = {
+    error: String((error as any)?.message ?? error),
+    stack: typeof (error as any)?.stack === "string" ? (error as any).stack : undefined,
+    sessionId,
+    cwd: cwd ?? null,
+    timestamp: new Date().toISOString(),
+  };
+  return writeTextAtomic(reviewStorePath(cwd, sessionId, "error-" + stamp + ".json"), JSON.stringify(payload, null, 2));
 }
 
 /** 把报告压成 LLM 输入摘要（只含统计数字 + 缺口，不含消息正文） */
@@ -510,9 +568,21 @@ async function readRootSession(
   ctx: any,
   sessionId: string,
   signal?: AbortSignal,
-): Promise<{ sessionId: string; read: any }> {
+): Promise<{ sessionId: string; read: any; failed?: string }> {
   let current = sessionId;
-  let read = await ctx.sessionQuery.readSession(current, signal);
+  // 首个 readSession 曾是无保护的一行（runAnalysis 八步里唯一的裸调用）：它一抛错就穿透整个
+  // runAnalysis，只被外层 fire-and-forget 的 catch 吞成一条 logger.warn → 磁盘零产物。
+  // 此处与下面读父会话一致地就地降级：拿不到就退回空 events，让 buildReport 输出
+  // coverage.complete=false 的不完整报告（有产物 > 无产物）。
+  let read: any;
+  let failed: string | undefined;
+  try {
+    read = await ctx.sessionQuery.readSession(current, signal);
+  } catch (error) {
+    failed = "根会话读取失败（" + String((error as any)?.message ?? error) + "）";
+    ctx.logger?.warn?.("[cohub review] " + failed + "，降级为空事件继续出报告");
+    read = { session: { id: current }, events: [] };
+  }
   const seen = new Set<string>([current]);
   for (let depth = 0; depth < MAX_ROOT_ASCEND; depth++) {
     const parent = parentOf(read);
@@ -530,10 +600,16 @@ async function readRootSession(
     current = parent;
     read = parentRead;
   }
-  return { sessionId: current, read };
+  return { sessionId: current, read, failed };
 }
 
-/** 主分析流程：读会话 → buildReport → （可选）单次 LLM → 落盘 */
+/**
+ * 主分析流程：读会话 → buildReport → （可选）单次 LLM → 落盘。
+ *
+ * 最外层兜底：任何一步抛错（含 buildReport / renderMarkdown 这类非网络异常）都不再静默——
+ * 先把 error-<ts>.json 落到与 report 同一目录，再把错误继续抛给外层 fire-and-forget 的 catch
+ * （那里负责 _errors.log）。这样「零产物」在结构上不可能发生。
+ */
 async function runAnalysis(
   ctx: any,
   agent: any,
@@ -541,14 +617,39 @@ async function runAnalysis(
   cwdHint: string | null,
   withLlm: boolean,
 ): Promise<void> {
-  const signal: AbortSignal | undefined = undefined;
+  // 全链路超时：读到一半的会话不会把命令永久挂死（timer 必须清理，否则进程多存活 60s）
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ANALYSIS_TIMEOUT_MS);
+  const signal: AbortSignal = controller.signal;
+  try {
+    await runAnalysisInner(ctx, agent, sessionId, cwdHint, withLlm, signal);
+  } catch (error) {
+    const wrote = writeErrorRecord(cwdHint, sessionId, error);
+    ctx.logger?.warn?.("[cohub review] 分析失败（error-*.json " + (wrote ? "已" : "未") + "落盘）："
+      + String((error as any)?.message ?? error));
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runAnalysisInner(
+  ctx: any,
+  agent: any,
+  sessionId: string,
+  cwdHint: string | null,
+  withLlm: boolean,
+  signal: AbortSignal,
+): Promise<void> {
   // 与采集器同一套 root 判定：上溯到真根，保证 stats.json 与 report 的 rootSessionId 同源
-  const { sessionId: rootId, read: rootRead } = await readRootSession(ctx, sessionId, signal);
+  const { sessionId: rootId, read: rootRead, failed: rootFailed } = await readRootSession(ctx, sessionId, signal);
   const root = toSessionEvents(rootRead, rootId);
 
   const childIds = await findChildIds(ctx, root.sessionId, signal);
   const children: SessionEvents[] = [];
   const gaps: string[] = [];
+  // 根会话自身读失败也是缺口：必须让 coverage.complete=false，报告自带「采集不完整」标记
+  if (rootFailed) gaps.push(rootId + ": " + rootFailed);
   for (const childId of childIds) {
     try {
       const read = await ctx.sessionQuery.readSession(childId, signal);
@@ -621,8 +722,10 @@ async function runAnalysis(
 
   const md = renderMarkdown(report, { excerptLimit: 120 });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const jsonPath = reviewStorePath(cwd, root.sessionId, "report-" + stamp + ".json");
-  const mdPath = reviewStorePath(cwd, root.sessionId, "report-" + stamp + ".md");
+  // 落盘目录用「发起命令的会话」sessionId，与采集器写 stats.json 的目录同源；
+  // 报告内容里的 rootSessionId 仍标识真根会话（语义不同，不能替换成 sessionId）。
+  const jsonPath = reviewStorePath(cwd, sessionId, "report-" + stamp + ".json");
+  const mdPath = reviewStorePath(cwd, sessionId, "report-" + stamp + ".md");
   const jsonOk = writeTextAtomic(jsonPath, JSON.stringify(report, null, 2));
   const mdOk = writeTextAtomic(mdPath, md);
   if (!jsonOk || !mdOk) {
@@ -667,7 +770,10 @@ export function registerReviewCommand(ctx: any): void {
         try {
           await runAnalysis(ctx, inv?.agent, sessionId, cwdHint, withLlm);
         } catch (error) {
-          ctx.logger?.warn?.("[cohub review] 报告生成失败：" + String((error as any)?.message ?? error));
+          const message = String((error as any)?.message ?? error);
+          // warn 只在看不见的 stderr 里；同时落 _errors.log，让失败在磁盘上可查
+          appendErrorLog(cwdHint, sessionId, message);
+          ctx.logger?.warn?.("[cohub review] 报告生成失败：" + message);
         } finally {
           inFlight.delete(sessionId);
         }
