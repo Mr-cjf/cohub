@@ -105,10 +105,13 @@ const ORCH_KEYS: [string, string][] = [
   ['写冲突串行', '写冲突'],
   ['失败处理状态枚举', 'completed/failed/error'],
   ['中止断点续跑', '从中断处继续'],
-  ['专责代码审查', 'co-oracle 代码审查'],
-  ['独立 UI 审查', 'co-designer UI 审查'],
+  // 「代码审查/UI 审查必须由专责代理执行」的措辞已迁到 planner.md（:69），
+  // 由 test/skills-contract.ts 用例 2 断言，此处不再重复。
   ['planner 审批选项', 'ask_user_question'],
-  ['规则1 方案先行', '必须先输出方案'],
+  // 规则1 方案先行：T2/T3 必须先经 co-planner 出方案再执行（两步都断言，防退化成只留其一）
+  ['规则1 方案先行', '必须重新走方案流程'],
+  ['规则1 方案经 co-planner', '委派 co-planner 制定方案'],
+  ['规则1 禁拉全套', '禁止拉全套方案'],
   ['规则4 三问不新增', '低频吗'],
 ];
 let failKeys = 0;
@@ -143,26 +146,32 @@ const okBriefBudget = ['co-orchestrator', 'co-planner'].every((n) => {
   return s.brief.length <= 300 && /[\u4e00-\u9fff]/.test(s.brief);
 });
 const plannerBrief = COHUB_SKILLS.find((x: any) => x.name === 'co-planner')!.brief;
-const okPlannerBrief = plannerBrief.includes('可独立执行验收')
+// planner brief 必须给出完整并行判据（与 skills/planner.md:62-64 一致）：
+// 可独立验收 → 并行；不按文件数拆任务；同文件写冲突 → 串行；每批 ≤3。
+const okPlannerBrief = plannerBrief.includes('可独立验收')
+  && plannerBrief.includes('无依赖/写冲突')
+  && plannerBrief.includes('同问题多文件/多搜索交单代理内部并行')
   && plannerBrief.includes('不按文件数')
-  && plannerBrief.includes('写冲突');
+  && plannerBrief.includes('同文件写冲突串行')
+  && plannerBrief.includes('每批≤3');
 console.log('brief 预算(≤300/含中文):', okBriefBudget ? 'PASS' : 'FAIL');
-console.log('planner brief 并行判据(独立验收/非文件数):', okPlannerBrief ? 'PASS' : 'FAIL');
+console.log('planner brief 并行判据(独立验收/非文件数/写冲突/批上限):', okPlannerBrief ? 'PASS' : 'FAIL');
 
-// ③f2 orchestrator brief 并行语义：与 orchestrator.md 正文一致（子代理内部聚合 / 代理间独立验收并行 / 写冲突精确限定 / 必要原 brief 保留）
+// ③f2 orchestrator brief 并行/专责语义：brief 受 ≤300 字硬约束，只承载高层契约；
+// 正文 orchestrator.md 的细粒度并行语义由 ③e 断言（子代理内部聚合 / 独立验收并行 / 写冲突精确限定）。
 const orchBrief = COHUB_SKILLS.find((x: any) => x.name === 'co-orchestrator')!.brief;
-const okOrchBrief = orchBrief.includes('子代理内部')          // 同具体目标多读取/搜索聚合子代理内部工具并行
-  && orchBrief.includes('不拆多个代理')                        // 不按文件数/复杂度拆任务
-  && orchBrief.includes('可独立执行验收')                       // 代理间并行判据
-  && orchBrief.includes('无实依赖写冲突')
-  && orchBrief.includes('代理间并行')
-  && orchBrief.includes('maxParallelBatch')                    // 平台批次上限保持
-  && orchBrief.includes('独立只读可并行')                        // 写冲突精确限定：非一律同文件串行
-  && orchBrief.includes('纯调度')                               // 纯调度禁止保留
-  && orchBrief.includes('用户确认')                              // 规划审批保留
-  && orchBrief.includes('co-fixer') && orchBrief.includes('co-designer') // 专责保留
-  && !orchBrief.includes('同文件/依赖串行');                    // 负断言：旧笼统"同文件一律串行"语义已删除
-console.log('orchestrator brief 并行语义(聚合/独立验收/写冲突限定/原brief保留):', okOrchBrief ? 'PASS' : 'FAIL');
+const okOrchBrief = orchBrief.includes('并行省墙钟')                    // 并行是为了省墙钟而非凑数
+  && orchBrief.includes('无第二个独立任务时单 delegate 即推荐')          // 反向：无独立任务不并行
+  && orchBrief.includes('单批≤maxParallelBatch')                        // 批次上限语义完整
+  && orchBrief.includes('纯调度')                                       // 纯调度禁止保留
+  && orchBrief.includes('ask_user_question')                            // 审批工具保留
+  && orchBrief.includes('co-fixer')                                     // 执行专责保留
+  && orchBrief.includes('co-designer')                                  // 专责保留：UI/视觉类才派 co-designer
+  && orchBrief.includes('已核实事实')                                    // 增量边界（不重跑探索）保留
+  && orchBrief.includes('T0') && orchBrief.includes('T3')               // 任务分档保留
+  && orchBrief.includes('≤10 分钟')                                     // 单执行墙钟预算保留
+  && !orchBrief.includes('同文件/依赖串行');                             // 负断言：旧笼统"同文件一律串行"语义已删除
+console.log('orchestrator brief 语义(专责co-designer/墙钟优先/批次上限/档位):', okOrchBrief ? 'PASS' : 'FAIL');
 
 // ③g 生成源一致：COHUB_SKILLS.content 与磁盘 skills/*.md 完全一致（需先 bun run build 重新生成）
 // 磁盘文件按 checkout 可能为 CRLF/CR，而模板字面量运行时恒为 LF：比较前仅规范化换行，其余字符/空格/内容严格相等

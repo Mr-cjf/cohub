@@ -48,6 +48,13 @@ check("验证步骤列扩大条件", planner.includes("扩大条件"));
 check("扩大条件含先定向收敛语义", planner.includes("定向修复") && planner.includes("按影响面扩大"));
 check("扩大条件含合理例外", planner.includes("例外"));
 check("保留并行化策略章节要求", planner.includes("并行化策略"));
+// 迁移自 test/unit.ts：专责审查与并行判据的措辞现在只存在于 planner.md（orchestrator 只留分档与派发纪律），
+// 故把「代码审查/UI 审查必须由专责代理执行」「并行按可独立验收而非文件数」这两条守卫迁到这里断言。
+check("专责代码审查指向 co-oracle", planner.includes("co-oracle 代码审查"));
+check("专责 UI 审查指向 co-designer", planner.includes("co-designer UI 审查"));
+check("并行判据：可独立验收且无实依赖/写冲突", planner.includes("可独立执行验收") && planner.includes("无实依赖/写冲突"));
+check("并行判据：不按文件数/复杂度拆任务", planner.includes("不按文件数"));
+check("写冲突串行、独立只读可并行", planner.includes("同文件写冲突必须串行") && planner.includes("独立只读同文件可并行"));
 
 // ---- 用例 3：fixer 委派范围纪律 ----
 group("用例 3：fixer 委派范围纪律");
