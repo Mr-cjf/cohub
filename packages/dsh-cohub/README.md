@@ -17,6 +17,8 @@ DeepSeek Harness 版（对照 [OpenCode 版](../oh-my-opencode-cohub/)）：中�
 dsh plugin --profile web add dsh-cohub
 ```
 
+> 请通过 `dsh plugin add dsh-cohub` 安装（由宿主提供 `@deepseek-ai/schemastery` 等 peer 依赖）；直接 `npm install dsh-cohub` 虽可安装，但缺少宿主运行时服务，插件无法独立加载。
+
 本地开发安装：
 
 ```bash

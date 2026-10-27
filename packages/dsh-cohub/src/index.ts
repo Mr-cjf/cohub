@@ -31,6 +31,17 @@ import {
 
 import { DEFAULT_ERROR_CATEGORIES } from "./env-signatures";
 
+/**
+ * 安全地标记为 volatile（配置热更新）。
+ * `Schema.prototype.volatile` 自 schemastery 3.18.4 起提供；
+ * 若被安装到更旧的版本（如某些宿主环境或裸装场景），降级为普通字段，
+ * 而不是在模块顶层求值时抛 TypeError 导致整个插件导入失败。
+ */
+function volatileSchema<T extends object>(schema: T): T {
+  const fn = (schema as { volatile?: () => T }).volatile;
+  return typeof fn === "function" ? fn.call(schema) : schema;
+}
+
 /** 单个 councillor 配置（M4 council 工具使用） */
 const Councillor = z.object({
   name: z.string(),
@@ -201,28 +212,28 @@ export const Config = z.object({
    *  reasoningEffort 可单独配置（不配 provider/model 时只覆盖推理强度，provider/model 仍继承父会话）。
    *  volatile：DSH 0.2 起由 Loader 按活动 profile entry id 投影为设置页可编辑字段，
    *  变更经 loader/volatile-update 提交到同一引用，无需重挂载（apply 内以 config.skills.get() 实时读取）。 */
-  skills: z.array(SkillRoute).default([]).volatile(),
+  skills: volatileSchema(z.array(SkillRoute).default([])),
   /** delegate 执行器环境契约注入（P1-1）：默认开，文本可覆盖 */
   delegateEnvContract: EnvContractConfig,
   /** delegate 中止/失败自动重试（P1-2）：默认不重试。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
-  delegateRetry: DelegateRetry.volatile(),
+  delegateRetry: volatileSchema(DelegateRetry),
   /** delegate 执行器环境契约持久化（P3-2/N1）：默认 auto（无缓存时行为不变） */
   envSignatures: EnvSignatures,
   /** 调度参数（P3-3/N3）：批大小 / 墙钟预算 / job 跟踪 / 批间自适应；settings 可覆盖。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
-  schedule: ScheduleConfig.volatile(),
+  schedule: volatileSchema(ScheduleConfig),
   /** 子代理结果预算（P1-3）：单次/批单任务/批总量上限与总开关；默认值即生效。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
-  resultBudget: ResultBudgetConfig.volatile(),
+  resultBudget: volatileSchema(ResultBudgetConfig),
   /** delegate 后台 job 模式：默认关闭；开启后 delegate 立即返回 jobId，主代理轮询 job_output。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
-  delegateBackground: DelegateBackgroundConfig.volatile(),
+  delegateBackground: volatileSchema(DelegateBackgroundConfig),
   /** 子代理工具表裁剪（P1-1）：按角色 deny 裁剪，默认开启，失败自动回退全量工具 */
   toolFilter: ToolFilterConfig,
   /** 子代理独立精简 preset：按 skill 映射 readonly / write preset，默认开启。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。 */
-  delegateSubagentPreset: DelegateSubagentPresetConfig.volatile(),
+  delegateSubagentPreset: volatileSchema(DelegateSubagentPresetConfig),
   /** 是否把内置 agent preset 安装/升级到用户 preset root（~/.dsh/.agent-presets/）。
    *  默认 true。设为 false 后本插件不再动该目录（已安装的 preset 不会自动删除，
    *  需要时手动清理 ~/.dsh/.agent-presets/ 下对应目录）。 */
