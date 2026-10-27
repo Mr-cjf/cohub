@@ -1474,30 +1474,23 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
 
   return defineTool({
     name: "delegate",
-    description: "把任务委派给指定专职代理：按 skill 名路由 provider/model，自动注入该代理的精简指令后 spawn 子代理。"
-      + "默认前台同步（阻塞到子代理结束）。background 三档语义：true=强制后台（显式指令，不看配置）；"
-      + "false=强制前台；缺省=按配置（delegateBackground.enabled && skill 命中 defaultFor）。后台化后立即返回 jobId，"
-      + "用 job_output({ job_id, wait: true }) 取结果，或等完成时自动唤醒；等待期间可继续推进其他工作。"
-      + "jobs 服务不可用 / start() 拒绝时一律降级前台。适合长任务（预计 >3 分钟）或多路并行。",
+    description: "委派单一子代理：按 skill 路由模型并注入角色指令后运行。"
+      + "background：true=强制后台返 jobId；false=强制前台；缺省=按配置。",
 
     parameters: {
       skill: {
         type: "string",
         required: true,
-        description: "必填，专职代理技能名，必须是 co-* 代理名（co-fixer/co-explorer/co-oracle/co-planner 等）。"
-          + "缺省会报错 invalid arguments: missing required property \"skill\"——不填就无法路由 provider/model，"
-          + "也挂不上该角色的子代理 preset 与工具裁剪",
+        description: "必填，co-* 代理名（如 co-fixer/co-explorer/co-oracle）",
       },
       prompt: {
         type: "string",
         required: true,
-        description: "给该代理的具体任务（写全目标、相关文件路径、约束、期望输出格式）",
+        description: "必填，自包含：目标、路径、约束、输出格式",
       },
       background: {
         type: "boolean",
-        description: "true=强制后台（显式指令，不看 delegateBackground.enabled，注册为 DSH 后台 job 并立即返回 jobId）；"
-          + "false=强制前台同步等待（不看 defaultFor）；缺省=按配置（enabled && 该 skill 在 defaultFor 中）。"
-          + "jobs 不可用时一律自动降级为前台",
+        description: "true=强制后台返 jobId；false=强制前台同步；缺省=按配置（enabled && skill 命中 defaultFor）",
       },
     },
 

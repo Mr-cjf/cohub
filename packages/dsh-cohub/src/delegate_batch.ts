@@ -103,14 +103,14 @@ export function createDelegateBatchTool(
 
   return defineTool({
     name: "delegate_batch",
-    description: "批量并行委派：一次调用同时启动多个子代理任务，返回每个任务的结构化结果。适合并行派发多个无依赖的独立任务（如同时让多个 co-explorer 探索不同目录，或多个 co-fixer 修改不同文件）。每个 task 只尝试一次，不重试。上限由 `schedule.maxParallelBatch` 配置（默认 3，最大 20）。",
+    description: "并发执行多个子代理任务：一次调用并行派发 N 个无依赖任务，返回各自结果。"
+      + "每项 skill/prompt 必填，单批默认 3（上限 20），不重试。",
 
     parameters: {
       tasks: {
         type: "array",
         required: true,
-        description: "任务列表，每个任务的 skill 与 prompt 均为必填（漏传 skill 会报 invalid arguments: missing required property \"tasks[i].skill\"）。"
-          + "上限由 schedule.maxParallelBatch 限制（默认 3，最大 20）。",
+        description: "任务列表，每项 skill/prompt 必填；上限 schedule.maxParallelBatch（默认 3，最大 20）",
         items: {
           type: "object",
           additionalProperties: false,
@@ -119,10 +119,9 @@ export function createDelegateBatchTool(
             skill: {
               type: "string",
               required: true,
-              description: "必填，必须指定 co-* 代理名（co-fixer / co-explorer / co-oracle / co-planner 等）。"
-                + "漏传会导致 label 变成 \":undefined\" 并失去 preset 路由与工具裁剪，故直接判为非法参数",
+              description: "必填，co-* 代理名（如 co-fixer/co-explorer/co-oracle）",
             },
-            prompt: { type: "string", required: true, description: "必填，给该代理的具体任务描述（自包含）" },
+            prompt: { type: "string", required: true, description: "必填，给该代理的具体任务（自包含）" },
           },
         },
       },
