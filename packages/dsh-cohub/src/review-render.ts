@@ -72,6 +72,19 @@ function excerptOf(raw: string, limit: number): string {
   return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
 }
 
+/** severity 的顺序权重（high 最重，用于 issue 组内降序排列）。 */
+const SEVERITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+
+/** severity 展示顺序（统计行固定 high → medium → low）。 */
+const SEVERITY_ORDER = ["high", "medium", "low"] as const;
+
+/** 取一条 finding 的有效 severity：只有 issue 且值在白名单内才算，其余返回 null。 */
+function severityOf(finding: Finding): "low" | "medium" | "high" | null {
+  if (finding?.kind !== "issue") return null;
+  const s = (finding as any)?.severity;
+  return s === "high" || s === "medium" || s === "low" ? s : null;
+}
+
 /** 渲染 findng 的详细块（锚点 + 摘录 + 局限），仅给正式结论区使用。 */
 function renderFinding(
   finding: Finding,
@@ -79,7 +92,9 @@ function renderFinding(
   excerptLimit: number,
 ): string[] {
   const out: string[] = [];
-  out.push(`- **${text(finding?.text)}**`);
+  // issue 带等级时，标题行显式标注 `- **issue · high** — <text>`，方便扫读优先级。
+  const sev = severityOf(finding);
+  out.push(sev !== null ? `- **issue · ${sev}** — ${text(finding?.text)}` : `- **${text(finding?.text)}**`);
   const evidence = Array.isArray(finding?.evidence) ? finding.evidence : [];
   // 硬规则 1：结论必须能指回 (sessionId, turn, seq)
   for (const ev of evidence) out.push(`  - 锚点：${anchorOf(ev)}`);
@@ -224,9 +239,31 @@ export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
     // 措辞纪律：findings 为空时**不能**暗示「结论都带了锚点」——这里根本没有结论。
     lines.push(`- 本报告没有带证据的结论（findings 为空，${DASH}）；原因见「分析状态」与「限制说明」。`, "");
   } else {
+    // 问题分布统计：只在有 issue 时出现（没有 issue 就没有「分布」可言，绝不显示 high 0 / low 0）。
+    const issueCounts = new Map<string, number>();
+    for (const f of verified) {
+      const sev = severityOf(f);
+      if (sev !== null) issueCounts.set(sev, (issueCounts.get(sev) ?? 0) + 1);
+    }
+    const totalIssues = [...issueCounts.values()].reduce((a, b) => a + b, 0);
+    if (totalIssues > 0) {
+      const dist = SEVERITY_ORDER
+        .filter(s => (issueCounts.get(s) ?? 0) > 0)
+        .map(s => `${s} ${issueCounts.get(s)}`)
+        .join(" / ");
+      lines.push(`- 问题分布：${dist}`, "");
+    }
     for (const kind of KIND_ORDER) {
-      const group = verified.filter(f => f?.kind === kind);
+      let group = verified.filter(f => f?.kind === kind);
       if (group.length === 0) continue;
+      // issue 组内按 severity 降序（high → medium → low）；Array#sort 稳定，同 severity 保持原序。
+      if (kind === "issue") {
+        group = [...group].sort((a, b) => {
+          const ra = SEVERITY_RANK[severityOf(a) ?? ""] ?? SEVERITY_ORDER.length;
+          const rb = SEVERITY_RANK[severityOf(b) ?? ""] ?? SEVERITY_ORDER.length;
+          return ra - rb;
+        });
+      }
       lines.push(`### ${KIND_TITLE[kind] ?? kind}`, "");
       for (const f of group) lines.push(...renderFinding(f, opts, excerptLimit));
       lines.push("");

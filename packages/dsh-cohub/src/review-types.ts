@@ -142,6 +142,12 @@ export interface Finding {
   /** 报告内唯一 id（如 "f-001"），供客户端引用与去重。 */
   id: string;
   kind: "observation" | "praise" | "issue" | "suggestion";
+  /**
+   * 严重程度——**仅 kind="issue" 时有值**（必填）；其它 kind 一律不带该字段。
+   * `kind` 表类型（这条结论是什么），`severity` 表严重程度（有多要紧），二者不重叠：
+   * praise 谈「严重程度」没有意义，suggestion 的紧迫性已由 issue 表达。
+   */
+  severity?: "low" | "medium" | "high";
   /** 结论文本（自然语言）。 */
   text: string;
   /** 证据列表；**不得为空**——无证据的结论不得进入正式结论区。 */

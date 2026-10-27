@@ -371,8 +371,15 @@ function buildEvidenceIndex(sessions: SessionEvents[]): EvidenceIndex {
  * evidence 校验：seq 必须真实存在；该 seq 事件的 turn 必须等于声明的 turn（事件 turn 未知时无从证伪，只做 seq 校验）；
  * 声明了 callId 时，该 seq 处必须是同一个工具调用事件。不通过的 evidence 丢弃。
  */
-function normalizeFindings(raw: unknown[], index: EvidenceIndex, defaultSessionId: string): Finding[] {
+export function normalizeFindings(
+  raw: unknown[],
+  index: EvidenceIndex,
+  defaultSessionId: string,
+  warn?: (msg: string) => void,
+): Finding[] {
   const KINDS = new Set(["observation", "praise", "issue", "suggestion"]);
+  /** severity 白名单：只认三档，其余一律视为模型乱给。 */
+  const SEVERITIES = new Set(["low", "medium", "high"]);
   const out: Finding[] = [];
   for (const item of raw) {
     const rec = item as any;
@@ -398,7 +405,22 @@ function normalizeFindings(raw: unknown[], index: EvidenceIndex, defaultSessionI
     const limitations = Array.isArray(rec?.limitations)
       ? rec.limitations.filter((x: unknown) => typeof x === "string").slice(0, 5)
       : [];
-    out.push({ id: "f-" + String(out.length + 1).padStart(3, "0"), kind, text, evidence, limitations });
+    // severity 只对 issue 有意义：issue 缺/非法 → 降级为 medium（宽容：结论本身有效，
+    // 只是分级信息不完整，丢弃整条会白丢一条真问题）；非 issue 一律丢弃 severity（防止模型乱给）。
+    let severity: Finding["severity"];
+    if (kind === "issue") {
+      if (SEVERITIES.has(rec?.severity)) {
+        severity = rec.severity as Finding["severity"];
+      } else {
+        severity = "medium";
+        warn?.("issue 缺合法 severity（" + String(rec?.severity) + "），已降级为 medium：" + text.slice(0, 40));
+      }
+    } else if (SEVERITIES.has(rec?.severity)) {
+      warn?.("非 issue（" + kind + "）带了 severity=" + String(rec?.severity) + "，已丢弃：" + text.slice(0, 40));
+    }
+    const finding: Finding = { id: "f-" + String(out.length + 1).padStart(3, "0"), kind, text, evidence, limitations };
+    if (severity !== undefined) finding.severity = severity;
+    out.push(finding);
     if (out.length >= 30) break;
   }
   return out;
@@ -524,7 +546,10 @@ async function callAnalysis(
     const prompt = [
       "下面是某会话的统计摘要（每行 turn 含 end 事件 seq、usage、工具状态）。",
       "请输出 JSON 数组，每项形如：",
-      '{"kind":"observation|praise|issue|suggestion","text":"中文结论","evidence":[{"sessionId":"...","turn":1,"seq":42,"callId":null}],"limitations":["..."]}',
+      '{"kind":"observation|praise|issue|suggestion","severity":"high|medium|low（仅 kind=issue 时给）","text":"中文结论","evidence":[{"sessionId":"...","turn":1,"seq":42,"callId":null}],"limitations":["..."]}',
+      "severity 规则：kind=issue **必须**给 severity，取值只能是 high / medium / low；kind 为 observation / praise / suggestion 时**不要输出 severity**（会被丢弃）。",
+      "severity 判据：high = 导致任务失败、数据丢失、需人工介入、或明显浪费大量 token/时间（如单轮输入 200+ 倍于输出、整轮中断）；"
+        + "medium = 效率明显下降、有返工、需要额外轮次才完成；low = 轻微冗余、可读性/组织性问题、不影响结果。",
       "硬规则：每条必须带至少 1 条 evidence；evidence 的 sessionId/turn/seq 必须来自下方摘要中真实出现的数据；",
       "不要编造 seq，不要给无证据的结论（无证据结论将被丢弃）。最多 12 条。",
       "",
@@ -701,7 +726,7 @@ async function runAnalysisInner(
       const rawItems = extracted.items;
       if (rawItems !== null) {
         const index = buildEvidenceIndex([root, ...children]);
-        report.findings = normalizeFindings(rawItems, index, root.sessionId);
+        report.findings = normalizeFindings(rawItems, index, root.sessionId, (msg) => ctx.logger?.warn?.("[cohub review] " + msg));
         const dropped = rawItems.length - report.findings.length;
         // 输出被截断时即使解析成功也不算 completed：结论不完整，须人工复核
         if (extracted.truncated) {

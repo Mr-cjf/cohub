@@ -56,11 +56,12 @@ function makeReport(over: any = {}) {
 }
 
 /** 一条带证据的 finding。 */
-function verifiedFinding(id: string, kind: string, text: string, seq = 10) {
+function verifiedFinding(id: string, kind: string, text: string, seq = 10, extra: any = {}) {
   return {
     id, kind, text,
     evidence: [{ sessionId: "sess-root", turn: 1, seq, callId: null }],
     limitations: [],
+    ...extra,
   };
 }
 
@@ -201,6 +202,54 @@ function verifiedFinding(id: string, kind: string, text: string, seq = 10) {
   check("限制说明为末段", md.trimEnd().endsWith("结论不得外推到未读区间。"));
   const clean = renderMarkdown(makeReport());
   check("无缺口时不给人工复核提示", !clean.includes("需人工复核"));
+}
+
+// ---- 用例 8：issue 的 severity（排序 / 渲染 / 统计 / 兼容）----
+{
+  const md = renderMarkdown(makeReport({
+    findings: [
+      verifiedFinding("f1", "issue", "低危问题", 11, { severity: "low" }),
+      verifiedFinding("f2", "issue", "高危问题", 12, { severity: "high" }),
+      verifiedFinding("f3", "issue", "中危问题", 13, { severity: "medium" }),
+      verifiedFinding("f4", "issue", "另一个高危", 14, { severity: "high" }),
+    ],
+  }));
+  const iHigh1 = md.indexOf("高危问题");
+  const iHigh2 = md.indexOf("另一个高危");
+  const iMedium = md.indexOf("中危问题");
+  const iLow = md.indexOf("低危问题");
+  check("issue 按 severity 降序（high 先）", iHigh1 >= 0 && iHigh1 < iMedium && iMedium < iLow);
+  check("同 severity 保持原顺序（稳定排序）", iHigh1 < iHigh2);
+  check("issue 标题行含等级", md.includes("- **issue · high** — 高危问题"));
+  check("issue 标题行 medium", md.includes("- **issue · medium** — 中危问题"));
+  check("issue 标题行 low", md.includes("- **issue · low** — 低危问题"));
+  check("问题分布统计行", md.includes("- 问题分布：high 2 / medium 1 / low 1"));
+  // 无 issue → 无统计行
+  const noIssue = renderMarkdown(makeReport({
+    findings: [
+      verifiedFinding("f1", "praise", "表扬一", 11),
+      verifiedFinding("f2", "observation", "观察一", 12),
+    ],
+  }));
+  check("无 issue → 不显示问题分布", !noIssue.includes("问题分布"));
+  // non-issue 即使带了 severity 也不显示等级（防御旧数据/脏数据）
+  const dirty = renderMarkdown(makeReport({
+    findings: [
+      verifiedFinding("f1", "praise", "脏表扬", 11, { severity: "high" }),
+      verifiedFinding("f2", "observation", "脏观察", 12, { severity: "low" }),
+    ],
+  }));
+  check("non-issue 不显示等级", !dirty.includes("issue · ") && !dirty.includes("praise · "));
+  check("non-issue 不计入问题分布", !dirty.includes("问题分布"));
+  // 向后兼容：旧报告 JSON 完全没有 severity 字段 → 不崩、不显示统计
+  const legacy = renderMarkdown(makeReport({
+    findings: [
+      { id: "f1", kind: "issue", text: "旧数据问题", evidence: [{ sessionId: "sess-root", turn: 1, seq: 11, callId: null }], limitations: [] },
+    ],
+  }));
+  check("旧数据（无 severity）不崩", legacy.includes("旧数据问题"));
+  check("旧数据不显示统计行", !legacy.includes("问题分布"));
+  check("旧数据不渲染等级后缀", !legacy.includes("issue · "));
 }
 
 console.log(`\n${pass} PASS / ${fail} FAIL`);
