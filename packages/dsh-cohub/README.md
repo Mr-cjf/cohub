@@ -1,6 +1,6 @@
 # dsh-cohub
 
-> 本文对应 **v0.8.2**；完整变更历史见 [CHANGELOG.md](./CHANGELOG.md)。
+> 本文对应 **v0.9.0**；完整变更历史见 [CHANGELOG.md](./CHANGELOG.md)。
 
 DeepSeek Harness 版（对照 [OpenCode 版](../oh-my-opencode-cohub/)）：中文智能体编排插件。
 把「纯调度模式 + 13 个技能（12 个代理编排体系 + co-cordis 组合创作）+ 多模型共识 + 运行期调度韧性」移植到 DSH 原生能力之上。
@@ -84,7 +84,7 @@ cp presets/co-orchestrator/* ~/.dsh/.agent-presets/co-orchestrator/
 
 在 GUI 的 agent preset 选择器中切换。注意：**DSH 0.2.1 起支持 per-child `agentPreset`**（`SubagentStartRequest.agentPreset` 为一等字段，子代理经 `presets.mount()` 独立组装），子代理不再继承父代理的 preset 组合与工具表——cohub 已用两个独立精简 preset（`cohub-subagent-readonly` / `cohub-subagent-write`）对子代理做**硬隔离**，故「绝不亲自操作文件」「只读代理不写文件」由工具面物理保证，不再只靠提示词。`toolFilter` 仍保留作为补充收窄手段（但它对子代理 own 层挂载的工具无效）。主代理侧「绝不亲自操作文件」继续由 co-orchestrator 技能在提示词层约束（与 OpenCode 原版一致）。
 
-完整变更历史（含 v0.3.0–v0.8.1 全部条目）见 [CHANGELOG.md](./CHANGELOG.md)。
+完整变更历史（含 v0.3.0–v0.8.2 全部条目）见 [CHANGELOG.md](./CHANGELOG.md)。
 
 > 迁移提示：若你曾手动改造过 ~/.dsh/.agent-presets/cohub-standard/，需自行删除该目录。
 
@@ -325,6 +325,14 @@ npm run audit -- <sessionDir> [--rules <json>] [--rules-file <path>] [--json <ou
 ```
 
 输出工具调用/结果/错误、错误类别、通用"重复盲试"、委派树、墙钟超时与环境签名。完整规则与退出码见 `scripts/audit-session.mjs` 顶部注释。
+
+### 会话复盘（`/cohub-review`）
+
+在当前会话直接执行 `/cohub-review` 即可生成可追溯的复盘报告：命令零 turn、不经模型，输入框立即返回产物路径，分析在后台完成。
+
+- **两段式**：每个 `turn/end` 只做纯统计落盘（零 LLM 调用，不阻塞主响应）；只有你主动执行命令时才发起一次 LLM 分析。
+- **产物**：`<dshHome>/cohub/reviews/<cwdHash>/<sessionHash>/` 下有 JSON 与 Markdown 两份报告。
+- **可追溯**：每条结论都带 `(sessionId, turn, seq)` 锚点可回溯原始事件，无证据的结论会被隔离到「未验证」区，不会混进正式结论。
 
 ## 开发与维护
 

@@ -2,6 +2,29 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.9.0] - 2026-10-27
+
+### 新增
+
+- **`/cohub-review` 会话复盘命令**：在任意会话执行即可生成可追溯的复盘报告，命令经宿主 commands 通道执行、零 turn 不经模型，输入框立即返回产物路径、分析在后台完成。采用「A2 静默采集 + A1 手动分析」两段式：每个 `turn/end` 只做纯统计落盘（零 LLM 调用，不阻塞主响应），用户主动执行命令时才发起一次 LLM 分析。对使用者的影响：报告落 `<dshHome>/cohub/reviews/<cwdHash>/<sessionHash>/` 下的 JSON 与 Markdown 双份，每条结论都带 `(sessionId, turn, seq)` 锚点可回溯原始事件，无证据的结论会被隔离到「未验证」区而不是混进正式结论。
+- **复盘模块 `review-command` / `review-collector` / `review-report` / `review-render` / `review-store` / `review-types`**：分别负责命令入口与 LLM 调用、事件采集、统计重放、Markdown 渲染、原子落盘、报告 DTO。
+- **`src/error-signature.mjs`（含 `.d.mts`）**：错误签名归一化的单一实现，`env-signatures` 与 `audit-session` 共用，消除两套不兼容算法（原 `<audit>` 侧文本优先 + 数字归一 + 240 截断，`env-signatures` 侧结构优先 + 无数字归一 + 120 截断）。对使用者的影响：`audit` 报告与运行期环境签名可用同一把尺子比对。
+- **`delegate` / `delegate_batch` 新增 `DelegateObserver` 埋点**：`onAttempt` 回调覆盖成功、失败、超时、中止四条出口，成功路径也保留实际重试次数（此前只在失败时记进 `err.cause.retries`，成功即丢）。对使用者的影响：不传 observer 时行为逐字节不变，属纯增量能力。
+
+### 变更
+
+- **`CACHE_VERSION` 1 → 2**：因错误签名算法统一，旧缓存签名与新算法不匹配，整体判废后按现有门槛重新学习。对使用者的影响：升级后首次委派会回落到环境契约探针文本（行为不劣化，仅多一次探测），`confirmCount` 达标后自动以 v2 写回。
+
+### 修复
+
+- **`/cohub-review` 命令返回值补齐 `kind` 字段**：此前 handler 返回 `{ text }` 而契约要求 `{ kind, text }`，导致执行时始终报 `gateway/internal: command "cohub-review" handler must return a CommandResult`，用户看不到任何提示。
+- **复盘 LLM 路由解析**：改为优先读 `agent.options` / `session.requestHeader()`，解决命令经局部注入（`ctx.inject(['commands','sessionQuery'])`）挂载后 `ctx.llm` 不可用、`provider`/`model` 落空的问题。
+- **LLM prepared call 配置比对失败**：`prepareCall` 会回填模型默认 `reasoningEffort`，而 `stream()` 按逐字段严格相等校验，导致 `prepared LLM call config changed before adapter dispatch`。改为 `stream()` 时展开 `prepared.config` 再叠加调用参数。对使用者的影响：分析阶段不再必然失败。
+- **分析失败原因写入报告**：`analysis` 新增 `error` 字段并在 Markdown「分析状态」与「限制说明」两处渲染，此前失败只 `logger.warn`（实测日志中检索不到），用户无法得知为何没有结论。
+- **`findings` 为空时的措辞矛盾**：此前一边写「没有带证据的结论」一边写「所有结论均已带锚点」，现按分析状态分支区分。
+- **删除 `scripts/audit-session.mjs` 的 `blindPatterns` 死代码**：`matchesBlindPatterns` 全文件零调用点，规则字段解析却仍在，属「配置了却不生效」。删除 5 处共 9 行，向后兼容天然成立（`parseRules` 是白名单式合并，残留字段被静默忽略）。
+- **补回 `orchestrator` / `planner` brief 丢失的专责与并行判据**：`orchestrator` brief 缺 `co-designer` 专责提示、`planner` brief 缺「不按文件数拆」并行判据，属 brief 精简时的内容退化。
+
 ## [0.8.2] - 2026-10-27
 
 ### 性能
