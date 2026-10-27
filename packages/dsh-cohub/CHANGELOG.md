@@ -2,6 +2,20 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.10.0] - 2026-10-27
+
+### 新增
+
+- **turn-stopping 收尾闸门（`src/todo-gate.ts`）**：监听官方 `agent/turn-stopping` 事件（`@mode serial` 且被 await），在「本可以关闭」的轮次边界前读 `sessionProjections` 的 `todo` 投影，若仍有 `in_progress` 项，就用 `agent.steer()` 投递一条动作指令，让状态机重读 inbox 再走一步，逼模型把状态回写，而不是留下面板与实际不符的 `in_progress`。文案给出三个明确出口（已完成→`completed`／确需继续→保持并立刻做完／等外部条件→降级 `pending` 并写明在等什么）。对使用者的影响：委派链跑完后，编排者的 `todo` 面板不再可能停在「进行中」——turn 关不掉，除非每项都有交代。
+- **闸门的三道防噪硬约束**：① 子会话隔离（`session.header.parentSession` 非空直接 return），否则 `delegate` / `delegate_batch` 场景下每个子代理 turn 关闭都被催，会成倍放大成噪音风暴；② 每 session 硬上限 2 次（`WeakMap` 计数，对齐 `todo-nudge.ts` 的口径）；③ `in_progress` 内容指纹去重（`pickInProgress` + `fingerprintOf` 排序快照），指纹不变就不催，同一 turn 内重复 emit 与同状态反复关闭都被吸收。
+- **闸门全程 fail-soft + 可撤销**：`steer` 前先扣额度（抛错也已记账，不会无限重试）、同步函数不 await 网络/LLM、不看返回值、整体 `try/catch` 吞错；注册包在 `ctx.effect(() => registerTodoGate(ctx))` 内，返回的 `off` 自身也吞错，插件卸载时自动摘监听。另有 kill switch `COHUB_TODO_GATE=0` 可整体禁用。
+- **单测 `test/todo-gate.ts`（270 行）与 `test/todo-nudge.ts`（173 行）**：独立运行不连真宿主，覆盖纯函数契约、指纹去重、无 `in_progress` 时不催、内容变化后的第二次触发与上限截断、子会话隔离、`steer` 抛错时额度已扣、kill switch 生效与恢复。
+
+### 说明
+
+- 承接 0.9.2 的 `todo` 闭环：0.9.2 已提供「编排流程写入 `todo` 状态维护纪律」（`skills/orchestrator.md`，派发前置 `in_progress`、验收通过立即 `completed`、收尾对账）与「委派返回后自动注入 `todo` 回写提醒」（`src/todo-nudge.ts`），本版补上最后一环——turn 关闭前若仍漏写，由闸门强制回写。
+- 本版为纯增量：不新增配置项，不改既有默认行为；`COHUB_TODO_GATE=0` 即可退回 0.9.2 的观感。
+
 ## [0.9.2] - 2026-10-27
 
 ### 修复
