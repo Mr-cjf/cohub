@@ -50,21 +50,22 @@ npm 侧 Trusted Publisher 配置中的 workflow filename 参数只填 `publish.y
 权威流程见 `packages/oh-my-opencode-cohub/.opencode/rules/发版规范.md`（`AGENTS.md` 引为权威）；本节是面向本仓库两个 npm 包的落地摘要，**冲突时以发版规范为准**。
 
 1. **更新 `CHANGELOG.md`（发版前置，不可跳过）** — 在对应包目录下按 Keep a Changelog 格式新增版本条目，区分「新增 / 修复 / 变更 / 移除」，用独立 `docs:` commit 提交。`packages/oh-my-opencode-cohub/CHANGELOG.md` 一直存在；`packages/dsh-cohub/CHANGELOG.md` 是 **0.6.0 才建立的**，此前发版没写过，后续必须先在它上面补条目再动版本号。
-2. **提交所有源码改动** — `feat:` / `fix:` 各自独立 commit，不要和版本号混在一起。
-3. **确认版本号未被占用** — 注册表侧 `npm view <包名> versions --json`；git 侧 `git tag -l "<前缀>X.Y.Z"` 与 `git ls-remote --tags origin "refs/tags/<前缀>X.Y.Z"`，**两者都必须为空**（其他分支可能已发布过该号）。已被占用就改用更高版本号，**严禁删除、移动或覆盖已有 tag**。
-4. **手改版本号（不要用 `npm version`）** — 直接编辑以下两处，保持一致：
+2. **更新 `README.md`（同为前置）** — 包内 README 首屏「本文对应 vX.Y.Z」改为目标版本；受本次变更影响的说明同步修正。npm 页面 README 只在发布新版本时更新，漏改后只能靠下一个版本补发。
+3. **提交所有源码改动** — `feat:` / `fix:` 各自独立 commit，不要和版本号混在一起。
+4. **确认版本号未被占用** — 注册表侧 `npm view <包名> versions --json`；git 侧 `git tag -l "<前缀>X.Y.Z"` 与 `git ls-remote --tags origin "refs/tags/<前缀>X.Y.Z"`，**两者都必须为空**（其他分支可能已发布过该号）。已被占用就改用更高版本号，**严禁删除、移动或覆盖已有 tag**。
+5. **手改版本号（不要用 `npm version`）** — 直接编辑以下两处，保持一致：
    - `packages/<包名>/package.json` 的 `version`
    - `packages/<包名>/package-lock.json` 的 **顶层 `version`** 与 **`packages[""].version`**
 
    然后独立提交：`git commit -m "chore: 版本号 X.Y.Z"`。
-5. **合并到 main 并核实 SHA** — `git fetch origin` + `git rev-parse origin/main`，确认 main 与 origin/main 一致。
-6. **打 annotated tag 并推送** — 对已核实的 main SHA 打标：
+6. **合并到 main 并核实 SHA** — `git fetch origin` + `git rev-parse origin/main`，确认 main 与 origin/main 一致。
+7. **打 annotated tag 并推送** — 对已核实的 main SHA 打标：
    ```bash
    git tag -a "dsh-vX.Y.Z" -m "release X.Y.Z" <main-SHA>      # dsh-cohub
    git tag -a "opencode-vX.Y.Z" -m "release X.Y.Z" <main-SHA> # oh-my-opencode-cohub
    git push --follow-tags
    ```
-7. **CI 自动构建 + 发布** — 根 workflow 以 OIDC 身份 `npm publish --provenance`，可在 GitHub Actions 页面观察进度。**不要在本地运行 `npm publish`**。
+8. **CI 自动构建 + 发布** — 根 workflow 以 OIDC 身份 `npm publish --provenance`，可在 GitHub Actions 页面观察进度。**不要在本地运行 `npm publish`**。
 
 > ⚠️ **为什么禁止 `npm version`**：它会自己改版本号、自己 commit、自己打 **lightweight** tag，并触发 `preversion` / `version` / `postversion` lifecycle，与我们「docs/chore 分提交 + annotated tag 带 message + tag 打在已核实的 main SHA 上」的手控流程直接冲突。版本号一律手改。
 
@@ -171,7 +172,7 @@ npm 侧的 workflow filename 参数填 `publish.yml`（不含 `.github/workflows
 
 这是 npm API 层面的限制——配 TP 时 npm 会验证包是否存在。因此**仅当首次为该包预配 Trusted Publisher 时**，才需要先发布一个占位的空包（如 `0.0.1`）让它"存在"，再配 TP。
 
-> ⚠️ **这是一次性的引导动作，不属于日常发版流程**——与上一节「日常发版流程」第 7 步「不要在本地运行 `npm publish`」**并不矛盾**，两者管的场景不同：
+> ⚠️ **这是一次性的引导动作，不属于日常发版流程**——与上一节「日常发版流程」第 8 步「不要在本地运行 `npm publish`」**并不矛盾**，两者管的场景不同：
 >
 > | 场景 | 频率 | 由谁发布 |
 > |------|------|----------|

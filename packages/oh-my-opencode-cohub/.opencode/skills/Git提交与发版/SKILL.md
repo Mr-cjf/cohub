@@ -46,10 +46,11 @@ context: fork
 | 9 | B | **询问用户是否继续发版** | 必须询问 |
 | 10 | B | 前置检查（repository.url、工作区干净、**版本号未被占用**） | 版本号占用检查 |
 | 11 | B | 分析变更 → 推荐 SemVer 级别（patch/minor/major） | 确认版本号 |
-| 12 | B | 更新 CHANGELOG.md（按 Keep a Changelog 格式） | 新增/修复/变更/移除分类 |
-| 13 | B | 提交 CHANGELOG（`docs: 更新 CHANGELOG vX.Y.Z`） | 先 docs 再 chore |
-| 14 | B | `npm version patch/minor/major`（自动更新版本号、commit、tag） | |
-| 15 | B | 确保 SSH remote → `git push --follow-tags` + `bunx oh-my-opencode-cohub install` 验证 | |
+| 12 | 文档 | 更新各包 README 首屏版本锚点与受影响正文 | 只改 CHANGELOG 忘了 README 的版本锚点 |
+| 13 | B | 更新 CHANGELOG.md（按 Keep a Changelog 格式） | 新增/修复/变更/移除分类 |
+| 14 | B | 提交 CHANGELOG（`docs: 更新 CHANGELOG vX.Y.Z`） | 先 docs 再 chore |
+| 15 | B | `npm version patch/minor/major`（自动更新版本号、commit、tag） | |
+| 16 | B | 确保 SSH remote → `git push --follow-tags` + `bunx oh-my-opencode-cohub install` 验证 | |
 
 ---
 

@@ -119,10 +119,11 @@ bun test
 ### 发版
 
 权威流程见 `.opencode/rules/发版规范.md`。关键步骤：
-1. 更新 `CHANGELOG.md`（独立 docs commit）
-2. **准备版本不提前打 tag**：直接编辑 `package.json` 与 `package-lock.json` 的 `version` 并独立 chore commit；**不使用 `npm version`**（避免其自动 commit / 打 tag / 触发 lifecycle）
-3. 合并到 main 后，对已核实的 main SHA 打 **annotated** 标签 `opencode-vX.Y.Z`（`git tag -a "opencode-vX.Y.Z" -m "release X.Y.Z" <main-SHA>`），确保使用 SSH remote 后 `git push --follow-tags`
-4. 发布由根仓库 Publish to npm workflow（OIDC 身份）执行，**不在本地运行 `npm publish`**
+1. 更新各包 `README.md`（首屏版本锚点 + 受影响正文），详见 `.opencode/rules/发版规范.md`
+2. 更新 `CHANGELOG.md`（独立 docs commit）
+3. **准备版本不提前打 tag**：直接编辑 `package.json` 与 `package-lock.json` 的 `version` 并独立 chore commit；**不使用 `npm version`**（避免其自动 commit / 打 tag / 触发 lifecycle）
+4. 合并到 main 后，对已核实的 main SHA 打 **annotated** 标签 `opencode-vX.Y.Z`（`git tag -a "opencode-vX.Y.Z" -m "release X.Y.Z" <main-SHA>`），确保使用 SSH remote 后 `git push --follow-tags`
+5. 发布由根仓库 Publish to npm workflow（OIDC 身份）执行，**不在本地运行 `npm publish`**
 
 ## 常见陷阱
 
@@ -132,7 +133,7 @@ bun test
 | 添加代理忘记更新 `scripts/generate-prompts.ts` | `.md` 不会生成 `.ts`，构建报错 | 步骤 2 不可跳过 |
 | 添加代理只改 1 处 `src/index.ts` 位置 | 代理不生效或 `loadFileOverrides` 漏掉 | `src/index.ts` 中需改 **4 处** |
 | 系统未安装 bun | `npm run build` 失败 | `npm install -g bun` 或使用系统的 bun |
-| 忘记 `git push --follow-tags` | tag 未推送，CI 不触发 npm 发布 | 发版步骤 3 不可遗漏 |
+| 忘记 `git push --follow-tags` | tag 未推送，CI 不触发 npm 发布 | 发版步骤 4 不可遗漏 |
 | 在 `master`/`test`/`dev` 分支执行 git 提交技能 | 违反分支保护约定 | 仅在功能分支使用提交和发版技能 |
 
 ## 外部依赖与配置
