@@ -247,60 +247,158 @@ function normalizeFindings(raw: unknown[], index: EvidenceIndex, defaultSessionI
   return out;
 }
 
-/** 用当前 agent 的 provider/model（缺失则回退到第一个可用 provider 的首个模型） */
-async function resolveRoute(ctx: any, agent: any): Promise<{ provider: string; model: string } | null> {
-  const options = agent?.options ?? {};
-  if (typeof options.provider === "string" && typeof options.model === "string") {
+/** 非空字符串判定 */
+function nonEmpty(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0;
+}
+
+/**
+ * 从本次请求的 Agent 上直读真实 provider/model（优先级最高）。
+ * 两个来源：AgentOptions（loop 构造时注入）与 session.requestHeader().config（已落盘的请求配置，
+ * 见 dsh-agent-loop prepareRequest：route = { provider: options.provider ?? "", model: options.model ?? "" }）。
+ * 二者都是「这次请求实际使用的模型」，比 listProviders()[0] 靠谱得多。
+ */
+function routeFromAgent(agent: any, diag: string[]): { provider: string; model: string } | null {
+  const options = agent?.options;
+  diag.push("agent.options=" + (options ? "present" : "absent")
+    + (options ? "(provider=" + JSON.stringify(options.provider ?? null) + ",model=" + JSON.stringify(options.model ?? null) + ")" : ""));
+  if (nonEmpty(options?.provider) && nonEmpty(options?.model)) {
     return { provider: options.provider, model: options.model };
   }
   try {
-    const providers = await ctx.llm.listProviders();
-    const provider = Array.isArray(providers) ? providers.find((p: any) => typeof p?.id === "string") : undefined;
-    if (!provider) return null;
-    const models = await ctx.llm.listModels(provider.id);
-    const model = Array.isArray(models) ? models.find((m: any) => typeof m?.id === "string") : undefined;
-    return model ? { provider: provider.id, model: model.id } : null;
-  } catch {
-    return null;
+    const header = typeof agent?.session?.requestHeader === "function" ? agent.session.requestHeader() : null;
+    const config = header?.config;
+    diag.push("session.requestHeader().config=" + (config
+      ? "(provider=" + JSON.stringify(config.provider ?? null) + ",model=" + JSON.stringify(config.model ?? null) + ")"
+      : "absent"));
+    if (nonEmpty(config?.provider) && nonEmpty(config?.model)) {
+      return { provider: config.provider, model: config.model };
+    }
+  } catch (error) {
+    diag.push("session.requestHeader 抛错：" + String((error as any)?.message ?? error));
+  }
+  return null;
+}
+
+/**
+ * 惰性取 llm 服务：命令挂在局部注入（commands + sessionQuery）的 child ctx 上，ctx.llm 可能不在该层。
+ * 顺序：ctx.llm → agent.ctx.llm（Agent 自己的 scoped context，最可靠）→ ctx.get → ctx.root.get → ctx.parent.get。
+ */
+function llmOf(ctx: any, diag: string[], agent?: any): any {
+  const direct = ctx?.llm;
+  diag.push("ctx.llm=" + (direct ? "present" : "absent"));
+  if (direct) return direct;
+  const candidates: Array<[string, any]> = [
+    ["agent.ctx.llm", () => agent?.ctx?.llm],
+    ["agent.ctx.get('llm')", () => agent?.ctx?.get?.("llm")],
+    ["ctx.get('llm')", () => ctx?.get?.("llm")],
+    ["ctx.root.get('llm')", () => ctx?.root?.get?.("llm")],
+    ["ctx.parent.get('llm')", () => ctx?.parent?.get?.("llm")],
+  ];
+  for (const [label, resolve] of candidates) {
+    try {
+      const svc = resolve();
+      diag.push(label + "=" + (svc ? "present" : "absent"));
+      if (svc) return svc;
+    } catch (error) {
+      diag.push(label + " 抛错：" + String((error as any)?.message ?? error));
+    }
+  }
+  return null;
+}
+
+/**
+ * 解析本次分析用的 provider/model。
+ * 顺序：agent 真实路由 → ctx.llm.listProviders() 首个 provider 的首个模型。
+ * 失败时把诊断轨迹一并返回（用于写进报告，而不是只 warn 到日志）。
+ */
+async function resolveRoute(
+  ctx: any,
+  agent: any,
+): Promise<{ route: { provider: string; model: string }; source: string } | { route: null; reason: string }> {
+  const diag: string[] = [];
+  const fromAgent = routeFromAgent(agent, diag);
+  if (fromAgent) return { route: fromAgent, source: "agent" };
+
+  const llm = llmOf(ctx, diag, agent);
+  if (!llm) return { route: null, reason: "llm 服务不可用（" + diag.join("；") + "）" };
+  try {
+    const providers = await llm.listProviders();
+    diag.push("listProviders=" + (Array.isArray(providers) ? String(providers.length) + " 个" : "非数组"));
+    const provider = Array.isArray(providers) ? providers.find((p: any) => nonEmpty(p?.id)) : undefined;
+    if (!provider) return { route: null, reason: "agent 无 provider/model，且 listProviders 为空（" + diag.join("；") + "）" };
+    const models = await llm.listModels(provider.id);
+    diag.push("listModels(" + provider.id + ")=" + (Array.isArray(models) ? String(models.length) + " 个" : "非数组"));
+    const model = Array.isArray(models) ? models.find((m: any) => nonEmpty(m?.id)) : undefined;
+    if (!model) return { route: null, reason: "provider " + provider.id + " 无可用模型（" + diag.join("；") + "）" };
+    return { route: { provider: provider.id, model: model.id }, source: "llm.listProviders" };
+  } catch (error) {
+    return {
+      route: null,
+      reason: "listProviders/listModels 抛错：" + String((error as any)?.message ?? error) + "（" + diag.join("；") + "）",
+    };
   }
 }
 
-/** 单次 LLM 分析调用（无重试、无工具循环） */
+/** 单次 LLM 分析调用（无重试、无工具循环）；失败时带回可读原因，供写进报告 */
 async function callAnalysis(
   ctx: any,
   agent: any,
   digest: string,
   signal?: AbortSignal,
-): Promise<{ raw: string; provider: string; model: string } | null> {
-  const route = await resolveRoute(ctx, agent);
-  if (!route) return null;
-  const prepared = await ctx.llm.prepareCall(
-    { provider: route.provider, model: route.model, maxTokens: ANALYSIS_MAX_TOKENS },
-    signal,
-  );
-  const system = "你是会话复盘分析器。只输出 JSON 数组，不要解释、不要 Markdown 围栏。";
-  const prompt = [
-    "下面是某会话的统计摘要（每行 turn 含 end 事件 seq、usage、工具状态）。",
-    "请输出 JSON 数组，每项形如：",
-    '{"kind":"observation|praise|issue|suggestion","text":"中文结论","evidence":[{"sessionId":"...","turn":1,"seq":42,"callId":null}],"limitations":["..."]}',
-    "硬规则：每条必须带至少 1 条 evidence；evidence 的 sessionId/turn/seq 必须来自下方摘要中真实出现的数据；",
-    "不要编造 seq，不要给无证据的结论（无证据结论将被丢弃）。最多 12 条。",
-    "",
-    "摘要：",
-    digest,
-  ].join("\n");
-  let raw = "";
-  for await (const chunk of prepared.stream({
-    provider: route.provider,
-    model: route.model,
-    maxTokens: ANALYSIS_MAX_TOKENS,
-    system,
-    messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-    signal,
-  } as any)) {
-    if (chunk?.type === "text-delta" && typeof chunk.text === "string") raw += chunk.text;
+): Promise<
+  | { ok: true; raw: string; provider: string; model: string; source: string }
+  | { ok: false; reason: string; provider: string; model: string }
+> {
+  const resolved = await resolveRoute(ctx, agent);
+  if (resolved.route === null) return { ok: false, reason: resolved.reason, provider: "", model: "" };
+  const route = resolved.route;
+  const llm = llmOf(ctx, [], agent);
+  if (!llm) return { ok: false, reason: "llm 服务不可用，无法发起分析调用", provider: route.provider, model: route.model };
+  if (typeof llm.prepareCall !== "function") {
+    return { ok: false, reason: "llm 服务缺少 prepareCall 方法，无法发起分析调用", provider: route.provider, model: route.model };
   }
-  return { raw, provider: route.provider, model: route.model };
+  try {
+    const prepared = await llm.prepareCall(
+      { provider: route.provider, model: route.model, maxTokens: ANALYSIS_MAX_TOKENS },
+      signal,
+    );
+    const system = "你是会话复盘分析器。只输出 JSON 数组，不要解释、不要 Markdown 围栏。";
+    const prompt = [
+      "下面是某会话的统计摘要（每行 turn 含 end 事件 seq、usage、工具状态）。",
+      "请输出 JSON 数组，每项形如：",
+      '{"kind":"observation|praise|issue|suggestion","text":"中文结论","evidence":[{"sessionId":"...","turn":1,"seq":42,"callId":null}],"limitations":["..."]}',
+      "硬规则：每条必须带至少 1 条 evidence；evidence 的 sessionId/turn/seq 必须来自下方摘要中真实出现的数据；",
+      "不要编造 seq，不要给无证据的结论（无证据结论将被丢弃）。最多 12 条。",
+      "",
+      "摘要：",
+      digest,
+    ].join("\n");
+    let raw = "";
+    // dsh-llm 会在 prepareCall 阶段为若干字段（如 reasoningEffort）回填模型默认值，
+    // 而 prepared.stream() 会用 callConfigEquals 逐字段校验；因此必须把 prepared.config
+    // 整体展开回传，否则会出现「一侧有值一侧 undefined」的 INVALID_PREPARED_CALL。
+    const preparedConfig: Record<string, unknown> = (prepared as any)?.config ?? {};
+    for await (const chunk of prepared.stream({
+      ...preparedConfig,
+      provider: route.provider,
+      model: route.model,
+      maxTokens: ANALYSIS_MAX_TOKENS,
+      system,
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+      signal,
+    } as any)) {
+      if (chunk?.type === "text-delta" && typeof chunk.text === "string") raw += chunk.text;
+    }
+    return { ok: true, raw, provider: route.provider, model: route.model, source: resolved.source };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "LLM 调用失败（" + route.provider + "/" + route.model + "）：" + String((error as any)?.message ?? error),
+      provider: route.provider,
+      model: route.model,
+    };
+  }
 }
 
 /** 主分析流程：读会话 → buildReport → （可选）单次 LLM → 落盘 */
@@ -339,29 +437,37 @@ async function runAnalysis(
   report.analysis.invocations = 0;
   report.analysis.status = "failed";
 
+  // 失败原因必须进报告（不能只 warn 到日志）：analysis.error 落 JSON，并由 renderMarkdown 渲染进 MD。
+  const analysis = report.analysis as typeof report.analysis & { error?: string };
   if (withLlm) {
-    try {
-      const result = await callAnalysis(ctx, agent, digest, signal);
-      if (result) {
-        report.analysis.provider = result.provider;
-        report.analysis.model = result.model;
-        report.analysis.invocations = 1;
-        const rawItems = extractJsonArray(result.raw);
-        if (rawItems) {
-          const index = buildEvidenceIndex([root, ...children]);
-          report.findings = normalizeFindings(rawItems, index, root.sessionId);
-          report.analysis.status = "completed";
-        } else {
-          ctx.logger?.warn?.("[cohub review] LLM 输出无法解析为 JSON 数组，findings 留空");
+    const result = await callAnalysis(ctx, agent, digest, signal);
+    analysis.provider = result.provider;
+    analysis.model = result.model;
+    if (result.ok) {
+      analysis.invocations = 1;
+      const rawItems = extractJsonArray(result.raw);
+      if (rawItems) {
+        const index = buildEvidenceIndex([root, ...children]);
+        report.findings = normalizeFindings(rawItems, index, root.sessionId);
+        analysis.status = "completed";
+        const dropped = rawItems.length - report.findings.length;
+        if (dropped > 0) {
+          analysis.error = "模型返回 " + rawItems.length + " 条结论，" + dropped + " 条因证据无法校验被丢弃。";
         }
+      } else {
+        analysis.error = "模型输出无法解析为 JSON 数组，findings 留空。原始输出前 200 字："
+          + result.raw.slice(0, 200);
+        ctx.logger?.warn?.("[cohub review] " + analysis.error);
       }
-    } catch (error) {
-      ctx.logger?.warn?.("[cohub review] LLM 分析失败：" + String((error as any)?.message ?? error));
+    } else {
+      analysis.status = "failed";
+      analysis.error = result.reason;
+      ctx.logger?.warn?.("[cohub review] LLM 分析失败：" + result.reason);
     }
   } else {
-    report.analysis.status = "completed";
-    report.analysis.provider = "(skipped)";
-    report.analysis.model = "(skipped)";
+    analysis.status = "completed";
+    analysis.provider = "(skipped)";
+    analysis.model = "(skipped)";
   }
 
   const md = renderMarkdown(report, { excerptLimit: 120 });
@@ -391,14 +497,16 @@ const inFlight = new Set<string>();
 
 /** 注册 `/cohub-review` 命令（零 turn、不经过模型） */
 export function registerReviewCommand(ctx: any): void {
-  const handler = (inv: any): { text: string } => {
+  // 契约：handler 必须返回 CommandResult = { kind: 'success' | 'error', text }。
+  // 只返回 { text } 会被宿主 normalizeResult 判为非法（gateway/internal），因此每个分支都带 kind。
+  const handler = (inv: any): { kind: "success" | "error"; text: string } => {
     try {
       const sessionId = inv?.agent?.session?.id;
       if (typeof sessionId !== "string" || sessionId.length === 0) {
-        return { text: "无法确定当前会话 id，已跳过复盘。" };
+        return { kind: "error", text: "无法确定当前会话 id，已跳过复盘。" };
       }
       if (inFlight.has(sessionId)) {
-        return { text: "上一次分析仍在进行中，请稍候" };
+        return { kind: "error", text: "上一次分析仍在进行中，请稍候（会话 " + sessionId + "）。" };
       }
       const rawInput = typeof inv?.rawInput === "string" ? inv.rawInput : "";
       const withLlm = !/(^|\s)--no-llm(\s|$)/.test(rawInput);
@@ -418,10 +526,11 @@ export function registerReviewCommand(ctx: any): void {
 
       const dir = reviewStorePath(cwdHint, sessionId, "").replace(/[\\/]$/, "");
       return {
+        kind: "success",
         text: "正在生成报告…（" + (withLlm ? "含一次 LLM 分析" : "仅统计，跳过 LLM") + "）输出目录：" + dir,
       };
     } catch (error) {
-      return { text: "复盘命令启动失败：" + String((error as any)?.message ?? error) };
+      return { kind: "error", text: "复盘命令启动失败：" + String((error as any)?.message ?? error) };
     }
   };
 

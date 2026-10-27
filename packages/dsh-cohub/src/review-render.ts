@@ -103,6 +103,13 @@ function renderFinding(
   return out;
 }
 
+/** 分析状态的中文说明（用户读的报告里不能只出现一个英文单词 failed）。 */
+const STATUS_TITLE: Record<string, string> = {
+  completed: "completed（分析完成）",
+  interrupted: "interrupted（被取消，结论不完整）",
+  failed: "failed（分析失败，本轮没有模型结论，原因见下方「分析错误说明」）",
+};
+
 /** 主入口：ReviewReport（宽松入参）→ Markdown 字符串。 */
 export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
   const r = (report ?? {}) as Partial<ReviewReport>;
@@ -127,6 +134,17 @@ export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
   lines.push(`- 生成时间：${new Date().toISOString()}`);
   lines.push(`- 采集完整性：${complete ? "complete（所有目标会话已读至末尾）" : "不完整（存在缺口，结论需降级）"}`);
   lines.push(`- 分析输入是否被裁剪：${coverage.inputTruncated ? "是（结论不得外推到未读区间）" : "否"}`);
+  // 分析状态必须可见：LLM 失败时过去只 warn 到日志，用户在报告里毫无线索。
+  const analysis = (r.analysis ?? {}) as any;
+  const statusRaw = typeof analysis.status === "string" && analysis.status.length > 0 ? analysis.status : "";
+  const statusLabel = STATUS_TITLE[statusRaw] ?? text(analysis.status);
+  lines.push(`- 分析状态：${statusLabel}（provider/model：${text(analysis.provider)} / ${text(analysis.model)}，调用次数 ${num(analysis.invocations)}）`);
+  if (typeof analysis.error === "string" && analysis.error.length > 0) {
+    lines.push(`- 分析错误说明：${analysis.error}`);
+  }
+  if (statusRaw === "failed") {
+    lines.push("- 本轮**没有产生任何模型结论**：findings 为空是分析失败的结果，不代表本次会话没有值得复盘之处。");
+  }
   lines.push("");
 
   // ---- 2. 覆盖范围 ----
@@ -198,7 +216,8 @@ export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
   // ---- 5. 发现（按 kind 分组，固定顺序）----
   lines.push("## 发现", "");
   if (verified.length === 0) {
-    lines.push(`- 本报告没有带证据的结论（${DASH}）`, "");
+    // 措辞纪律：findings 为空时**不能**暗示「结论都带了锚点」——这里根本没有结论。
+    lines.push(`- 本报告没有带证据的结论（findings 为空，${DASH}）；原因见「分析状态」与「限制说明」。`, "");
   } else {
     for (const kind of KIND_ORDER) {
       const group = verified.filter(f => f?.kind === kind);
@@ -232,6 +251,10 @@ export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
 
   // ---- 7. 限制说明 ----
   lines.push("## 限制说明", "");
+  const noConclusion = verified.length === 0;
+  const analysisError = typeof (r.analysis as any)?.error === "string" && (r.analysis as any).error.length > 0
+    ? String((r.analysis as any).error)
+    : null;
   const needsReview = gaps.length > 0 || unverified.length > 0 || !complete;
   if (needsReview) {
     lines.push("本报告存在未覆盖部分，结论需人工复核。", "");
@@ -239,11 +262,20 @@ export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
     if (unverified.length > 0) {
       lines.push(`- ${unverified.length} 条结论缺少证据，已移入「未验证」节，未计入正式分组。`);
     }
+    if (noConclusion) {
+      lines.push("- 本次复盘**没有产出任何带锚点的结论**（findings 为空），不存在可复核的结论条目。");
+    }
     if (!complete) lines.push("- coverage.complete 为 false，统计数字不完整。");
     if (coverage.inputTruncated) lines.push("- 分析输入被裁剪，结论不得外推到未读区间。");
+    if (analysisError) lines.push(`- 分析失败/降级原因：${analysisError}`);
     lines.push("");
+  } else if (noConclusion) {
+    // 无缺口但没有任何带证据的结论：不能说「所有结论均已带锚点」（这里没有结论）。
+    lines.push("本报告覆盖范围内无已知缺口，但本次没有产出任何带锚点的结论（findings 为空）。", "");
+    if (analysisError) lines.push(`- 分析说明：${analysisError}`, "");
   } else {
     lines.push("本报告覆盖范围内无已知缺口，所有结论均已带锚点。", "");
+    if (analysisError) lines.push(`- 分析说明：${analysisError}`, "");
   }
 
   return lines.join("\n");

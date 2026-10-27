@@ -54,6 +54,11 @@ export interface ReviewReport {
     invocations: number;
     /** completed=正常完成；interrupted=被取消；failed=失败（此时 findings 可能不完整）。 */
     status: "completed" | "interrupted" | "failed";
+    /**
+     * 失败/降级原因（可读中文）。status='failed' 时必填——
+     * 过去只 logger.warn，用户在报告里毫无线索（B-2）。仅作说明，不影响结论证据纪律。
+     */
+    error?: string;
   };
 }
 
