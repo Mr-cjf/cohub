@@ -101,10 +101,11 @@ jobs:
       - name: 校验 README 版本锚点
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          if ! head -5 README.md | grep -qE "v${VERSION}\b"; then
-            echo "::error::README.md 首屏缺少版本锚点 v${VERSION}，请先更新文档再发版（见发版规范）"
+          ANCHOR=$(head -20 README.md | grep -E "本文对应.*v${VERSION}\b" | head -1)
+          if [ -z "$ANCHOR" ]; then
+            echo "::error::README.md 前 20 行未找到版本锚点「本文对应 v${VERSION}」，请先更新文档再发版（见发版规范）"
             exit 1
           fi
-          echo "README 版本锚点校验通过：v${VERSION}"
+          echo "README 版本锚点校验通过：$ANCHOR"
       - name: 发布到 npm
         run: npm publish --provenance --access public
