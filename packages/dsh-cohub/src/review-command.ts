@@ -32,8 +32,11 @@ const ANALYSIS_MAX_TOKENS = 5000;
 const RAW_OUTPUT_KEEP_CHARS = 2000;
 /** 子会话读取上限（防御异常血缘树把内存拖爆） */
 const MAX_CHILD_SESSIONS = 50;
-/** filterSessions 逐层 BFS 的最大调用次数（防御血缘树爆炸；每层一次查询） */
-const MAX_CHILD_FILTER_CALLS = 20;
+/**
+ * 血缘遍历的深度硬上限（**不是**取样限制，只防异常结构栈溢出）。
+ * 真实的 traceSession 血缘树深度是个位数（delegate 嵌套），此上限不会碰到。
+ */
+const MAX_LINEAGE_WALK_DEPTH = 64;
 /** 单次复盘的整体超时（读会话 + LLM 全链路；阻断「无界挂死」） */
 const ANALYSIS_TIMEOUT_MS = 60_000;
 
@@ -42,13 +45,15 @@ const MAX_ROOT_ASCEND = 32;
 
 /** 宽松取会话 id（不同版本 SessionRecord 字段名不同） */
 function idOf(rec: any): string | undefined {
-  const v = rec?.session?.id ?? rec?.id ?? rec?.sessionId;
+  const v = rec?.session?.id ?? rec?.id ?? rec?.sessionId
+    ?? rec?.header?.id ?? rec?.session?.header?.id;
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
-/** 宽松取父会话 id */
+/** 宽松取父会话 id（覆盖 session.parentSession / 顶层 parentSession / header.parentSession 三种落盘形状） */
 function parentOf(rec: any): string | undefined {
-  const v = rec?.session?.parentSession ?? rec?.parentSession ?? rec?.parentSessionId;
+  const v = rec?.session?.parentSession ?? rec?.parentSession ?? rec?.parentSessionId
+    ?? rec?.header?.parentSession ?? rec?.session?.header?.parentSession;
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
@@ -72,90 +77,206 @@ function toSessionEvents(read: any, fallbackId: string): SessionEvents {
   };
 }
 
-/** 从血缘树里宽松收集所有会话 id（任意深度的 id/sessionId 键） */
-function collectLineageIds(node: any, out: Set<string>, depth = 0): void {
-  if (node === null || typeof node !== "object" || depth > 8) return;
+/** 血缘节点：只保留取样需要的两个叶子字段（id + 创建时间 epoch ms） */
+export interface LineageNode {
+  id: string;
+  createdAt: number;
+}
+
+/** 子会话发现结果：取样后的 id + 真实总数 + 是否截断 + 走的哪条路径 */
+export interface ChildDiscovery {
+  /** 取样后的子会话 id，按 createdAt 倒序 */
+  ids: string[];
+  /** 子会话真实总数（全量血缘计数，精确值） */
+  total: number;
+  /** 是否因上限而取样截断 */
+  truncated: boolean;
+  /** 走的是哪条路径，便于诊断 */
+  source: "trace" | "list";
+}
+
+/** 宽松取创建时间（epoch ms）；取不到给 0，排序时沉底（不编造时间） */
+function createdAtOf(rec: any): number {
+  const v = rec?.header?.createdAt ?? rec?.session?.header?.createdAt ?? rec?.createdAt;
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+/**
+ * 会话 id 归一化：剥掉 `session-` 前缀。
+ *
+ * 【为什么需要】真实磁盘数据里 id 形态是**混合**的（实测 ~/.dsh/sessions 下多个项目）：
+ *   · 根会话：`session-57e50012-fd1d-49f0-9b92-72b12341eb3a`（带前缀），其 `parentSession` 为 null；
+ *   · 子会话：`774de5d2-5e3b-4eaa-86ce-50927021bacd`（裸 uuid），其 `parentSession` 指回根的**带前缀**形态。
+ * 两侧按原值比较会漏配：`delete(rootId)` 删不掉、`parentSession === rootId` 匹配不到（total 直接变 0 且无标记）。
+ * 归一化只用于**比较**，返回给上层的 id 一律保持原貌（取样与 readSession 用原值）。
+ */
+export function normalizeSessionId(id: unknown): string {
+  const s = typeof id === "string" ? id : "";
+  return s.startsWith("session-") ? s.slice("session-".length) : s;
+}
+
+/**
+ * 从血缘树里收集所有会话 `{id, createdAt}`（任意深度）。
+ *
+ * 两处有意为之：
+ *   · **不做数量/深度截断**（旧的 `depth > 8` 会静默丢深层节点，使 total 偏小且无标记）；
+ *     `MAX_LINEAGE_WALK_DEPTH` 仅防异常结构导致栈溢出，真实血缘树深度个位数，碰不到。
+ *   · 同一 id 只收一次（按 id 去重），撞值时就地保留先见的 createdAt。
+ */
+function collectLineageNodes(node: any, out: Map<string, LineageNode>, depth = 0): void {
+  if (node === null || typeof node !== "object" || depth > MAX_LINEAGE_WALK_DEPTH) return;
   if (Array.isArray(node)) {
-    for (const item of node) collectLineageIds(item, out, depth + 1);
+    for (const item of node) collectLineageNodes(item, out, depth + 1);
     return;
   }
   const direct = idOf(node);
-  if (direct) out.add(direct);
+  if (direct && !out.has(direct)) out.set(direct, { id: direct, createdAt: createdAtOf(node) });
   for (const value of Object.values(node)) {
-    if (value !== null && typeof value === "object") collectLineageIds(value, out, depth + 1);
+    if (value !== null && typeof value === "object") collectLineageNodes(value, out, depth + 1);
   }
 }
 
-/** 找出根会话的所有可达子会话 id（优先 traceSession，退化到 listSessions 的 parent 链） */
-async function findChildIds(ctx: any, rootId: string, signal?: AbortSignal): Promise<string[]> {
-  const ids = new Set<string>();
+/**
+ * 统一取样：createdAt 降序，同值用 id.localeCompare 兜底（同毫秒撞值在 fork 场景真实存在），
+ * 取前 limit 个。传给 sort 的比较函数是全序的，结果确定可复现。
+ */
+export function sampleNewest(nodes: Iterable<LineageNode>, limit: number): string[] {
+  const sorted = [...nodes].sort((a, b) => (b.createdAt - a.createdAt) || a.id.localeCompare(b.id));
+  return sorted.slice(0, Math.max(0, limit)).map(n => n.id);
+}
+
+/** 把节点表（已去根）打包成 ChildDiscovery */
+function toDiscovery(nodes: Map<string, LineageNode>, source: "trace" | "list"): ChildDiscovery {
+  const total = nodes.size;
+  const ids = sampleNewest(nodes.values(), MAX_CHILD_SESSIONS);
+  // truncated 只表示「**取样**截断」（total > 取样数），与 coverage.sessionsTruncated
+  // （「整体是否完整」= sessionsAnalyzed < lineageTotal，含读失败）是**两个不同概念**，不要混用。
+  return { ids, total, truncated: total > ids.length, source };
+}
+
+/**
+ * 把发现结果写进 coverage 的四个新字段（只算子会话，不含根）。
+ *
+ * `childReadFailed` = 取样后读取失败的子会话数，必须从 `ids.length` 里减掉：
+ * `sessionsAnalyzed` 的语义是「**成功读取并参与统计**的子会话数」，不是「尝试数」。
+ *
+ * 【P1-2 契约】`sessionsTruncated` 用 `lineageTotal > sessionsAnalyzed` 派生，**不是** `discovery.truncated`。
+ * 反例：total=50 / ids=50（无取样截断）但 3 个读失败 → sessionsAnalyzed=47 → 集合整体不完整，
+ * 必须 sessionsTruncated=true，否则渲染层会声称「全部 47 个子会话」（与 review-types.ts:65 矛盾）。
+ *
+ * 【P2-1】**不往 gaps 里 push 截断说明**：截断信息已有 `samplingNote` + `sessionsTruncated` 两个专用字段，
+ * 由渲染层负责展示（review-render.ts 读 sessionsTruncated，不读 gaps）。gaps 的非空 ⟺ 有采集缺口不变式必须保住。
+ * 读失败本身仍由调用方 push 进 gaps（那才是真缺口）。
+ *
+ * **不动 complete**（complete 仍只表示「已读会话事件流自洽」，见 review-types.ts:44-50）。
+ */
+export function applyDiscoveryCoverage(
+  coverage: {
+    gaps: string[];
+    lineageTotal?: number;
+    sessionsAnalyzed?: number;
+    sessionsTruncated?: boolean;
+    samplingNote?: string;
+  },
+  discovery: ChildDiscovery,
+  childReadFailed = 0,
+): void {
+  const failed = Math.max(0, childReadFailed);
+  const sampled = discovery.ids.length;
+  const sessionsAnalyzed = Math.max(0, sampled - failed);
+  coverage.lineageTotal = discovery.total;
+  coverage.sessionsAnalyzed = sessionsAnalyzed;
+  coverage.sessionsTruncated = discovery.total > sessionsAnalyzed;
+  // 【samplingNote 只存规则，不存数量】数量由渲染层从 lineageTotal / sessionsAnalyzed 拼。
+  // 若这里也带数量，渲染层再包一层括号就会产出「（…最新 50 个（共 108 个））」的嵌套括号。
+  // 三种场景：仅取样截断 / 仅读失败 / 两者并存；无截断则不设。
+  const sampledOut = sampled < discovery.total; // 取样阶段就丢了一部分
+  const readFailed = failed > 0;                // 取样后读取又失败了一些
+  if (sampledOut && readFailed) {
+    coverage.samplingNote = "按创建时间倒序取最新，且存在读取失败的子会话";
+  } else if (sampledOut) {
+    coverage.samplingNote = "按创建时间倒序取最新";
+  } else if (readFailed) {
+    coverage.samplingNote = "存在读取失败的子会话";
+  } else {
+    coverage.samplingNote = undefined;
+  }
+}
+
+/**
+ * 找出根会话的所有可达子会话（优先 traceSession，退化到 listSessions 的 parent 链）。
+ * 两条路径行为一致：都先收集**全部** `{id, createdAt}` 拿到精确 total，再按 createdAt 倒序取样前 50。
+ *
+ * 【为什么不再走 filterSessions 逐层 BFS】
+ * 旧实现拿 `filterSessions({ parentSessionId })` 当退化路径是错的：真实签名是
+ * `filterSessions(filters: readonly SessionResultFilter[])`，合法写法 `{kind:'parent', values:[...]}`，
+ * 传旧形状 100% 抛错走 catch —— 即那整段是**死代码**；即便修好签名，它每次调用也等于一次 714 会话的
+ * 全量列举，成本与 listSessions 等价却更绕（还要自己维护 BFS 队列与调用次数上限）。故删除，不要再补回来。
+ */
+export async function findChildIds(ctx: any, rootId: string, signal?: AbortSignal): Promise<ChildDiscovery> {
+  // 路径 1：traceSession —— 返回全量血缘树，total 天然精确、零额外查询。
+  // 只要它成功返回（哪怕树为空），结果就是可信的：「确实没有子会话」不能当成「查询失败」，
+  // 否则会白白多跑一次 714 会话的全量列举，且 source 会误报成 list。
   try {
     const trace = ctx?.sessionQuery?.traceSession;
     if (typeof trace === "function") {
       const tree = await trace.call(ctx.sessionQuery, rootId, signal);
-      const found = new Set<string>();
-      collectLineageIds(tree?.descendants, found);
-      for (const id of found) if (id !== rootId) ids.add(id);
+      if (tree !== null && typeof tree === "object") {
+        const found = new Map<string, LineageNode>();
+        collectLineageNodes(tree?.descendants, found);
+        // 去根：按归一化后的形态比较（真实数据根带 `session-` 前缀、子为裸 uuid，
+        // 直接 delete(rootId) 在形态不一致时会漏删，使 total 凭空多 1）。
+        const rootKey = normalizeSessionId(rootId);
+        for (const id of [...found.keys()]) {
+          if (id === rootId || normalizeSessionId(id) === rootKey) found.delete(id);
+        }
+        return toDiscovery(found, "trace");
+      }
     }
   } catch (error) {
     ctx.logger?.warn?.("[cohub review] traceSession 失败：" + String((error as any)?.message ?? error));
   }
-  if (ids.size > 0) return [...ids].slice(0, MAX_CHILD_SESSIONS);
 
-  // 退化路径 1：filterSessions({ parentSessionId }) 做 BFS，只查「某个父会话的子会话」，
-  // 避免 listSessions 的全量列举（该 cwd 实测 690 个会话）。调用次数受 MAX_CHILD_FILTER_CALLS 限制。
-  try {
-    const filter = ctx?.sessionQuery?.filterSessions;
-    if (typeof filter === "function") {
-      const queue = [rootId];
-      let calls = 0;
-      while (queue.length > 0 && ids.size < MAX_CHILD_SESSIONS && calls < MAX_CHILD_FILTER_CALLS) {
-        const parentId = queue.shift() as string;
-        calls++;
-        const listed = await filter.call(ctx.sessionQuery, { parentSessionId: parentId }, signal);
-        const records: any[] = Array.isArray(listed) ? listed : [];
-        for (const rec of records) {
-          const id = idOf(rec);
-          if (!id || id === rootId || ids.has(id)) continue;
-          ids.add(id);
-          queue.push(id);
-          if (ids.size >= MAX_CHILD_SESSIONS) break;
-        }
-      }
-    }
-  } catch (error) {
-    ctx.logger?.warn?.("[cohub review] filterSessions 失败：" + String((error as any)?.message ?? error));
-  }
-  if (ids.size > 0) return [...ids].slice(0, MAX_CHILD_SESSIONS);
-
-  // 退化路径 2：全量列举，按 parentSession 链从根做 BFS。
-  // 代价：该 cwd 下可能有数百个会话（实测 690 个），全部列举并建表，O(N) 内存 + 一次全量读；
-  // 仅在 traceSession 与 filterSessions 都不可用/为空时走到这里。
+  // 路径 2（退化）：全量列举，按 parentSession 链从根做 BFS。
+  // 代价：该 cwd 下可能有数百个会话（实测 714 个），O(N) 内存 + 一次全量读；仅在 traceSession
+  // 不可用/为空时走到这里。BFS 遍历整条链（不提前 break），保证 total 与 trace 路径同口径「精确」。
   try {
     const list = await ctx.sessionQuery.listSessions(signal);
     const records: any[] = Array.isArray(list) ? list : [];
-    const byParent = new Map<string, string[]>();
+    // 索引键也用归一化 id：真实数据里根是 `session-<uuid>`、子会话 parentSession 指向同值但
+    // 子会话自身是裸 uuid，若按原值建索引则 BFS 从 rootId 起步可能一个都匹配不到（total=0 且无标记）。
+    const byParent = new Map<string, any[]>();
     for (const rec of records) {
-      const id = idOf(rec);
       const parent = parentOf(rec);
-      if (!id || !parent) continue;
-      const bucket = byParent.get(parent) ?? [];
-      bucket.push(id);
-      byParent.set(parent, bucket);
+      const key = normalizeSessionId(parent);
+      if (!key) continue;
+      const bucket = byParent.get(key) ?? [];
+      bucket.push(rec);
+      byParent.set(key, bucket);
     }
-    const queue = [rootId];
-    while (queue.length > 0 && ids.size < MAX_CHILD_SESSIONS) {
+    const found = new Map<string, LineageNode>();
+    const rootKey = normalizeSessionId(rootId);
+    const queue = [rootKey];
+    const seenParents = new Set<string>([rootKey]);
+    while (queue.length > 0) {
       const cur = queue.shift() as string;
-      for (const child of byParent.get(cur) ?? []) {
-        if (child === rootId || ids.has(child)) continue;
-        ids.add(child);
-        queue.push(child);
+      for (const rec of byParent.get(cur) ?? []) {
+        const id = idOf(rec);
+        if (!id) continue;
+        const idKey = normalizeSessionId(id);
+        if (idKey === rootKey || found.has(id)) continue;
+        found.set(id, { id, createdAt: createdAtOf(rec) });
+        if (!seenParents.has(idKey)) {
+          seenParents.add(idKey);
+          queue.push(idKey);
+        }
       }
     }
+    return toDiscovery(found, "list");
   } catch (error) {
     ctx.logger?.warn?.("[cohub review] listSessions 失败：" + String((error as any)?.message ?? error));
   }
-  return [...ids];
+  return { ids: [], total: 0, truncated: false, source: "list" };
 }
 
 /** 原子写文本：mkdir -p → <file>.tmp → rename（同目录 rename 为替换语义） */
@@ -667,6 +788,10 @@ async function runAnalysis(
           mdPath: null,
           projectCopyPath: null,
           note: "本次复盘整体失败，仅落盘 error 记录：" + String((error as any)?.message ?? error).slice(0, 200),
+          // 失败路径没有 coverage（report 都没产出），显式传 undefined：索引里保持「未知」，
+          // 绝不能用 false 编造「子会话全量」。
+          lineageTotal: undefined,
+          sessionsTruncated: undefined,
         });
       } catch { /* 索引失败不影响错误记录 */ }
     }
@@ -688,23 +813,27 @@ async function runAnalysisInner(
   const { sessionId: rootId, read: rootRead, failed: rootFailed } = await readRootSession(ctx, sessionId, signal);
   const root = toSessionEvents(rootRead, rootId);
 
-  const childIds = await findChildIds(ctx, root.sessionId, signal);
+  const discovery = await findChildIds(ctx, root.sessionId, signal);
   const children: SessionEvents[] = [];
   const gaps: string[] = [];
+  let childReadFailed = 0;
   // 根会话自身读失败也是缺口：必须让 coverage.complete=false，报告自带「采集不完整」标记
   if (rootFailed) gaps.push(rootId + ": " + rootFailed);
-  for (const childId of childIds) {
+  for (const childId of discovery.ids) {
     try {
       const read = await ctx.sessionQuery.readSession(childId, signal);
       children.push(toSessionEvents(read, childId));
     } catch (error) {
+      childReadFailed++;
       gaps.push(childId + ": 子会话读取失败（" + String((error as any)?.message ?? error) + "）");
     }
   }
 
   const report = buildReport({ root, children });
+  // ---- 会话集合维度（只算子会话，不含根；与 coverage.complete 相互独立）----
+  applyDiscoveryCoverage(report.coverage, discovery, childReadFailed);
   report.coverage.gaps.push(...gaps);
-  if (gaps.length > 0) report.coverage.complete = false; // 子会话读取失败 → 覆盖不完整
+  if (childReadFailed > 0 || rootFailed) report.coverage.complete = false; // 读失败 → 覆盖不完整
   const cwd = root.cwd ?? cwdHint;
 
   const { text: digest, digest: inputDigest, truncated } = buildDigest(report);
@@ -797,6 +926,10 @@ async function runAnalysisInner(
       mdPath: mdOk ? mdPath : null,
       projectCopyPath: copy.path,
       note: copy.note ?? undefined, // 与既有 .gitignore 冲突的提示也写进索引
+      // 会话完整性两字段必须接上：review-index.ts 只在调用方给出时落盘（:254-255），
+      // 漏传会让 INDEX.md 恒显示「（子会话总数未知）」，整个索引层改动失效。
+      lineageTotal: report.coverage.lineageTotal,
+      sessionsTruncated: report.coverage.sessionsTruncated,
     });
     if (!indexed) ctx.logger?.warn?.("[cohub review] 复盘索引更新失败（不影响报告）");
   } catch (error) {

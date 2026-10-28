@@ -252,6 +252,85 @@ const reportDir = join(homeRoot, "cohub", "reviews", "fake");
   check("nocwd 键已记录", Object.prototype.hasOwnProperty.call(loaded.projects, "nocwd"));
 }
 
+// ---- 用例 k：INDEX.md 的会话集合覆盖信息（截断 / 全量 / 旧条目未知）----
+{
+  console.log("===== 用例 k：INDEX.md 会话集合覆盖信息 =====");
+  const cwdF = join(homeRoot, "proj-zeta");
+  mkdirSync(cwdF, { recursive: true });
+  // 截断：sessions=51（含根会话）→ 子会话 50/95
+  updateIndex({
+    cwd: cwdF, sessionId: "session-f1", status: "completed", findings: 12, sessions: 51,
+    lineageTotal: 95, sessionsTruncated: true,
+    jsonPath: join(reportDir, "f1.json"), mdPath: join(reportDir, "f1.md"), projectCopyPath: null,
+    at: "2026-02-01T10:00:00.000Z",
+  });
+  const parsedTrunc = JSON.parse(readFileSync(indexPath(), "utf8")).projects[cwdDirName(cwdF)];
+  check("截断-lineageTotal 已落盘", parsedTrunc.lastReport.lineageTotal === 95);
+  check("截断-sessionsTruncated 已落盘", parsedTrunc.lastReport.sessionsTruncated === true);
+  check("截断-sessions 字段原义不变（含根会话）", parsedTrunc.lastReport.sessions === 51);
+  const mdTrunc = readFileSync(indexMarkdownPath(), "utf8");
+  check("截断-INDEX.md 出现 50/95 形式", mdTrunc.includes("51（子会话 50/95）"));
+  check("截断-明细行也带覆盖信息", mdTrunc.includes("会话数：51（子会话 50/95）"));
+  check("截断-不误标全量", !mdTrunc.includes("会话数：51（子会话全量）"));
+
+  // 全量：sessionsTruncated=false → 标全量
+  updateIndex({
+    cwd: cwdF, sessionId: "session-f2", status: "completed", findings: 12, sessions: 51,
+    lineageTotal: 50, sessionsTruncated: false,
+    jsonPath: join(reportDir, "f2.json"), mdPath: join(reportDir, "f2.md"), projectCopyPath: null,
+    at: "2026-02-02T10:00:00.000Z",
+  });
+  const mdFull = readFileSync(indexMarkdownPath(), "utf8");
+  check("全量-INDEX.md 标子会话全量", mdFull.includes("51（子会话全量）"));
+  check("全量-明细行标全量", mdFull.includes("会话数：51（子会话全量）"));
+  check("全量-不再出现 50/95", !mdFull.includes("（子会话 50/95）"));
+
+  // 旧条目：无新字段 → 不崩、标「总数未知」、绝不禁称全量
+  const legacyIndex = {
+    version: REVIEW_INDEX_VERSION,
+    updatedAt: "2026-03-01T10:00:00.000Z",
+    projects: {
+      kLegacy: {
+        cwd: "C:/legacy", name: "legacy",
+        lastReport: {
+          at: "2026-02-28T10:00:00.000Z", sessionId: "s-legacy", status: "completed",
+          findings: 3, sessions: 51, jsonPath: "C:/legacy.json", mdPath: null, projectCopyPath: null,
+        },
+      },
+    },
+  };
+  let legacyMd = "";
+  let legacyThrew = false;
+  try { legacyMd = renderIndexMarkdown(legacyIndex as any); } catch { legacyThrew = true; }
+  check("旧条目-渲染不崩", !legacyThrew && legacyMd.includes("## legacy"));
+  check("旧条目-标子会话总数未知", legacyMd.includes("51（子会话总数未知）"));
+  check("旧条目-不禁称全量", !legacyMd.includes("子会话全量"));
+  check("旧条目-不显示截断数字", !legacyMd.includes("（子会话 50/95）"));
+
+  // ---- 用例 k2（P2-3）：有 lineageTotal + sessions、无 sessionsTruncated → 读取时推断 ----
+  console.log("===== 用例 k2（P2-3）：缺失 sessionsTruncated 时按两个数推断 =====");
+  const inferReport = (sessions: number, lineageTotal: number | undefined) => ({
+    version: REVIEW_INDEX_VERSION, updatedAt: "2026-03-02T10:00:00.000Z",
+    projects: {
+      kInfer: {
+        cwd: "C:/infer", name: "infer",
+        lastReport: {
+          at: "2026-03-02T10:00:00.000Z", sessionId: "s-i", status: "completed",
+          findings: 1, sessions, ...(lineageTotal !== undefined ? { lineageTotal } : {}),
+          jsonPath: "C:/i.json", mdPath: null, projectCopyPath: null,
+        },
+      },
+    },
+  });
+  const inferTrunc = renderIndexMarkdown(inferReport(51, 95) as any);
+  check("P2-3 sessions=51/lineageTotal=95 无显式标记 → 推断截断（50/95）", inferTrunc.includes("51（子会话 50/95）"));
+  check("P2-3 推断截断时不误标全量", !inferTrunc.includes("子会话全量"));
+  const inferFull = renderIndexMarkdown(inferReport(51, 50) as any);
+  check("P2-3 sessions=51/lineageTotal=50 → 推断全量", inferFull.includes("51（子会话全量）"));
+  const inferHalf = renderIndexMarkdown(inferReport(0, 95) as any);
+  check("P2-3 只有 lineageTotal（sessions 不可用）→ 仍标未知，不推断", inferHalf.includes("0（子会话总数未知）"));
+}
+
 // 清理
 try { rmSync(homeRoot, { recursive: true, force: true }); } catch { /* ignore */ }
 

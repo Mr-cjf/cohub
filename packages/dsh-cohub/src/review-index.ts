@@ -29,7 +29,18 @@ export interface ReviewIndexReport {
   sessionId: string;
   status: "completed" | "failed" | "interrupted";
   findings: number;
+  /** 含**根会话**的已读取会话数量（字段原义，不改）；子会话口径见 lineageTotal */
   sessions: number;
+  /**
+   * 子会话**真实总数**（血缘树全量遍历，**不含**根会话），用于判断 sessions 是否只是取样。
+   * 可选：旧 index.json 条目无此字段（undefined = 未知）。
+   */
+  lineageTotal?: number;
+  /**
+   * 是否发生子会话取样截断（已分析子会话数 < lineageTotal）。
+   * 可选：旧 index.json 条目无此字段（undefined = 未知，**不等于** false）。
+   */
+  sessionsTruncated?: boolean;
   /** 报告 JSON 绝对路径（失败时为 error-*.json 的绝对路径） */
   jsonPath: string;
   /** 报告 MD 绝对路径；失败记录没有 MD → null */
@@ -60,7 +71,12 @@ export interface ReviewIndexEntry {
   sessionId: string;
   status: ReviewIndexReport["status"];
   findings: number;
+  /** 含根会话的已读取会话数量（原义不变） */
   sessions: number;
+  /** 子会话真实总数（不含根会话）；不传则不写入 lastReport */
+  lineageTotal?: number;
+  /** 是否发生子会话取样截断；不传则不写入 lastReport（旧条目/未知情形保持缺省） */
+  sessionsTruncated?: boolean;
   jsonPath: string;
   mdPath?: string | null;
   projectCopyPath?: string | null;
@@ -234,6 +250,9 @@ export function updateIndex(entry: ReviewIndexEntry): boolean {
       projectCopyPath: slashed(entry.projectCopyPath ?? null),
     };
     if (typeof entry.note === "string" && entry.note.length > 0) lastReport.note = entry.note;
+    // 会话完整性字段：仅在调用方给出时落盘（旧调用/未知情形保持缺省，不写入 undefined 键）
+    if (Number.isFinite(entry.lineageTotal)) lastReport.lineageTotal = entry.lineageTotal as number;
+    if (typeof entry.sessionsTruncated === "boolean") lastReport.sessionsTruncated = entry.sessionsTruncated;
     index.projects[key] = {
       cwd: slashed(cwd) ?? prev?.cwd ?? "",
       name: cwd !== null ? basename(cwd) : (prev?.name ?? "(未知项目)"),
@@ -272,6 +291,31 @@ function sortedProjects(index: ReviewIndexFile): Array<[string, ReviewIndexProje
   return rows;
 }
 
+/**
+ * 「会话数」单元格的覆盖信息后缀。
+ * 【向后兼容铁律】sessionsTruncated === undefined 是旧条目 → 默认标「总数未知」，
+ * **不能**默认成「子会话全量」（那会凭空声称完整）。
+ * 【P2-3 读取时推断】唯一例外：sessionsTruncated 缺失但 lineageTotal 与 sessions 都已知时，
+ * 由 `lineageTotal > (sessions - 1)` 推断是否截断——只是读取时的推断，**不改写数据**；
+ * 两个数缺任一个就老实说未知。sessions 字段原义不变（含根会话的已读取数）。
+ */
+function sessionsCoverage(r: ReviewIndexReport): string {
+  const total = typeof r.lineageTotal === "number" && Number.isFinite(r.lineageTotal) ? r.lineageTotal : null;
+  const analyzed = Number.isFinite(r.sessions) && r.sessions > 0 ? Math.max(0, r.sessions - 1) : null;
+  // 截断判定：有显式值就用显式值，否则两个数都在时按契约推断
+  const truncated = typeof r.sessionsTruncated === "boolean"
+    ? r.sessionsTruncated
+    : (total !== null && analyzed !== null ? total > analyzed : null);
+  if (truncated === true) {
+    // sessions 含根会话（51 = 1 根 + 50 子），故子会话已分析数 = sessions - 1
+    if (total !== null && analyzed !== null) return `（子会话 ${analyzed}/${total}）`;
+    if (total !== null) return `（子会话共 ${total}，已分析数未知）`;
+    return "（子会话取样截断，总数未知）";
+  }
+  if (truncated === false) return "（子会话全量）";
+  return "（子会话总数未知）";
+}
+
 /** 渲染 INDEX.md（人读：本地时间 + 完整 cwd + 两份报告绝对路径，按最近报告时间倒序） */
 export function renderIndexMarkdown(index: ReviewIndexFile): string {
   const rows = sortedProjects(index);
@@ -293,7 +337,7 @@ export function renderIndexMarkdown(index: ReviewIndexFile): string {
   for (const [, p] of rows) {
     const r = p.lastReport;
     lines.push("| " + p.name + " | " + r.status + " | " + r.findings + " | " + r.sessions
-      + " | " + formatLocalTime(r.at) + " |");
+      + sessionsCoverage(r) + " | " + formatLocalTime(r.at) + " |");
   }
   lines.push("");
   // 明细：一个项目一节
@@ -303,7 +347,7 @@ export function renderIndexMarkdown(index: ReviewIndexFile): string {
     lines.push("");
     lines.push("- 项目路径：`" + (p.cwd.length > 0 ? p.cwd : "(未知)") + "`");
     lines.push("- 最近报告：" + formatLocalTime(r.at) + "（本地时间）");
-    lines.push("- 状态：" + r.status + "　findings：" + r.findings + "　会话数：" + r.sessions);
+    lines.push("- 状态：" + r.status + "　findings：" + r.findings + "　会话数：" + r.sessions + sessionsCoverage(r));
     lines.push("- 会话：" + r.sessionId);
     lines.push("- 报告（DSH）：`" + (r.jsonPath.length > 0 ? r.jsonPath : "(无)") + "`");
     lines.push("- 报告 MD：`" + (r.mdPath ?? "(无)") + "`");

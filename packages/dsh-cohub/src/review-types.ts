@@ -14,6 +14,12 @@
 //   纯推断/经验性内容只能作为 limitations 说明或排除在正式结论之外，不允许「裸结论」。
 //   analysis.inputDigest 记录喂给模型的输入指纹，inputTruncated 表示输入被裁剪过——
 //   两者共同界定本报告的结论适用范围（不可超出输入边界下断言）。
+//
+// 【coverage 的两个独立完整性维度】勿混用：
+//   · complete          —— 「已读会话内部事件流是否自洽」（读到末尾、无 seq 缺口）；
+//   · sessionsTruncated —— 「应分析的子会话集合是否被取样截断」（lineageTotal vs sessionsAnalyzed）。
+//   二者互不蕴含，可同时出现 complete=true 且 sessionsTruncated=true 的组合；
+//   后者为 true 时结论不得外推到未分析的子会话。新增字段全部可选，旧报告（0.10.1）解析后为 undefined。
 
 /** 报告顶层结构（schemaVersion=1，后续变更须升版本号）。 */
 export interface ReviewReport {
@@ -33,6 +39,39 @@ export interface ReviewReport {
     gaps: string[];
     /** 喂给 LLM 的输入是否被裁剪（超预算截断）；true 时 analysis 结论不得外推到未读区间。 */
     inputTruncated: boolean;
+
+    // —— 以下 4 个字段为可选扩展（0.10.2+），旧报告（0.10.1 及以前）不含，消费端必须容忍缺失 ——
+    //
+    // 【两个独立维度，勿混为一谈】
+    //   · complete        = 「已读会话内部事件流是否自洽」（读到末尾、无 seq 缺口），只看已读的那批会话；
+    //   · sessionsTruncated = 「本应分析的子会话集合是否被取样截断」，只看会话集合是否完整。
+    //   二者互不蕴含：可能 complete=true 但只读了 50/200 个子会话（结论覆盖不足），
+    //   也可能 complete=false 但子会话一个没漏（某会话日志中间缺 seq）。
+    //   因此 sessionsTruncated=true 时即使 complete=true，结论也不得外推到未分析的子会话。
+
+    /**
+     * 子会话**真实总数**（来自血缘树全量遍历，精确值，非估算）。
+     * 口径：**只算子会话**，不含根会话——与 `sessions[]` 不同（后者含根会话，51 = 1 根 + 50 子）。
+     * 旧报告无此字段（undefined = 未知）。
+     */
+    lineageTotal?: number;
+    /**
+     * 实际参与统计的子会话数（恒 ≤ lineageTotal）。
+     * 口径：同样**只算子会话**，不含根会话。
+     * 旧报告无此字段（undefined = 未知）。
+     */
+    sessionsAnalyzed?: number;
+    /**
+     * 是否发生子会话取样截断（sessionsAnalyzed < lineageTotal）。
+     * true = 已确认遗漏部分子会话；false = 已全量分析；undefined = 旧报告，未知。
+     */
+    sessionsTruncated?: boolean;
+    /**
+     * 取样规则的人类可读说明，**只存规则不存数量**（数量由渲染层从上面两个数拼，
+     * 否则会和渲染层的括号叠成嵌套括号），如「按创建时间倒序取最新」。
+     * 仅在被截断时（sessionsTruncated=true）有值。
+     */
+    samplingNote?: string;
   };
   /** 参与复盘的会话摘要（根会话 + 其可达子代理会话）。 */
   sessions: SessionSummary[];

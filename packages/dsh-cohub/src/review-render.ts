@@ -125,6 +125,92 @@ const STATUS_TITLE: Record<string, string> = {
   failed: "failed（分析失败，本轮没有模型结论，原因见下方「分析错误说明」）",
 };
 
+/**
+ * 「会话集合覆盖」一行的取值。
+ * 【向后兼容铁律】sessionsTruncated === undefined 是旧报告（0.10.1 及以前）——
+ * 必须显示「未知」，**不能**默认成「未截断」（那会凭空声称全量），也不能显示成截断。
+ */
+/**
+ * 会话集合是否截断：优先用显式 `sessionsTruncated`；
+ * 【P2-3 读取时推断】缺失（undefined，旧报告）但 lineageTotal 与 sessionsAnalyzed 都已知时，
+ * 按契约 `sessionsTruncated = sessionsAnalyzed < lineageTotal` 推断——只是读取时推断，**不改写数据**；
+ * 两个数缺任一个仍返回 undefined（老实说未知，不凭空声称完整）。
+ */
+function inferSessionsTruncated(
+  sessionsTruncated: boolean | undefined,
+  lineageTotal: number | null,
+  sessionsAnalyzed: number | null,
+): boolean | undefined {
+  if (typeof sessionsTruncated === "boolean") return sessionsTruncated;
+  if (lineageTotal !== null && sessionsAnalyzed !== null) return sessionsAnalyzed < lineageTotal;
+  return undefined;
+}
+
+/**
+ * samplingNote 现在**只存规则、不存数量**（数量由本层从 lineageTotal / sessionsAnalyzed 拼），
+ * 所以这里可以直接把规则塞进一层括号而不会再嵌套。
+ * 契约：`samplingNote` 为空（旧报告 / 无截断）时返回空串，**不产出 `（）` 这种噪声**。
+ */
+function ruleText(note: string): string {
+  return note.length > 0 && note !== DASH ? note : "";
+}
+
+/** 规则后缀：`（按创建时间倒序取最新）`；无规则时为空串。 */
+function ruleSuffix(note: string): string {
+  const rule = ruleText(note);
+  return rule.length > 0 ? `（${rule}）` : "";
+}
+
+/**
+ * 取样规则的三态：只取样截断 / 只读失败 / 两者并存（+ 未记录）。
+ * 判据是 `samplingNote` 的文案（applyDiscoveryCoverage 是唯一写入方），
+ * 因为两者都会让 sessionsTruncated=true，单看布尔值分不出来。
+ */
+function samplingKind(note: string): "sampled" | "readFailed" | "both" | "unknown" {
+  const rule = ruleText(note);
+  const sampled = rule.includes("取最新");
+  const readFailed = rule.includes("读取失败");
+  if (sampled && readFailed) return "both";
+  if (sampled) return "sampled";
+  if (readFailed) return "readFailed";
+  return "unknown";
+}
+
+function sessionsCoverageText(
+  sessionsTruncatedRaw: boolean | undefined,
+  lineageTotal: number | null,
+  sessionsAnalyzed: number | null,
+  samplingNote: string,
+  childCount: number | null,
+): string {
+  const sessionsTruncated = inferSessionsTruncated(sessionsTruncatedRaw, lineageTotal, sessionsAnalyzed);
+  // 未截断时若未显式给 sessionsAnalyzed，用 sessions[]（含根会话）减 1 派生——此时集合是完整的，
+  // 派生值等价于真实总数；截断时**绝不**这样推（那会把取样数当全量）。
+  const analyzed = sessionsAnalyzed ?? (sessionsTruncated === false ? childCount : null);
+  if (sessionsTruncated === true) {
+    // 数量在前、规则平铺在括号里：`已分析 50 / 共 108 个子会话（按创建时间倒序取最新）`
+    if (lineageTotal !== null && analyzed !== null) {
+      return `已分析 ${analyzed} / 共 ${lineageTotal} 个子会话${ruleSuffix(samplingNote)}`;
+    }
+    if (lineageTotal !== null) return `共 ${lineageTotal} 个子会话（已分析数未记录）`;
+    if (analyzed !== null) return `已分析 ${analyzed} 个子会话（总数未知）`;
+    return "已取样截断（总数未记录）";
+  }
+  if (sessionsTruncated === false) {
+    if (analyzed !== null) return `全部 ${analyzed} 个子会话`;
+    if (lineageTotal !== null) return `全部 ${lineageTotal} 个子会话`;
+    return "全部子会话（数量未记录）";
+  }
+  return "未知（本报告由旧版本生成，未记录子会话总数）";
+}
+
+/** sessions[]（含根会话）→ 子会话数（减掉 1 个根会话）；无法判定时 null。 */
+function childCountFromSessions(report: any): number | null {
+  const list = Array.isArray(report?.sessions) ? report.sessions : [];
+  if (list.length === 0) return null;
+  return Math.max(0, list.length - 1);
+}
+
 /** 主入口：ReviewReport（宽松入参）→ Markdown 字符串。 */
 export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
   const r = (report ?? {}) as Partial<ReviewReport>;
@@ -140,6 +226,16 @@ export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
   const coverage = r.coverage ?? { throughSeq: {}, complete: false, gaps: [], inputTruncated: false };
   const gaps = Array.isArray(coverage.gaps) ? coverage.gaps : [];
   const complete = coverage.complete === true;
+  // ---- 会话集合维度（与 complete 相互独立，见 review-types.ts:18-22）----
+  // sessionsTruncated: true=确认截断 / false=已全量 / undefined=旧报告未知（**不得**当成 false）
+  const sessionsTruncated = coverage.sessionsTruncated;
+  const lineageTotal = typeof coverage.lineageTotal === "number" && Number.isFinite(coverage.lineageTotal)
+    ? coverage.lineageTotal : null;
+  const sessionsAnalyzedRaw = typeof coverage.sessionsAnalyzed === "number" && Number.isFinite(coverage.sessionsAnalyzed)
+    ? coverage.sessionsAnalyzed : null;
+  // P2-3：显式值缺失时按契约推断（只读取时推断，不动数据）
+  const sessionsTruncatedEffective = inferSessionsTruncated(sessionsTruncated, lineageTotal, sessionsAnalyzedRaw);
+  const samplingNote = text(coverage.samplingNote);
 
   // ---- 1. 标题 + 元信息 ----
   lines.push("# 会话复盘报告", "");
@@ -147,7 +243,10 @@ export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
   lines.push(`- 项目键：${text(r.project?.key)}`);
   lines.push(`- root session id：${text(r.rootSessionId)}`);
   lines.push(`- 生成时间：${new Date().toISOString()}`);
-  lines.push(`- 采集完整性：${complete ? "complete（所有目标会话已读至末尾）" : "不完整（存在缺口，结论需降级）"}`);
+  // 两个独立完整性维度必须分开写：complete 只说「已分析会话内部事件流自洽」，
+  // 绝不能说成「所有目标会话已读」（旧文案的误导点，本行不可回退）。
+  lines.push(`- 事件流完整性：${complete ? "complete（已分析会话内部事件连续无缺口）" : "不完整（已分析会话内存在事件缺口，结论需降级）"}`);
+  lines.push(`- 会话集合覆盖：${sessionsCoverageText(sessionsTruncated, lineageTotal, sessionsAnalyzedRaw, samplingNote, childCountFromSessions(r))}`);
   lines.push(`- 分析输入是否被裁剪：${coverage.inputTruncated ? "是（结论不得外推到未读区间）" : "否"}`);
   // 分析状态必须可见：LLM 失败时过去只 warn 到日志，用户在报告里毫无线索。
   const analysis = (r.analysis ?? {}) as any;
@@ -171,6 +270,26 @@ export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
   lines.push("## 覆盖范围", "");
   const throughSeq = coverage.throughSeq ?? {};
   const throughEntries = Object.entries(throughSeq);
+  // 快照边界：报告是某一时刻的切片，此后的新 turn / 委派不在范围内（不提示用户就会误读为「最新」）。
+  const rootSid = typeof r.rootSessionId === "string" ? r.rootSessionId : "";
+  const rootSeq = rootSid.length > 0 ? (throughSeq as Record<string, number>)[rootSid] : undefined;
+  if (typeof rootSeq === "number" && Number.isFinite(rootSeq)) {
+    lines.push(`> 本报告是快照：根会话截至 seq ${rootSeq}。此后的新 turn 与委派不在本报告范围内，需要重新生成。`, "");
+  } else {
+    lines.push(`> 本报告是快照：根会话的已读 seq ${DASH}（未记录）。此后的新 turn 与委派不在本报告范围内，需要重新生成。`, "");
+  }
+  // 会话集合被取样截断：必须在覆盖范围区醒目提示（未分析的子会话消耗与问题都不在报告里）。
+  if (sessionsTruncatedEffective === true) {
+    const totalLabel = lineageTotal !== null ? `${lineageTotal} 个` : `${DASH}（未记录）个`;
+    const analyzedLabel = sessionsAnalyzedRaw !== null ? `${sessionsAnalyzedRaw} 个` : `${DASH}（未记录）个`;
+    // 两种成因文案分开：取样截断说「只分析了」，纯读失败说「成功分析」——
+    // 前者是主动裁剪，后者是数据读不出来，混成一句会让人误解（规则用平铺括号，不嵌套）。
+    if (samplingKind(samplingNote) === "readFailed") {
+      lines.push(`⚠️ 部分子会话读取失败：共 ${totalLabel}，成功分析 ${analyzedLabel}。失败子会话的消耗与问题不在本报告内。`, "");
+    } else {
+      lines.push(`⚠️ 子会话取样截断：共 ${totalLabel}，只分析了 ${analyzedLabel}${ruleSuffix(samplingNote)}。未分析的子会话的消耗与问题不在本报告内。`, "");
+    }
+  }
   if (throughEntries.length === 0) {
     lines.push(`- 无覆盖记录（throughSeq 为空，${DASH}）`);
   } else {
@@ -297,18 +416,32 @@ export function renderMarkdown(report: any, opts: RenderOptions = {}): string {
   const analysisError = typeof (r.analysis as any)?.error === "string" && (r.analysis as any).error.length > 0
     ? String((r.analysis as any).error)
     : null;
-  const needsReview = gaps.length > 0 || unverified.length > 0 || !complete;
+  const needsReview = gaps.length > 0 || unverified.length > 0 || !complete
+    || coverage.inputTruncated === true || sessionsTruncatedEffective === true;
   if (needsReview) {
     lines.push("本报告存在未覆盖部分，结论需人工复核。", "");
+    // 两种截断**分别**列出（输入裁剪 ≠ 会话取样），不许合并成一句含糊的「有截断」。
+    if (coverage.inputTruncated === true) {
+      lines.push("- 分析输入被裁剪：模型摘要超过 12000 字被裁剪（coverage.inputTruncated），结论不得外推到未读区间。");
+    }
+    if (sessionsTruncatedEffective === true) {
+      const totalLabel = lineageTotal !== null ? `${lineageTotal}` : `${DASH}`;
+      const analyzedLabel = sessionsAnalyzedRaw !== null ? `${sessionsAnalyzedRaw}` : `${DASH}`;
+      // 与覆盖范围区同口径：读失败 ≠ 取样截断，两条分写（各占一行，规则平铺不嵌套）
+      if (samplingKind(samplingNote) === "readFailed") {
+        lines.push(`- 部分子会话读取失败：共 ${totalLabel} 个，成功分析 ${analyzedLabel} 个，失败子会话不在结论范围内。`);
+      } else {
+        lines.push(`- 子会话取样截断：共 ${totalLabel} 个，只分析了 ${analyzedLabel} 个${ruleSuffix(samplingNote)}，未分析的子会话不在结论范围内。`);
+      }
+    }
     if (gaps.length > 0) lines.push(`- 采集缺口 ${gaps.length} 处，相关区间的事件未被读到，不应据此下结论。`);
+    if (!complete) lines.push("- coverage.complete 为 false，已分析会话内存在事件缺口，统计数字不完整。");
     if (unverified.length > 0) {
       lines.push(`- ${unverified.length} 条结论缺少证据，已移入「未验证」节，未计入正式分组。`);
     }
     if (noConclusion) {
       lines.push("- 本次复盘**没有产出任何带锚点的结论**（findings 为空），不存在可复核的结论条目。");
     }
-    if (!complete) lines.push("- coverage.complete 为 false，统计数字不完整。");
-    if (coverage.inputTruncated) lines.push("- 分析输入被裁剪，结论不得外推到未读区间。");
     if (analysisError) lines.push(`- 分析失败/降级原因：${analysisError}`);
     lines.push("");
   } else if (noConclusion) {
