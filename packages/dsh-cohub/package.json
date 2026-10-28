@@ -1,6 +1,6 @@
 {
   "name": "dsh-cohub",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "DeepSeek Harness 版 CoHub：中文智能体编排——用户可选 2 种工作模式（co-orchestrator 纯调度 / cohub-cordis 创造模式）+ 13 个专职代理技能 + 多模型共识；另由 cohub-subagent-readonly / cohub-subagent-write 两个支撑 preset 实现子代理读写硬隔离（共 4 个 preset）",
   "type": "module",
   "main": "lib/index.js",
