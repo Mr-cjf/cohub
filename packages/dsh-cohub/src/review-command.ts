@@ -1,8 +1,21 @@
-// cohub 复盘命令入口：`/cohub-review`（零 turn、不经过模型，异步生成 MD 报告）
+// cohub 复盘命令入口：`/cohub-review`（零 turn、不经过模型，阻塞式生成 MD 报告）
+//
+// 【为什么是**阻塞式** handler（0.10.3 改动，取代 fire-and-forget）】
+//   真机实测确认：命令 pending 期间
+//     · 用户仍可继续发消息（`session/prompt` 19ms 正常返回），不阻塞其他 API；
+//     · **无网关超时**（45 秒慢命令完整返回、无截断）；
+//     · UI **不禁用输入框**。
+//   唯一代价是「发起该命令的那一个请求」会挂到 handler settle（30～90 秒）。
+//   换来的是用户直接看到真实结果（报告路径 / 结论条数 / 覆盖情况）或可诊断的失败原因，
+//   而不是「正在生成报告…」之后再无回音 —— 后者只能在磁盘上翻找，实测是主要体验痛点。
+//   注意：阻塞期间 `inFlight` 防重入比过去**更必要**（两次阻塞调用会真的并行跑两份 LLM）。
+//
+// 【若未来要改成非阻塞 + 完成通知】走 client 侧 `shell.bottom` 状态条，
+//   **不要用 `agent.inject`**：inject 会把内容作为消息喂给模型，白白烧 token 且污染对话上下文。
 //
 // 纪律：
-//   · 命令 handler 立即返回 CommandResult，**不 await 分析**；分析走 fire-and-forget，
-//     内部全 try/catch，只 logger.warn —— 对宿主必须抛零异常；
+//   · handler 是 async，await 分析跑完并返回**真实**结果；整体失败 → kind:'error' + 可诊断文案；
+//   · 分析内部全 try/catch，对宿主必须抛零异常（异常一律转成 kind:'error' 的 text）；
 //   · sessionId 取 inv.agent.session.id（不是顶层字段）；
 //   · 只调一次 LLM，不重试、无工具循环；输入是压缩后的统计摘要（不是全量事件）；
 //   · LLM 失败 / 解析失败 → findings 留空、analysis.status='failed'，报告照常落盘；
@@ -213,6 +226,21 @@ export function applyDiscoveryCoverage(
  * 传旧形状 100% 抛错走 catch —— 即那整段是**死代码**；即便修好签名，它每次调用也等于一次 714 会话的
  * 全量列举，成本与 listSessions 等价却更绕（还要自己维护 BFS 队列与调用次数上限）。故删除，不要再补回来。
  */
+/**
+ * 中止检查：signal 已 abort 时立刻抛错，让取消穿透所有「就地降级」的 catch。
+ *
+ * 【为什么必需】readRootSession / findChildIds / 子会话读取都遵循「读失败就地降级、继续出报告」，
+ * 这对**真实读取失败**是对的（有残缺报告 > 零产物），但对**用户主动取消**是错的：
+ * 取消后仍会花时间读完剩下的会话、写一份残缺报告，最后 handler 还报 success —— 用户以为成功了。
+ * 因此每个 catch 里都要先问一次「是不是取消」，是就抛出，让 runAnalysis 走失败分支。
+ */
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    const reason = (signal as AbortSignal & { reason?: unknown }).reason;
+    throw reason instanceof Error ? reason : new Error("分析已取消（" + String(reason ?? "aborted") + "）");
+  }
+}
+
 export async function findChildIds(ctx: any, rootId: string, signal?: AbortSignal): Promise<ChildDiscovery> {
   // 路径 1：traceSession —— 返回全量血缘树，total 天然精确、零额外查询。
   // 只要它成功返回（哪怕树为空），结果就是可信的：「确实没有子会话」不能当成「查询失败」，
@@ -234,6 +262,7 @@ export async function findChildIds(ctx: any, rootId: string, signal?: AbortSigna
       }
     }
   } catch (error) {
+    throwIfAborted(signal); // 取消不当成「trace 失败」继续退化：直接中断
     ctx.logger?.warn?.("[cohub review] traceSession 失败：" + String((error as any)?.message ?? error));
   }
 
@@ -274,6 +303,7 @@ export async function findChildIds(ctx: any, rootId: string, signal?: AbortSigna
     }
     return toDiscovery(found, "list");
   } catch (error) {
+    throwIfAborted(signal); // 同上：取消不降级成「无子会话」
     ctx.logger?.warn?.("[cohub review] listSessions 失败：" + String((error as any)?.message ?? error));
   }
   return { ids: [], total: 0, truncated: false, source: "list" };
@@ -295,13 +325,17 @@ function writeTextAtomic(file: string, text: string): boolean {
   }
 }
 
-/** 把错误追加到 <reviews>/<cwdHash>/_errors.log（一行一条，绝不抛错） */
-function appendErrorLog(cwd: string | null | undefined, sessionId: string, message: string): void {
+/**
+ * 把错误追加到 <reviews>/<cwdHash>/_errors.log（一行一条，绝不抛错）。
+ * 返回日志绝对路径（供失败文案直接展示），失败返回 null。
+ */
+function appendErrorLog(cwd: string | null | undefined, sessionId: string, message: string): string | null {
   try {
     const logPath = reviewStorePath(cwd, sessionId, "_errors.log");
     mkdirSync(dirname(logPath), { recursive: true });
     appendFileSync(logPath, new Date().toISOString() + "\t" + sessionId + "\t" + message.replace(/\s+/g, " ").slice(0, 500) + "\n", "utf8");
-  } catch { /* 日志失败不影响主流程 */ }
+    return logPath;
+  } catch { return null; /* 日志失败不影响主流程 */ }
 }
 
 /** 落盘一份 error-<ts>.json（与 report 同目录），返回写成功的绝对路径（失败 null） */
@@ -727,6 +761,7 @@ async function readRootSession(
   try {
     read = await ctx.sessionQuery.readSession(current, signal);
   } catch (error) {
+    throwIfAborted(signal); // 用户取消 ≠ 读取失败：取消必须中断，不能降级出一份残缺报告
     failed = "根会话读取失败（" + String((error as any)?.message ?? error) + "）";
     ctx.logger?.warn?.("[cohub review] " + failed + "，降级为空事件继续出报告");
     read = { session: { id: current }, events: [] };
@@ -740,6 +775,7 @@ async function readRootSession(
     try {
       parentRead = await ctx.sessionQuery.readSession(parent, signal);
     } catch (error) {
+      throwIfAborted(signal);
       ctx.logger?.warn?.("[cohub review] 上溯父会话失败，以 " + current + " 为根："
         + String((error as any)?.message ?? error));
       break;
@@ -751,30 +787,63 @@ async function readRootSession(
   return { sessionId: current, read, failed };
 }
 
+/** runAnalysisInner 的产物：报告本体 + 所有落盘路径（handler 据此拼真实文案） */
+interface AnalysisArtifacts {
+  report: ReviewReport;
+  jsonPath: string;
+  /** 主报告 MD 路径；MD 落盘失败时为 null（文案要退回 JSON 并显式说明） */
+  mdPath: string | null;
+  projectCopyPath: string | null;
+  /** 主报告 json+md 是否都写成功 */
+  persisted: boolean;
+}
+
+/**
+ * runAnalysis 的返回：成功带报告本体与路径（handler 据此写真实文案）；失败带可诊断路径。
+ * handler **不再**把失败吞成 warn —— 失败原因必须回到用户眼前。
+ */
+export type AnalysisOutcome =
+  | ({ ok: true } & AnalysisArtifacts)
+  | { ok: false; reason: string; errorPath: string | null; logPath: string | null };
+
 /**
  * 主分析流程：读会话 → buildReport → （可选）单次 LLM → 落盘。
  *
- * 最外层兜底：任何一步抛错（含 buildReport / renderMarkdown 这类非网络异常）都不再静默——
- * 先把 error-<ts>.json 落到与 report 同一目录，再把错误继续抛给外层 fire-and-forget 的 catch
- * （那里负责 _errors.log）。这样「零产物」在结构上不可能发生。
+ * 失败不再穿透成未处理异常：先把 error-<ts>.json 落到与 report 同一目录、把一行写进 _errors.log，
+ * 再把结构化结果返回给 handler（handler 转成 kind:'error' 的可诊断文案）。
+ * 这样「零产物 + 用户不知情」在结构上不可能发生。
+ *
+ * 【信号合并】内部 `ANALYSIS_TIMEOUT_MS` 超时 controller 与外部 `inv.signal`（UI 取消）合并：
+ * 任一触发都中止整条链路（读会话 + LLM）。监听器与 timer 在 finally 清理，避免泄漏。
  */
-async function runAnalysis(
-  ctx: any,
-  agent: any,
-  sessionId: string,
-  cwdHint: string | null,
-  withLlm: boolean,
-): Promise<void> {
-  // 全链路超时：读到一半的会话不会把命令永久挂死（timer 必须清理，否则进程多存活 60s）
+async function runAnalysis(req: {
+  ctx: any;
+  agent: any;
+  sessionId: string;
+  cwdHint: string | null;
+  withLlm: boolean;
+  signal?: AbortSignal;
+}): Promise<AnalysisOutcome> {
+  const { ctx, agent, sessionId, cwdHint, withLlm } = req;
+  const external = req.signal;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ANALYSIS_TIMEOUT_MS);
-  const signal: AbortSignal = controller.signal;
+  const onExternalAbort = () => controller.abort(external?.reason);
+  // 内部超时：读到一半的会话不会把命令永久挂死
+  const timer = setTimeout(
+    () => controller.abort(new Error("分析超时（" + Math.round(ANALYSIS_TIMEOUT_MS / 1000) + " 秒）")),
+    ANALYSIS_TIMEOUT_MS,
+  );
+  if (external) {
+    if (external.aborted) onExternalAbort();
+    else external.addEventListener("abort", onExternalAbort, { once: true });
+  }
   try {
-    await runAnalysisInner(ctx, agent, sessionId, cwdHint, withLlm, signal);
+    return { ok: true, ...(await runAnalysisInner(ctx, agent, sessionId, cwdHint, withLlm, controller.signal)) };
   } catch (error) {
+    const reason = String((error as any)?.message ?? error);
     const errorPath = writeErrorRecord(cwdHint, sessionId, error);
-    ctx.logger?.warn?.("[cohub review] 分析失败（error-*.json " + (errorPath !== null ? "已" : "未") + "落盘）："
-      + String((error as any)?.message ?? error));
+    const logPath = appendErrorLog(cwdHint, sessionId, reason);
+    ctx.logger?.warn?.("[cohub review] 分析失败（error-*.json " + (errorPath !== null ? "已" : "未") + "落盘）：" + reason);
     // 失败也要进索引：用户能一眼看出哪个项目的最近一次复盘失败了
     if (errorPath !== null) {
       try {
@@ -787,7 +856,7 @@ async function runAnalysis(
           jsonPath: errorPath,
           mdPath: null,
           projectCopyPath: null,
-          note: "本次复盘整体失败，仅落盘 error 记录：" + String((error as any)?.message ?? error).slice(0, 200),
+          note: "本次复盘整体失败，仅落盘 error 记录：" + reason.slice(0, 200),
           // 失败路径没有 coverage（report 都没产出），显式传 undefined：索引里保持「未知」，
           // 绝不能用 false 编造「子会话全量」。
           lineageTotal: undefined,
@@ -795,9 +864,11 @@ async function runAnalysis(
         });
       } catch { /* 索引失败不影响错误记录 */ }
     }
-    throw error;
+    return { ok: false, reason, errorPath, logPath };
   } finally {
     clearTimeout(timer);
+    // 外部 signal 可能比分析活得久：必须摘掉监听器，否则每次命令都会在信号上留一个闭包
+    external?.removeEventListener("abort", onExternalAbort);
   }
 }
 
@@ -808,7 +879,7 @@ async function runAnalysisInner(
   cwdHint: string | null,
   withLlm: boolean,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<AnalysisArtifacts> {
   // 与采集器同一套 root 判定：上溯到真根，保证 stats.json 与 report 的 rootSessionId 同源
   const { sessionId: rootId, read: rootRead, failed: rootFailed } = await readRootSession(ctx, sessionId, signal);
   const root = toSessionEvents(rootRead, rootId);
@@ -824,6 +895,7 @@ async function runAnalysisInner(
       const read = await ctx.sessionQuery.readSession(childId, signal);
       children.push(toSessionEvents(read, childId));
     } catch (error) {
+      throwIfAborted(signal); // 取消时不把剩余子会话记成「读失败」，直接中断
       childReadFailed++;
       gaps.push(childId + ": 子会话读取失败（" + String((error as any)?.message ?? error) + "）");
     }
@@ -885,6 +957,9 @@ async function runAnalysisInner(
       analysis.status = "failed";
       analysis.error = result.reason;
       ctx.logger?.warn?.("[cohub review] LLM 分析失败：" + result.reason);
+      // 取消导致的「LLM 失败」不是分析结论，而是中断：抛出去让 runAnalysis 走失败分支，
+      // 不能落入下面正常落盘流程让 handler 报 success（用户取消了却看到「报告已生成」）。
+      throwIfAborted(signal);
     }
   } else {
     analysis.status = "completed";
@@ -935,6 +1010,15 @@ async function runAnalysisInner(
   } catch (error) {
     ctx.logger?.warn?.("[cohub review] 复盘索引更新异常：" + String((error as any)?.message ?? error));
   }
+
+  // 产物回到 handler：文案里的路径 / 条数 / 覆盖情况全部取自真实值，不另猜
+  return {
+    report,
+    jsonPath,
+    mdPath: mdOk ? mdPath : null,
+    projectCopyPath: copy.path,
+    persisted: jsonOk && mdOk,
+  };
 }
 
 /** 从会话上宽松取 cwd（拿不到就 null，由 review-store 记为 "nocwd"） */
@@ -949,45 +1033,144 @@ function cwdHintOf(inv: any): string | null {
 /** 正在分析中的会话 id 集合：防同一会话并发重复跑 LLM */
 const inFlight = new Set<string>();
 
+/** 耗时的人类可读形态：＜1s 给一位小数（--no-llm 路径常见），否则取整秒 */
+export function formatElapsed(ms: number): string {
+  const safe = Number.isFinite(ms) && ms >= 0 ? ms : 0;
+  return safe < 1000 ? (safe / 1000).toFixed(1) + "s" : Math.round(safe / 1000) + "s";
+}
+
+/** findings 的 kind 分布（固定顺序输出，缺项不写 0） */
+function kindBreakdown(report: ReviewReport): string {
+  const order = ["issue", "praise", "observation", "suggestion"] as const;
+  const counts = new Map<string, number>();
+  for (const f of report.findings ?? []) {
+    const kind = typeof f?.kind === "string" ? f.kind : "observation";
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  const parts: string[] = [];
+  for (const kind of order) {
+    const n = counts.get(kind);
+    if (n !== undefined && n > 0) parts.push(kind + " " + n);
+  }
+  // 未知 kind（模型乱给被 normalize 兜住之外的极端情况）也不吞掉，追加在末尾
+  for (const [kind, n] of counts) {
+    if (!(order as readonly string[]).includes(kind)) parts.push(kind + " " + n);
+  }
+  return parts.length > 0 ? "（" + parts.join(" / ") + "）" : "";
+}
+
+/**
+ * 成功文案：一行一信息，用户不必再翻磁盘。
+ *
+ * 关键取舍：
+ *   · **优先展示项目内副本路径**（<cwd>/.cohub/reviews/report-*.md）——它就在项目里，最好找；
+ *     副本没写成功时退回主报告 MD，再退 JSON。
+ *   · analysis.status !== 'completed' 必须明说（interrupted / failed 不能假装成功）。
+ *   · sessionsTruncated=true 时加一行「未分析的子会话不在结论内」，避免结论被外推。
+ */
+export function formatSuccessText(
+  art: AnalysisArtifacts,
+  elapsedMs: number,
+  withLlm: boolean,
+): string {
+  const report = art.report;
+  const lines: string[] = [];
+  const status = report.analysis?.status ?? "completed";
+  const head = status === "completed" ? "报告已生成" : "报告已生成（分析未完整完成）";
+  lines.push(head + "（用时 " + formatElapsed(elapsedMs) + (withLlm ? "" : "，仅统计，跳过 LLM") + "）");
+
+  const findings = Array.isArray(report.findings) ? report.findings : [];
+  lines.push("- 结论：" + findings.length + " 条" + kindBreakdown(report));
+
+  const cov = report.coverage;
+  const analyzed = typeof cov?.sessionsAnalyzed === "number" ? cov.sessionsAnalyzed : undefined;
+  const total = typeof cov?.lineageTotal === "number" ? cov.lineageTotal : undefined;
+  if (analyzed !== undefined && total !== undefined) {
+    const note = cov.samplingNote ? "（" + cov.samplingNote + "）" : "";
+    lines.push("- 覆盖：已分析 " + analyzed + " / 共 " + total + " 个子会话" + note);
+  } else {
+    // 旧口径（无 lineageTotal）时只能说清读到了几个会话，不编造子会话总数
+    lines.push("- 覆盖：已读取 " + (Array.isArray(report.sessions) ? report.sessions.length : 0)
+      + " 个会话（子会话总数未知；根会话 + 子会话）");
+  }
+
+  const reportPath = art.projectCopyPath ?? art.mdPath ?? art.jsonPath;
+  lines.push("- 报告：" + reportPath);
+  if (art.projectCopyPath === null && art.mdPath !== null) {
+    lines.push("- 说明：项目内副本未写入（" + (report.coverage?.gaps?.length ? "见报告缺口" : "cwd 不可用或 .gitignore 冲突") + "），以上为全局目录路径");
+  }
+  if (!art.persisted) {
+    lines.push("- 注意：报告落盘不完整（JSON/MD 至少一个写失败），路径可能不可读");
+  }
+  if (cov?.sessionsTruncated === true) {
+    lines.push("- 提示：**未分析的子会话不在结论内**（结论不得外推到这些子会话）");
+  }
+  if (cov?.inputTruncated === true) {
+    lines.push("- 提示：喂给模型的输入被裁剪过，结论不得外推到未读区间");
+  }
+  if (status !== "completed") {
+    const reason = typeof report.analysis?.error === "string" && report.analysis.error.length > 0
+      ? report.analysis.error
+      : "原因未记录（详见报告 analysis 段）";
+    lines.push("- 状态：" + status + " —— " + reason);
+  }
+  return lines.join("\n");
+}
+
+/** 失败文案：必须给用户可自查的两条路径（错误详情 JSON + _errors.log） */
+export function formatErrorText(
+  outcome: { reason: string; errorPath: string | null; logPath: string | null },
+  elapsedMs: number,
+): string {
+  const lines = ["分析失败：" + outcome.reason + "（用时 " + formatElapsed(elapsedMs) + "）"];
+  if (outcome.errorPath !== null) lines.push("- 错误详情：" + outcome.errorPath);
+  else lines.push("- 错误详情：未落盘（写 error-*.json 失败）");
+  if (outcome.logPath !== null) lines.push("- 错误日志：" + outcome.logPath);
+  else lines.push("- 错误日志：未落盘（写 _errors.log 失败）");
+  return lines.join("\n");
+}
+
 /** 注册 `/cohub-review` 命令（零 turn、不经过模型） */
 export function registerReviewCommand(ctx: any): void {
-  // 契约：handler 必须返回 CommandResult = { kind: 'success' | 'error', text }。
-  // 只返回 { text } 会被宿主 normalizeResult 判为非法（gateway/internal），因此每个分支都带 kind。
-  const handler = (inv: any): { kind: "success" | "error"; text: string } => {
+  // 契约：handler 必须返回 CommandResult = { kind: 'success' | 'error', text }（支持 Promise<CommandResult>，
+  // 宿主会 await）。只返回 { text } 会被宿主 normalizeResult 判为非法（gateway/internal），因此每个分支都带 kind。
+  //
+  // 【阻塞式】await 分析跑完再返回真实结果（详见文件头：实测 pending 不阻塞会话、无网关超时、UI 不禁用输入）。
+  const handler = async (inv: any): Promise<{ kind: "success" | "error"; text: string }> => {
+    const startedAt = Date.now();
+    let sessionId: string | null = null;
+    let cwdHint: string | null = null;
+    let claimed = false;
     try {
-      const sessionId = inv?.agent?.session?.id;
-      if (typeof sessionId !== "string" || sessionId.length === 0) {
+      const sid = inv?.agent?.session?.id;
+      if (typeof sid !== "string" || sid.length === 0) {
         return { kind: "error", text: "无法确定当前会话 id，已跳过复盘。" };
       }
-      if (inFlight.has(sessionId)) {
-        return { kind: "error", text: "上一次分析仍在进行中，请稍候（会话 " + sessionId + "）。" };
+      sessionId = sid;
+      if (inFlight.has(sid)) {
+        return { kind: "error", text: "上一次分析仍在进行中，请稍候（会话 " + sid + "）。" };
       }
       const rawInput = typeof inv?.rawInput === "string" ? inv.rawInput : "";
       const withLlm = !/(^|\s)--no-llm(\s|$)/.test(rawInput);
-      const cwdHint = cwdHintOf(inv);
+      cwdHint = cwdHintOf(inv);
 
-      // fire-and-forget：绝不 await，也绝不让异常冒泡到宿主
-      inFlight.add(sessionId);
-      void (async () => {
-        try {
-          await runAnalysis(ctx, inv?.agent, sessionId, cwdHint, withLlm);
-        } catch (error) {
-          const message = String((error as any)?.message ?? error);
-          // warn 只在看不见的 stderr 里；同时落 _errors.log，让失败在磁盘上可查
-          appendErrorLog(cwdHint, sessionId, message);
-          ctx.logger?.warn?.("[cohub review] 报告生成失败：" + message);
-        } finally {
-          inFlight.delete(sessionId);
-        }
-      })();
+      // 防重入必须占位**在** await 之前：两次阻塞调用否则会真的并行跑两份 LLM
+      inFlight.add(sid);
+      claimed = true;
 
-      const dir = reviewStorePath(cwdHint, sessionId, "").replace(/[\\/]$/, "");
-      return {
-        kind: "success",
-        text: "正在生成报告…（" + (withLlm ? "含一次 LLM 分析" : "仅统计，跳过 LLM") + "）输出目录：" + dir,
-      };
+      const outcome = await runAnalysis({ ctx, agent: inv?.agent, sessionId: sid, cwdHint, withLlm, signal: inv?.signal });
+      if (outcome.ok) {
+        return { kind: "success", text: formatSuccessText(outcome, Date.now() - startedAt, withLlm) };
+      }
+      return { kind: "error", text: formatErrorText(outcome, Date.now() - startedAt) };
     } catch (error) {
-      return { kind: "error", text: "复盘命令启动失败：" + String((error as any)?.message ?? error) };
+      // 兜底：runAnalysis 已内部收口，这里只防「连文案拼接都抛」的极端情况
+      const message = String((error as any)?.message ?? error);
+      if (sessionId !== null) appendErrorLog(cwdHint, sessionId, message);
+      return { kind: "error", text: "复盘命令执行异常：" + message };
+    } finally {
+      // 无论成功/失败/抛错都释放占位，否则该会话永远无法再次复盘
+      if (claimed && sessionId !== null) inFlight.delete(sessionId);
     }
   };
 
