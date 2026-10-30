@@ -296,10 +296,13 @@ export const SUBAGENT_WRITE_PRESET = "cohub-subagent-write";
  *     若返回 undefined 会退化成「继承父 preset」，把父的纯调度 persona 白烧一遍）
  *   - 只读类（explorer/librarian/observer/oracle/planner/council/rule-*）→ readonly preset
  *   - 实施类（fixer/designer/cordis）→ write preset
- *   - co-orchestrator 或任何未命中的名字 → undefined（= 继承父 preset，保持改动前行为）
+ *   - 任何未命中的名字（拼错 / 新增 skill 未登记）→ write preset，**与
+ *     {@link resolveSkillAndRoute} 的兜底角色 co-fixer 保持一致**。此前返回 undefined
+ *     会让子代理继承父会话 preset（co-orchestrator 全量工具面，含 delegate/write/pwsh），
+ *     既与已兜底的「实施类」角色自相矛盾，也把父的纯调度 persona 白烧一遍。
+ *   - co-orchestrator → undefined（= 继承父 preset）
  *
- * 为什么 co-orchestrator 返回 undefined：它本身是委派发起方，被委派时仍需完整工具面；
- * 而且「未知 skill 一律不换 preset」是保守选择 —— 宁可多继承，不可让委派因 preset 缺失而失败。
+ * 为什么 co-orchestrator 返回 undefined：它本身是委派发起方，被委派时仍需完整工具面。
  *
  * @param skillName - 规范化后的 skill 名（如 co-fixer）。
  * @param enabled - 总开关（Config.delegateSubagentPreset.enabled，默认 true）。
@@ -313,7 +316,9 @@ export function resolveSkillAgentPreset(skillName: string | undefined, enabled =
   if (key.length === 0) return SUBAGENT_WRITE_PRESET;
   if (READ_ONLY_SKILLS.has(key)) return SUBAGENT_READONLY_PRESET;
   if (WRITE_SKILLS.has(key)) return SUBAGENT_WRITE_PRESET;
-  return undefined;
+  // 未命中的名字（拼错 / 新增未登记）：兜底走实施类 write preset，与 co-fixer 兜底一致。
+  // 绝不返回 undefined —— 那会让子代理继承父 preset（orchestrator 全量工具面）。
+  return SUBAGENT_WRITE_PRESET;
 }
 
 /**
@@ -376,7 +381,7 @@ export interface SpawnRunSpec {
 /** 一条降级提示（结构化，便于单条/多条合并成一行，不分散在多处拼字符串）。 */
 export interface DegradeNote {
   /** 降级环节标识（去重键：同一环节多次重试只保留最后一次） */
-  id: "preset" | "toolfilter";
+  id: "preset" | "toolfilter" | "skill";
   /** 简短标题，如「子代理 preset 未生效」 */
   what: string;
   /** 后果说明，如「已降级为继承父 preset」 */
@@ -1027,30 +1032,39 @@ class StallWatchdog {
  * 注意：路由查找使用规范化后的 requested（可能为空），而非兜底后的 skill 名 ——
  * 兜底来的 co-fixer 不该冒领用户在路由表里为 co-fixer 配置的 provider/model。
  *
- * @returns fallback=true 表示 skill 缺失/空白、已兜底到 {@link DEFAULT_FALLBACK_SKILL}。
+ * @returns fallback=true 表示 skill 缺失/空白、已兜底到 {@link DEFAULT_FALLBACK_SKILL}；
+ *          note 为可选降级说明（skill 名未匹配 / skill 缺失兜底 / preset 随之回退），
+ *          由调用方推进 degradeNotes，最终出现在工具返回文本里。
  */
 export function resolveSkillAndRoute(
   requestedSkill: string,
   getRoutes: SkillRouteSource,
   ctx: any,
   logger?: any,
-): { skill: CoHubSkill; route: SkillRouteConfig | undefined; fallback: boolean } {
+): { skill: CoHubSkill; route: SkillRouteConfig | undefined; fallback: boolean; note?: string } {
   const requested = (typeof requestedSkill === "string" ? requestedSkill : "").trim();
   const skillName = requested || DEFAULT_FALLBACK_SKILL;
   const fallback = requested.length === 0;
   let skill = COHUB_SKILLS.find(s => s.name === skillName);
+  let note: string | undefined;
   if (!skill) {
     (logger ?? ctx.logger)?.warn?.('delegate: unknown skill "' + skillName + '", falling back to co-fixer');
     skill = COHUB_SKILLS.find(s => s.name === DEFAULT_FALLBACK_SKILL)!;
+    // 拼错 / 未登记的 skill 名：角色与 preset 一起落到 co-fixer（实施类 write preset），
+    // 原因必须回到返回文本，否则调用方只会看到「跑出一个 co-fixer」而不知道是自己写错了名字。
+    note = '传入的 skill 名 "' + skillName + '" 未匹配任何 co-* 代理，已兜底为 '
+      + DEFAULT_FALLBACK_SKILL + "，子代理 preset 同步回退为实施类 " + SUBAGENT_WRITE_PRESET;
   } else if (fallback) {
     (logger ?? ctx.logger)?.warn?.(
       "delegate: skill 未提供（缺字段/空串/纯空白），已兜底为 " + DEFAULT_FALLBACK_SKILL
       + "；schema 已要求必填，出现本告警说明调用绕过了参数校验",
     );
+    note = "skill 未提供（缺字段/空串/纯空白），已兜底为 " + DEFAULT_FALLBACK_SKILL
+      + "，子代理 preset 回退为实施类 " + SUBAGENT_WRITE_PRESET;
   }
   // 路由查找使用规范化后的 requested（可能为空），而非 skillName（兜底后）
   const route = (getRoutes() ?? []).find(s => s.name === requested);
-  return { skill, route, fallback };
+  return { skill, route, fallback, ...(note === undefined ? {} : { note }) };
 }
 
 /**
@@ -1659,7 +1673,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         + " wallMs=" + (schedule?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS));
 
       // ① 按 skill 名精确匹配技能 + 查找路由配置（共享函数；skill 缺失/空白会兜底 co-fixer 并 warn）
-      const { skill, route, fallback: skillFallback } = resolveSkillAndRoute(args.skill, getRoutes, ctx);
+      const { skill, route, fallback: skillFallback, note: skillNote } =
+        resolveSkillAndRoute(args.skill, getRoutes, ctx);
       // label 里的 skill 片段：兜底时显式标 (default:co-fixer)，绝不出现 ":undefined"
       const skillTag = formatSkillLabel(skill, skillFallback);
 
@@ -1681,6 +1696,17 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       // runAttempts 在 result-budget 裁剪**之后**拼到返回文本末尾（当前进程不落盘日志，
       // 只打 warn 等于静默失败 —— 今天为此时踩坑：preset 未声明 / toolFilter 失效都看不见）。
       const degradeNotes: DegradeNote[] = [];
+
+      // ①b skill 名未匹配 / skill 缺失兜底：resolveSkillAndRoute 已把原因写进 note，
+      //     这里登记一条，确保「skill 拼错」这类静默降级经 formatDegradeNotes 出现在返回文本里。
+      if (skillNote !== undefined) {
+        upsertDegradeNote(degradeNotes, {
+          id: "skill",
+          what: "skill 名未命中",
+          effect: "子代理已按兜底角色 " + skill.name + " 执行",
+          reason: skillNote,
+        });
+      }
 
       // ④c 子代理独立精简 preset（按 skill 映射 readonly / write）：undefined = 继承父 preset。
       //     preset 缺失 / 挂载失败由 startSubagentRun 的 fail-soft 重试兜底（去掉 id 再试一次）。
@@ -1904,11 +1930,16 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         }
 
         // ⑧ 重试耗尽（或不可重试）：抛错并回传结构化 cause（通用，不依赖任何环境枚举）
+        //    降级提示（skill 兜底 / preset 回退）也进错误文本：失败路径原先只把信息塞进
+        //    err.cause，调用方看到的是「跑了个不知名的代理」，同样属于静默降级。
+        //    formatDegradeNotes 无降级时返回空串 → message 逐字不变，判定逻辑不受影响。
+        const degradeText = formatDegradeNotes(degradeNotes).replace(/\s+/g, " ");
         const err: any = new Error(
           'delegate: subagent stopped with reason "' + lastReason + '" after ' + retries + ' retry(ies)'
           + (lastDiagnostic === undefined ? "" : "; diagnostic: " + lastDiagnostic)
           + (stallState.last ? "; stalled: " + stallState.last.diagnostics : "")
-          + "; partial: " + lastPartial,
+          + "; partial: " + lastPartial
+          + degradeText,
         );
         err.cause = {
           stopReason: lastReason,
@@ -1919,6 +1950,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           skill: skill.name,
           retries,
           ...(stallState.last ? { stall: stallState.last } : {}),
+          ...(degradeText.length > 0 ? { degrade: degradeText } : {}),
         };
         throw err;
       };
