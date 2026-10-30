@@ -411,7 +411,7 @@ function flattenToOneLine(text: string): string {
  * （破坏单行结构）、带方括号（伪造提示边界）或极长（撑爆返回预算）。
  * 归一后长度有界、恒为单行、不含半角方括号。
  */
-function firstLineClamped(raw: string, maxChars: number): string {
+export function firstLineClamped(raw: string, maxChars: number): string {
   const firstLine = flattenToOneLine(raw.split(/[\r\n]/, 1)[0] ?? "")
     .replace(/\[/g, "［")
     .replace(/\]/g, "］");
@@ -1309,9 +1309,21 @@ export function resolveDelegationDepth(agent: any): number | undefined {
 }
 
 /**
+ * 把一个深度候选值渲染成「原始值(typeof)」诊断片段，如 `undefined(undefined)` / `"0"(string)`。
+ *
+ * 仅用于拒绝路径的 warn：resolveDelegationDepth 会静默跳过非 number 的候选，
+ * 若只报「缺失或非法」，就无法区分**元数据真缺失**与**类型写错（宿主写成字符串 "0"）**。
+ */
+function describeDepthCandidate(value: unknown): string {
+  const kind = value === null ? "null" : typeof value;
+  const shown = typeof value === "string" ? JSON.stringify(value) : String(value);
+  return shown + "(" + kind + ")";
+}
+
+/**
  * 嵌套委派守卫：子代理（depth ≥ MAX_DELEGATION_DEPTH）再派子代理时返回拒绝文案。
  *
- * 只读判定，无副作用（拿不到深度时打一条 `[cohub depth-guard]` warn 并**拒绝**，fail-closed）。
+ * 只读判定，无副作用（拿不到深度时打 `[cohub depth-guard]` warn 并**拒绝**，fail-closed）。
  *
  * @param agent 调用方 agent（`exec.agent`）
  * @param logger 可选日志器（仅用于 warn）
@@ -1321,10 +1333,20 @@ export function guardDelegationDepth(agent: any, logger?: any): string | undefin
   const depth = resolveDelegationDepth(agent);
   if (depth === undefined) {
     // fail-closed：读不到深度就不再乐观放行（否则一条可能无限嵌套的链会继续派生）。
+    // 拒绝前先打出三候选的原始值与 typeof——只有这样「元数据缺失」和「类型错（"0"）」
+    // 在日志里才可区分，否则调用方只能盲猜是编排问题还是宿主写入问题。
+    const header = agent?.session?.header;
+    logger?.warn?.("[cohub depth-guard] 深度候选原始值："
+      + "header.delegationDepth=" + describeDepthCandidate(header?.delegationDepth)
+      + " / options.subagentDepth=" + describeDepthCandidate(agent?.options?.subagentDepth)
+      + " / session.delegationDepth=" + describeDepthCandidate(agent?.session?.delegationDepth)
+      + " / header.origin=" + describeDepthCandidate(header?.origin));
     logger?.warn?.("[cohub depth-guard] 无法读取当前 agent 的嵌套委派深度"
       + "（session.header.delegationDepth / options.subagentDepth 均缺失或非法），按 fail-closed 拒绝本次委派");
     return "拒绝：无法判定当前委派深度，已按 fail-closed 拒绝本次委派（"
       + "session.header.delegationDepth 与 options.subagentDepth 均缺失或非法，且 header.origin 不是 \"subagent\"）。"
+      + "若上面某候选是字符串 \"0\" 之类的类型错误，请修宿主而非排查编排"
+      + "（合法值为 number 且为安全整数）。"
       + "请由主代理直接发起该子任务，或确认宿主已写入 delegationDepth（主代理应为 0）后重试。";
   }
   if (depth < MAX_DELEGATION_DEPTH) return undefined;

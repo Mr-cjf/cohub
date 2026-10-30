@@ -15,6 +15,7 @@ import {
   resolveSkillAgentPreset,
   formatSkillLabel,
   formatDegradeNotes,
+  firstLineClamped,
   DEFAULT_FALLBACK_SKILL,
   guardDelegationDepth,
   DELEGATE_PERSONA,
@@ -31,6 +32,16 @@ import type { CoHubSkill } from "./skills.ts";
 import { contentText } from "./text-utils.ts";
 import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 import { maybeDeferTodoNudge } from "./todo-nudge.ts";
+
+/**
+ * 降级提示里回显 taskId 的字符上限。
+ *
+ * 只作用于提示回显（`[<taskId> <what>，…]`）：taskId 是调用方自由填写的字符串，
+ * 可能带换行（破坏单行）、带半角方括号（伪造提示边界）或极长（撑爆返回预算）。
+ * 归一用 delegate.ts 的 firstLineClamped（取首行 + 压空白 + 方括号转全角 + 截断加 `…`）。
+ * `task.id` 的原始值在结果映射等处**不受此上限影响**——这里只是展示层归一。
+ */
+const BATCH_TASK_ID_ECHO_MAX = 40;
 
 /** 单个批量委派任务 */
 export interface DelegateBatchTask {
@@ -439,8 +450,12 @@ export function createDelegateBatchTool(
       // formatDegradeNotes 无降级时返回空串，故正常路径的返回文本逐字不变。
       const allNotes: DegradeNote[] = [];
       for (const { taskId, notes } of perTaskNotes) {
+        // 回显归一：taskId 是调用方自由填写的字符串（schema 只声明 string），可能带换行、
+        // 半角方括号或极长内容——不归一会破坏 `[...]` 提示结构与单行形态。
+        // 只归一**提示里的回显**：task.id 的原始值在结果映射、`### ${r.id}` 正文等处不受影响。
+        const echoTaskId = firstLineClamped(taskId, BATCH_TASK_ID_ECHO_MAX);
         for (const note of notes) {
-          allNotes.push({ id: note.id, what: taskId + " " + note.what, effect: note.effect, reason: note.reason });
+          allNotes.push({ id: note.id, what: echoTaskId + " " + note.what, effect: note.effect, reason: note.reason });
         }
       }
 
