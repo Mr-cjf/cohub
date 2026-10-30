@@ -1272,9 +1272,10 @@ export async function buildAgentOptions(
 // `delegationDepth` 字段（主会话为 0），本插件取父会话 id 时用的 `exec.agent.session.header.id`
 // 与该对象是同一处，故 `agent.session.header.delegationDepth` 是可靠主来源。
 //
-// 三态（fail-closed）：拿得到且 depth < MAX → 放行；拿得到且 depth ≥ MAX → 直接拒绝；
-// 三处候选全缺失/非法且 header 未标记 `origin === "subagent"` → 同样拒绝：无法判定深度时
-// 做「乐观放行」等于允许一条可能无限嵌套的链继续派生，判错的代价远大于让调用方改用别的方式。
+// 三态（fail-open）：拿得到且 depth < MAX → 放行；拿得到且 depth ≥ MAX → 直接拒绝；
+// 三处候选全缺失/非法且 header 未标记 `origin === "subagent"` → **warn 后放行**（返回 undefined）：
+// 宿主版本差异不该让编排直接瘫痪，深度元数据读不到时按兼容策略继续，只留诊断日志备查。
+// 代价是一条可能无限嵌套的链也能派生（见文件末尾 risk 说明）。
 
 /** 嵌套委派上限：1 = 子代理不可再派子代理（主代理 depth=0 仍可派 1 层） */
 export const MAX_DELEGATION_DEPTH = 1;
@@ -1290,7 +1291,7 @@ export const MAX_DELEGATION_DEPTH = 1;
  * 因此这条兜底只在极老版本上才会生效，语义仍是「我是子代理」。
  *
  * @param agent 调用方 agent（`exec.agent`）
- * @returns 深度；所有候选都取不到时 undefined（调用方据此**拒绝**，见 guardDelegationDepth）
+ * @returns 深度；所有候选都取不到时 undefined（调用方据此**放行**，见 guardDelegationDepth）
  */
 export function resolveDelegationDepth(agent: any): number | undefined {
   const header = agent?.session?.header;
@@ -1311,7 +1312,7 @@ export function resolveDelegationDepth(agent: any): number | undefined {
 /**
  * 把一个深度候选值渲染成「原始值(typeof)」诊断片段，如 `undefined(undefined)` / `"0"(string)`。
  *
- * 仅用于拒绝路径的 warn：resolveDelegationDepth 会静默跳过非 number 的候选，
+ * 仅用于「深度无法判定」路径的 warn：resolveDelegationDepth 会静默跳过非 number 的候选，
  * 若只报「缺失或非法」，就无法区分**元数据真缺失**与**类型写错（宿主写成字符串 "0"）**。
  */
 function describeDepthCandidate(value: unknown): string {
@@ -1323,7 +1324,7 @@ function describeDepthCandidate(value: unknown): string {
 /**
  * 嵌套委派守卫：子代理（depth ≥ MAX_DELEGATION_DEPTH）再派子代理时返回拒绝文案。
  *
- * 只读判定，无副作用（拿不到深度时打 `[cohub depth-guard]` warn 并**拒绝**，fail-closed）。
+ * 只读判定，无副作用（拿不到深度时打 `[cohub depth-guard]` warn 并**放行**，fail-open）。
  *
  * @param agent 调用方 agent（`exec.agent`）
  * @param logger 可选日志器（仅用于 warn）
@@ -1332,22 +1333,20 @@ function describeDepthCandidate(value: unknown): string {
 export function guardDelegationDepth(agent: any, logger?: any): string | undefined {
   const depth = resolveDelegationDepth(agent);
   if (depth === undefined) {
-    // fail-closed：读不到深度就不再乐观放行（否则一条可能无限嵌套的链会继续派生）。
-    // 拒绝前先打出三候选的原始值与 typeof——只有这样「元数据缺失」和「类型错（"0"）」
-    // 在日志里才可区分，否则调用方只能盲猜是编排问题还是宿主写入问题。
+    // fail-open：读不到深度时只 warn 后放行（与 commit 6c5c968 之前的行为一致）——宿主版本
+    // 差异或元数据缺口不该让整条编排链拒绝服务。放行前仍打出三候选的原始值与 typeof，
+    // 这样「元数据缺失」和「类型错（"0"）」在日志里可区分，排障照旧可用。
     const header = agent?.session?.header;
     logger?.warn?.("[cohub depth-guard] 深度候选原始值："
       + "header.delegationDepth=" + describeDepthCandidate(header?.delegationDepth)
       + " / options.subagentDepth=" + describeDepthCandidate(agent?.options?.subagentDepth)
       + " / session.delegationDepth=" + describeDepthCandidate(agent?.session?.delegationDepth)
       + " / header.origin=" + describeDepthCandidate(header?.origin));
-    logger?.warn?.("[cohub depth-guard] 无法读取当前 agent 的嵌套委派深度"
-      + "（session.header.delegationDepth / options.subagentDepth 均缺失或非法），按 fail-closed 拒绝本次委派");
-    return "拒绝：无法判定当前委派深度，已按 fail-closed 拒绝本次委派（"
-      + "session.header.delegationDepth 与 options.subagentDepth 均缺失或非法，且 header.origin 不是 \"subagent\"）。"
-      + "若上面某候选是字符串 \"0\" 之类的类型错误，请修宿主而非排查编排"
-      + "（合法值为 number 且为安全整数）。"
-      + "请由主代理直接发起该子任务，或确认宿主已写入 delegationDepth（主代理应为 0）后重试。";
+    logger?.warn?.("[cohub depth-guard] 无法判定委派深度，按兼容策略放行（fail-open）"
+      + "：session.header.delegationDepth / options.subagentDepth / session.delegationDepth 均缺失或非法，"
+      + "且 header.origin 不是 \"subagent\"；本次委派继续执行，嵌套上限不再生效。"
+      + "若上面某候选是字符串 \"0\" 之类的类型错误，请修宿主（合法值为 number 且为安全整数）");
+    return undefined;
   }
   if (depth < MAX_DELEGATION_DEPTH) return undefined;
   return "拒绝：子代理不可再派子代理（当前嵌套 depth=" + depth + "，上限 " + MAX_DELEGATION_DEPTH
