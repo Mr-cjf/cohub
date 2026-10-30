@@ -1272,7 +1272,9 @@ export async function buildAgentOptions(
 // `delegationDepth` 字段（主会话为 0），本插件取父会话 id 时用的 `exec.agent.session.header.id`
 // 与该对象是同一处，故 `agent.session.header.delegationDepth` 是可靠主来源。
 //
-// 三态：拿得到 → depth ≥ MAX 时**直接拒绝**；拿不到 → 只 warn、不拦截（避免误伤老宿主）。
+// 三态（fail-closed）：拿得到且 depth < MAX → 放行；拿得到且 depth ≥ MAX → 直接拒绝；
+// 三处候选全缺失/非法且 header 未标记 `origin === "subagent"` → 同样拒绝：无法判定深度时
+// 做「乐观放行」等于允许一条可能无限嵌套的链继续派生，判错的代价远大于让调用方改用别的方式。
 
 /** 嵌套委派上限：1 = 子代理不可再派子代理（主代理 depth=0 仍可派 1 层） */
 export const MAX_DELEGATION_DEPTH = 1;
@@ -1288,7 +1290,7 @@ export const MAX_DELEGATION_DEPTH = 1;
  * 因此这条兜底只在极老版本上才会生效，语义仍是「我是子代理」。
  *
  * @param agent 调用方 agent（`exec.agent`）
- * @returns 深度；所有候选都取不到时 undefined（调用方据此只 warn、不拦截）
+ * @returns 深度；所有候选都取不到时 undefined（调用方据此**拒绝**，见 guardDelegationDepth）
  */
 export function resolveDelegationDepth(agent: any): number | undefined {
   const header = agent?.session?.header;
@@ -1309,7 +1311,7 @@ export function resolveDelegationDepth(agent: any): number | undefined {
 /**
  * 嵌套委派守卫：子代理（depth ≥ MAX_DELEGATION_DEPTH）再派子代理时返回拒绝文案。
  *
- * 只读判定，无副作用（拿不到深度时打一条 `[cohub depth-guard]` warn 后放行）。
+ * 只读判定，无副作用（拿不到深度时打一条 `[cohub depth-guard]` warn 并**拒绝**，fail-closed）。
  *
  * @param agent 调用方 agent（`exec.agent`）
  * @param logger 可选日志器（仅用于 warn）
@@ -1318,9 +1320,12 @@ export function resolveDelegationDepth(agent: any): number | undefined {
 export function guardDelegationDepth(agent: any, logger?: any): string | undefined {
   const depth = resolveDelegationDepth(agent);
   if (depth === undefined) {
+    // fail-closed：读不到深度就不再乐观放行（否则一条可能无限嵌套的链会继续派生）。
     logger?.warn?.("[cohub depth-guard] 无法读取当前 agent 的嵌套委派深度"
-      + "（session.header.delegationDepth 缺失），本次放行、不做硬拦截");
-    return undefined;
+      + "（session.header.delegationDepth / options.subagentDepth 均缺失或非法），按 fail-closed 拒绝本次委派");
+    return "拒绝：无法判定当前委派深度，已按 fail-closed 拒绝本次委派（"
+      + "session.header.delegationDepth 与 options.subagentDepth 均缺失或非法，且 header.origin 不是 \"subagent\"）。"
+      + "请由主代理直接发起该子任务，或确认宿主已写入 delegationDepth（主代理应为 0）后重试。";
   }
   if (depth < MAX_DELEGATION_DEPTH) return undefined;
   return "拒绝：子代理不可再派子代理（当前嵌套 depth=" + depth + "，上限 " + MAX_DELEGATION_DEPTH

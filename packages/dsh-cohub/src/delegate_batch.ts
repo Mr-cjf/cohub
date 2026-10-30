@@ -14,6 +14,7 @@ import {
   resolveSkillToolFilter,
   resolveSkillAgentPreset,
   formatSkillLabel,
+  formatDegradeNotes,
   DEFAULT_FALLBACK_SKILL,
   guardDelegationDepth,
   DELEGATE_PERSONA,
@@ -23,6 +24,7 @@ import {
   type SkillRouteSource,
   type DelegateConfig,
   type SkillRouteConfig,
+  type DegradeNote,
 } from "./delegate.ts";
 import { applyResultBudget, approxTokens, resolveResultBudget, resolveSkillResultMaxChars } from "./result-budget.ts";
 import type { CoHubSkill } from "./skills.ts";
@@ -61,6 +63,10 @@ export interface DelegateBatchResult {
   stopReason?: string;
   /** SubagentResult.diagnostic 原样透传（provider 侧失败详情） */
   diagnostic?: string;
+  /** 本任务的降级提示（已 formatDegradeNotes 渲染；无降级时省略）。
+   *  仅作结构化字段供程序化排查——返回文本里的降级提示统一在末尾合并输出一次，
+   *  这里不再重复拼进 output，避免同一提示出现两遍。 */
+  degrade?: string;
 }
 
 /** 批量委派最大任务数（硬上限，防止意外超量并行压垮系统） */
@@ -185,7 +191,22 @@ export function createDelegateBatchTool(
           // 而不是从「逐个收集结果」的 await 时刻开始计——后者会让第 i 个 task 拿到
           // 从第 i-1 个 settle 起算的完整预算，整批最坏退化为 N × wallClockBudgetMs。
           const startedAt = Date.now();
-          const { skill, route } = resolveSkillAndRoute(requestedSkill, getRoutes, ctx, ctx.logger);
+          const { skill, route, note: skillNote } = resolveSkillAndRoute(requestedSkill, getRoutes, ctx, ctx.logger);
+          // 降级原因收集槽：**每个 task 独立一个数组**（对应 delegate 的单次 execute）。
+          // 若整批共用一个数组，同一 id（如 "skill"）的 note 会被后一个 task 覆盖，
+          // 前面任务的降级就再也回不到返回文本里了。
+          const taskNotes: DegradeNote[] = [];
+          // ① skill 名未命中 / skill 缺失兜底：resolveSkillAndRoute 已把原因写进 note，
+          //    这里登记一条，确保「skill 拼错」这类静默降级出现在 batch 返回文本里。
+          //    （upsertDegradeNote 未导出，且每任务只登记一条，直接 push 等价。）
+          if (skillNote !== undefined) {
+            taskNotes.push({
+              id: "skill",
+              what: "skill 名未命中",
+              effect: "子代理已按兜底角色 " + skill.name + " 执行",
+              reason: skillNote,
+            });
+          }
           // label / 结果里的 skill 片段：兜底时显式标 (default:co-fixer)，绝不出现 ":undefined"
           const skillTag = formatSkillLabel(skill, skillFallback);
           const promptText = buildDelegatePrompt({
@@ -224,21 +245,31 @@ export function createDelegateBatchTool(
               ...(agentPreset !== undefined ? { agentPreset } : {}),
               ...(agentOptions ? { agentOptions } : {}),
               signal: ac.signal,
+              // 降级原因收集槽：preset / toolFilter 的 fail-soft 会往这里登记原因，
+              // 少了这一行，batch 路径的 preset/toolFilter 降级就只剩 warn（等同静默）。
+              degradeNotes: taskNotes,
             });
-            return { taskId, skillName: skill.name, skillTag, task, run, ac, onExecAbort, startedAt, startError: undefined };
+            return { taskId, skillName: skill.name, skillTag, task, taskNotes, run, ac, onExecAbort, startedAt, startError: undefined };
           } catch (startError) {
             // start 失败：清理 onExecAbort 监听器，返回带错误标记的对象
             if (onExecAbort && exec.signal) {
               try { exec.signal.removeEventListener("abort", onExecAbort); } catch { /* 可能已释放 */ }
             }
-            return { taskId, skillName: skill.name, skillTag, task, run: undefined, ac, onExecAbort: null, startedAt, startError };
+            return { taskId, skillName: skill.name, skillTag, task, taskNotes, run: undefined, ac, onExecAbort: null, startedAt, startError };
           }
         }),
       );
 
       // 收集结果（最外层 try-finally 确保所有 runs 被清理）
       const results: DelegateBatchResult[] = [];
-      const runs: Array<{ run: any; ac: AbortController; onExecAbort: (() => void) | null; taskId: string; skillName: string; skillTag: string; startedAt: number }> = [];
+      const runs: Array<{ run: any; ac: AbortController; onExecAbort: (() => void) | null; taskId: string; skillName: string; skillTag: string; taskNotes: DegradeNote[]; startedAt: number }> = [];
+      // 每任务的降级原因（按 starts 顺序），供末尾统一合并成一段提示
+      const perTaskNotes: Array<{ taskId: string; notes: DegradeNote[] }> = [];
+      // 结果对象上的 degrade 字段：渲染后逐字 trim（末尾合并提示另走 formatDegradeNotes 原样前缀）
+      const degradeField = (notes: DegradeNote[]): { degrade?: string } => {
+        const text = formatDegradeNotes(notes).trim();
+        return text.length > 0 ? { degrade: text } : {};
+      };
 
       try {
         for (const s of starts) {
@@ -249,23 +280,26 @@ export function createDelegateBatchTool(
           const val = s.value as any;
           if (val.startError) {
             // start 失败：记录失败结果，不加入 runs 列表（没有 run 对象）
+            perTaskNotes.push({ taskId: val.taskId, notes: val.taskNotes ?? [] });
             results.push({
               id: val.taskId,
               skill: val.skillTag,
               status: "error",
               error: val.startError instanceof Error ? val.startError.message : String(val.startError),
+              ...degradeField(val.taskNotes ?? []),
             });
             continue;
           }
-          const { run, taskId, skillName, skillTag, ac, onExecAbort, startedAt } = val;
-          runs.push({ run, taskId, skillName, skillTag, ac, onExecAbort, startedAt });
+          const { run, taskId, skillName, skillTag, taskNotes, ac, onExecAbort, startedAt } = val;
+          runs.push({ run, taskId, skillName, skillTag, taskNotes, ac, onExecAbort, startedAt });
+          perTaskNotes.push({ taskId, notes: taskNotes });
 
           // 防 unhandledRejection
           run.result.catch(() => {});
         }
 
         // 逐个 await run.result（带独立超时和独立 AbortController）
-        for (const { run, taskId, skillName, skillTag, ac, startedAt } of runs) {
+        for (const { run, taskId, skillName, skillTag, taskNotes, ac, startedAt } of runs) {
           let outcome: any;
           let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -305,6 +339,7 @@ export function createDelegateBatchTool(
                 skill: skillTag,
                 status: "completed",
                 result: resultText,
+                ...degradeField(taskNotes),
               });
             } else {
               const diag = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
@@ -316,6 +351,7 @@ export function createDelegateBatchTool(
                   + (diag === undefined ? "" : `; diagnostic: ${diag}`),
                 stopReason: outcome?.stopReason,
                 ...(diag === undefined ? {} : { diagnostic: diag }),
+                ...degradeField(taskNotes),
               });
             }
           } catch (e) {
@@ -324,6 +360,7 @@ export function createDelegateBatchTool(
               skill: skillTag,
               status: "error",
               error: e instanceof Error ? e.message : String(e),
+              ...degradeField(taskNotes),
             });
           } finally {
             if (timer) clearTimeout(timer);
@@ -394,7 +431,20 @@ export function createDelegateBatchTool(
       // 批量结果已成型 → 注入「立刻 todo_write 回写」提醒（fail-soft，宿主不支持就静默跳过）
       maybeDeferTodoNudge(exec);
 
-      return statsLine + output;
+      // 降级提示合并：**逐任务**渲染（每任务独立 notes，不会互相覆盖），并在每个
+      // what 前带 taskId，让「哪个任务降级了」在返回文本里可见。
+      // 关键：本段拼在 statsLine + output **之后**，即 applyResultBudget 已裁剪完毕——
+      // 因此 batchTotalMaxChars 再小也切不到它（若放进 output 内会被从尾部裁掉，
+      // 等于把本次修复的静默降级缺陷原样搬到小预算场景）。
+      // formatDegradeNotes 无降级时返回空串，故正常路径的返回文本逐字不变。
+      const allNotes: DegradeNote[] = [];
+      for (const { taskId, notes } of perTaskNotes) {
+        for (const note of notes) {
+          allNotes.push({ id: note.id, what: taskId + " " + note.what, effect: note.effect, reason: note.reason });
+        }
+      }
+
+      return statsLine + output + formatDegradeNotes(allNotes);
     },
   });
 }

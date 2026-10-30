@@ -103,7 +103,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
   // config.maxRetries=0，但 settings 给 2 → 应重试 2 次（spawn=3）
   const tool = createDelegateTool(ctx, () => [], { delegateRetry: { maxRetries: 0 } }, () => ({ delegateRetry: { maxRetries: 2, retryDelayMs: 1 } }));
   let err: any = null;
-  try { await tool.execute({ skill: "co-fixer", prompt: "任务" }, { agent: { id: "p" }, signal: new AbortController().signal }); } catch (e) { err = e; }
+  try { await tool.execute({ skill: "co-fixer", prompt: "任务" }, { agent: { id: "p", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal }); } catch (e) { err = e; }
   check("settings.maxRetries=2 → spawn=3", spawnCount === 3);
   check("cause.retries=2", err?.cause?.retries === 2);
 
@@ -111,7 +111,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
   spawnCount = 0;
   const tool2 = createDelegateTool(ctx, () => [], { delegateRetry: { maxRetries: 0 } });
   err = null;
-  try { await tool2.execute({ skill: "co-fixer", prompt: "任务" }, { agent: { id: "p" }, signal: new AbortController().signal }); } catch (e) { err = e; }
+  try { await tool2.execute({ skill: "co-fixer", prompt: "任务" }, { agent: { id: "p", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal }); } catch (e) { err = e; }
   check("config.maxRetries=0 → spawn=1", spawnCount === 1);
   check("cause.retries=0", err?.cause?.retries === 0);
 
@@ -167,7 +167,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
   const tool3 = createDelegateTool(stallCtx, () => [], {}, () => ({
     delegateRetry: { maxRetries: 1, retryDelayMs: 1, stall: { enabled: true, consecutiveErrors: 3, checkIntervalMs: 50 } },
   }));
-  const out = await tool3.execute({ skill: "co-fixer", prompt: "任务" }, { agent: { id: "p" }, signal: new AbortController().signal });
+  const out = await tool3.execute({ skill: "co-fixer", prompt: "任务" }, { agent: { id: "p", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal });
   check("settings.stall 生效 → 提前中止后重试成功", out === "OK" && spawnCount === 2);
 }
 

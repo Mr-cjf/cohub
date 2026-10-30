@@ -138,7 +138,7 @@ function check(name: string, cond: boolean) {
   // ① 首次 execute：maxRetries=0 → aborted 不重试，抛错
   let err1: any = null;
   try {
-    await tool.execute({ skill: "co-fixer", prompt: "任务 A" }, { agent: { id: "p" }, signal: new AbortController().signal });
+    await tool.execute({ skill: "co-fixer", prompt: "任务 A" }, { agent: { id: "p", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal });
   } catch (e) { err1 = e; }
   check("maxRetries=0 → 单次尝试后抛错", err1 && err1.cause?.retries === 0 && spawnCount === 1);
   check("错误信息含 aborted", err1 && String(err1.message).includes("aborted"));
@@ -150,19 +150,19 @@ function check(name: string, cond: boolean) {
   check("提交后 get().maxRetries=1", parsed.delegateRetry.get().maxRetries === 1);
 
   // ③ 下次 execute：aborted 后因 maxRetries=1 重试 1 次并成功（spawn 共 2 次）
-  const out2 = await tool.execute({ skill: "co-fixer", prompt: "任务 B" }, { agent: { id: "p" }, signal: new AbortController().signal });
+  const out2 = await tool.execute({ skill: "co-fixer", prompt: "任务 B" }, { agent: { id: "p", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal });
   check("volatile 更新后下次 execute 重试生效（spawn=2）", out2 === "ok-retry" && spawnCount === 2);
 
   // ④ AbortSignal：exec.signal 已中止 → start 请求携带已中止 signal（delegate 原样转发链）
   const ac = new AbortController();
   ac.abort();
-  await tool.execute({ skill: "co-fixer", prompt: "任务 C" }, { agent: { id: "p" }, signal: ac.signal });
+  await tool.execute({ skill: "co-fixer", prompt: "任务 C" }, { agent: { id: "p", session: { header: { delegationDepth: 0 } } }, signal: ac.signal });
   check("已中止信号转发到子代理 start 请求", forwardedAborted);
 
   // ⑤ reasoningEffort 路由（只配强度、不配 provider/model）经 volatile 提交后下一次 execute 生效
   const nextEffort = Config({ skills: [{ name: "co-fixer", reasoningEffort: "low" }] });
   updateVolatile(parsed.skills, nextEffort.skills);
-  await tool.execute({ skill: "co-fixer", prompt: "任务 D" }, { agent: { id: "p" }, signal: new AbortController().signal });
+  await tool.execute({ skill: "co-fixer", prompt: "任务 D" }, { agent: { id: "p", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal });
   check("只配 reasoningEffort → 子代理 start 收到 agentOptions.reasoningEffort",
     lastAgentOptions?.reasoningEffort === "low");
   check("只配 reasoningEffort 时不覆盖 provider/model",
@@ -194,7 +194,7 @@ function check(name: string, cond: boolean) {
   const batchTool: any = createDelegateBatchTool(ctx, () => [], {});
   const out: any = await batchTool.execute(
     { tasks: [{ skill: "co-explorer", prompt: "任务 1" }, { skill: "co-fixer", prompt: "任务 2" }] },
-    { agent: { id: "p-batch" }, signal: new AbortController().signal },
+    { agent: { id: "p-batch", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal },
   );
   check("delegate_batch 在仅 startActivation 下 spawn 2 次", batchSpawns === 2);
   check("delegate_batch 每个 spec 都传 delivery=caller", specs.every(s => s?.delivery === "caller"));
@@ -228,7 +228,7 @@ function check(name: string, cond: boolean) {
   const batchTool: any = createDelegateBatchTool(ctx, () => [], {});
   const out: any = await batchTool.execute(
     { tasks: [{ skill: "co-fixer", prompt: "任务 1" }] },
-    { agent: { id: "p-batch-diag" }, signal: new AbortController().signal },
+    { agent: { id: "p-batch-diag", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal },
   );
   check("delegate_batch 输出含 diagnostic 原文", String(out).includes(DIAG));
   check("delegate_batch 输出含 diagnostic: 标签", String(out).includes("diagnostic: " + DIAG));

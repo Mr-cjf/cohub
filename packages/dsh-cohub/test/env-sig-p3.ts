@@ -20,7 +20,8 @@ const VERIFIED_MARKER = "--- 执行器环境契约（本环境已验证） ---";
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 function makeExec() {
-  return { agent: { id: "parent-1" }, signal: new AbortController().signal };
+  // delegationDepth: 0 = 主代理（depth guard fail-closed 后，桩必须显式声明身份）
+  return { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal };
 }
 
 /** 把 0.2.1 activation spec 还原成逻辑 request（persona 前置块剥离），供各用例的 startImpl 复用 */

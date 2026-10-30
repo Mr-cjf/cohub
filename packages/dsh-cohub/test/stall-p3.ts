@@ -16,7 +16,8 @@ async function waitUntil(fn: () => boolean, timeoutMs = 3000) {
 }
 
 function makeExec() {
-  return { agent: { id: "parent-1" }, signal: new AbortController().signal };
+  // delegationDepth: 0 = 主代理（depth guard fail-closed 后，桩必须显式声明身份）
+  return { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal };
 }
 
 /** fake ctx：subagents（0.2.1 startActivation 形态，与宿主真实运行时一致，无 start）
@@ -341,7 +342,7 @@ function check(name: string, cond: boolean) {
   const tool = createDelegateTool(ctx, () => [], { delegateRetry: { stall: { enabled: true, checkIntervalMs: 50 } } });
   const preAborted = new AbortController(); preAborted.abort();
   let err: any = null;
-  try { await tool.execute({ skill: "co-fixer", prompt: "任务" }, { agent: { id: "parent-1" }, signal: preAborted.signal }); } catch (e) { err = e; }
+  try { await tool.execute({ skill: "co-fixer", prompt: "任务" }, { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: preAborted.signal }); } catch (e) { err = e; }
   check("T3a: start 抛错被归一为 aborted", err?.cause?.stopReason === "aborted");
   check("T3a: spawn 被调用一次（随即预中止抛错）", spawnCount === 1);
 }
@@ -356,7 +357,7 @@ function check(name: string, cond: boolean) {
   });
   const execCtl = new AbortController();
   const tool = createDelegateTool(ctx, () => [], { delegateRetry: { stall: { enabled: true, checkIntervalMs: 50 } } });
-  const p = tool.execute({ skill: "co-fixer", prompt: "任务" }, { agent: { id: "parent-1" }, signal: execCtl.signal });
+  const p = tool.execute({ skill: "co-fixer", prompt: "任务" }, { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: execCtl.signal });
   await waitUntil(() => spawnCount >= 1);
   await sleep(5);
   execCtl.abort(); // 父中止 → 转发内部 ac → run.result 以 aborted settle

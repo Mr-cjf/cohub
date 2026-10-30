@@ -82,7 +82,7 @@ const fakeCtx = {
 const delegateTool = createDelegateTool(fakeCtx, () => []);
 await delegateTool.execute(
   { skill: 'co-fixer', prompt: '请修改 src/foo.ts 的拼写错误' },
-  { agent: { id: 'parent' }, signal: new AbortController().signal },
+  { agent: { id: 'parent', session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal },
 );
 const okDelegate = capturedPrompt.includes(fixer.brief)
   && capturedPrompt.includes('--- 你的具体任务 ---')

@@ -94,7 +94,8 @@ function makeCtx(
 }
 
 function makeExec() {
-  return { agent: { id: "parent-1" }, signal: new AbortController().signal };
+  // delegationDepth: 0 = 主代理（depth guard fail-closed 后，桩必须显式声明身份）
+  return { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal };
 }
 
 let pass = 0;

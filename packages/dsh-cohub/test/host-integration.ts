@@ -154,7 +154,7 @@ async function buildHost() {
 
   const out1 = await delegate.execute(
     { skill: "co-fixer", prompt: "任务甲" },
-    { agent: { id: "parent-1" }, signal: new AbortController().signal },
+    { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal },
   );
   check("真实 execute 返回子代理结果", out1 === "ok-child");
   check("子代理 start 收到委派 label", calls[0]?.label === "delegate:co-fixer");
@@ -168,7 +168,7 @@ async function buildHost() {
   check("提交后 schedule.get().batch=9", entry.fiber?.config?.schedule?.get?.()?.maxParallelBatch === 9);
   await delegate.execute(
     { skill: "co-fixer", prompt: "任务乙" },
-    { agent: { id: "parent-1" }, signal: new AbortController().signal },
+    { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal },
   );
   check("更新后下一 execute 仍正常（spawn 第二次）", calls.length === 2);
   // delegate 的 resolveRuntimeConfig 读取 settingsNow.schedule（getSettings() = currentSettings()），
@@ -186,7 +186,7 @@ async function buildHost() {
   } });
   await delegate.execute(
     { skill: "co-fixer", prompt: "任务丙" },
-    { agent: { id: "parent-1" }, signal: new AbortController().signal },
+    { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal },
   );
   check("提交 reasoningEffort 后下一 execute 转发 agentOptions.reasoningEffort",
     calls[2]?.agentOptions?.reasoningEffort === "low");
@@ -447,7 +447,7 @@ async function buildHost() {
   const parentAc = new AbortController();
   const execPromise = delegate.execute(
     { skill: "co-fixer", prompt: "长任务" },
-    { agent: { id: "parent-delegate" }, signal: parentAc.signal },
+    { agent: { id: "parent-delegate", session: { header: { delegationDepth: 0 } } }, signal: parentAc.signal },
   ).then(
     (v: any) => ({ ok: true, value: v }),
     (e: any) => ({ ok: false, error: e }),
