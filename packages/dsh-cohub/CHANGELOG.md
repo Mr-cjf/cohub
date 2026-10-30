@@ -2,6 +2,18 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.10.4] - 2026-10-30
+
+### 修复
+
+- **委派给未知 skill 名会继承 orchestrator 全量工具面**：`delegate` 传入无法识别的 skill 名时，兜底逻辑退回 orchestrator preset，子代理因此在只该写文档或改代码的场景里拿到了编排者的全部工具。现在兜底收窄为 write preset，并把兜底原因写进返回文本。对使用者的影响：skill 名拼错不会再把超出所需的权限交给子代理，且从返回结果就能看出发生了降级。
+- **降级提示中回显的 skill 名会破坏提示结构**：skill 名是调用方自由填写的字符串，带换行、超长内容或半角方括号时会撑破提示的单行形态与 `[...]` 结构。现在回显前统一归一：只取首行、连续空白压成单个空格、截断到 80 字符、半角方括号转全角。
+- **`delegate_batch` 降级提示中回显的 taskId 会破坏提示结构**：原因同上（换行／半角方括号／超长），现同样走归一，上限 40 字符；`task.id` 的原始值在结果映射等处不受影响。
+
+### 变更
+
+- **无法判定委派深度时改为按兼容策略放行**：深度守卫在三处候选（`header.delegationDepth`、`options.subagentDepth`、`session.delegationDepth`）全部缺失或非法、且 `header.origin` 非 subagent 时，曾改为 fail-closed 直接拒绝，实测宿主元数据缺口会连带瘫痪整条编排链，故回滚为 fail-open：warn 后放行。同时保留诊断 warn，打印四个候选的原始值与 `typeof`，便于区分「元数据缺失」与「类型写错（如字符串 `"0"`）」；拒绝文案也补了对应提示。`depth=0` 放行、`depth>=1` 拒绝、`origin` 为 subagent 时兜底为 1 仍拒绝这三条不变。
+
 ## [0.10.3] - 2026-10-28
 
 ### 变更
