@@ -386,12 +386,40 @@ export interface DegradeNote {
   what: string;
   /** 后果说明，如「已降级为继承父 preset」 */
   effect: string;
-  /** 原因（已截断到 200 字符的第一行） */
+  /**
+   * 原因（**单行**，最多 200 字符，超出时末尾加 `…`；半角 `[` `]` 被换成全角）
+   *
+   * 由 {@link describeDegradeReason} 归一，渲染时 {@link formatDegradeNotes} 再归一一次（双保险）。
+   */
   reason: string;
 }
 
+/** 回显 skill 名的字符上限：超出即截断加 `…`（名字本身极短，超长一定是异常输入）。 */
+const SKILL_NAME_ECHO_MAX = 80;
+
+/** 把文本压成单行（所有空白压成一个空格并去掉首尾）：渲染前的兜底归一。 */
+function flattenToOneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 /**
- * 降级原因文本归一：只取 error.message 第一行并压平空白，截断到 200 字符。
+ * 回显文本归一：只取首行（遇 `\r` / `\n` 截断）、把空白压成单空格、方括号换成全角
+ * （避免伪造 `[` / `]` 边框）、按字符数截断（超出加 `…`）。
+ * 供「降级原因」与「原样回显的用户输入」（如 skill 名）共用。
+ *
+ * 为什么要归一：这类文本会直接拼进返回文本的 `[...]` 提示里，原始输入可能带换行
+ * （破坏单行结构）、带方括号（伪造提示边界）或极长（撑爆返回预算）。
+ * 归一后长度有界、恒为单行、不含半角方括号。
+ */
+function firstLineClamped(raw: string, maxChars: number): string {
+  const firstLine = flattenToOneLine(raw.split(/[\r\n]/, 1)[0] ?? "")
+    .replace(/\[/g, "［")
+    .replace(/\]/g, "］");
+  return firstLine.length > maxChars ? firstLine.slice(0, maxChars) + "…" : firstLine;
+}
+
+/**
+ * 降级原因文本归一：只取 error.message 第一行并压平空白，截断到 200 字符（超出加 `…`）。
  *
  * 既去掉堆栈噪音，也不把内部路径/长上下文外泄。与后台降级（describeBgFallback）
  * 同一套取法 —— 那条路径已经证明「原因必须回到工具返回文本」才看得见。
@@ -399,9 +427,8 @@ export interface DegradeNote {
 function describeDegradeReason(error: unknown): string {
   const message = (error as any)?.message;
   const raw = typeof message === "string" && message.length > 0 ? message : String(error);
-  const firstLine = (raw.split(/\r?\n/)[0] ?? "").replace(/\s+/g, " ").trim();
-  const text = firstLine.length > 0 ? firstLine : "unknown";
-  return text.length > 200 ? text.slice(0, 200) : text;
+  const text = firstLineClamped(raw, 200);
+  return text.length > 0 ? text : "unknown";
 }
 
 /**
@@ -413,11 +440,17 @@ function describeDegradeReason(error: unknown): string {
  */
 export function formatDegradeNotes(notes: readonly DegradeNote[] | undefined): string {
   if (notes === undefined || notes.length === 0) return "";
+  // 兜底渲染兜底：无论 reason 来自哪条路径（未来新增调用点可能绕过 describeDegradeReason），
+  // 这里统一再压成单行并限长，确保任何 reason 都不会带换行、也不会破坏 `[...]` 结构。
+  const reasonOf = (note: DegradeNote): string => {
+    const flat = firstLineClamped(String(note.reason ?? ""), 200);
+    return flat.length > 0 ? flat : "unknown";
+  };
   if (notes.length === 1) {
     const only = notes[0]!;
-    return "\n\n[" + only.what + "，" + only.effect + "：" + only.reason + "]";
+    return "\n\n[" + only.what + "，" + only.effect + "：" + reasonOf(only) + "]";
   }
-  return "\n\n[降级提示：" + notes.map(n => n.what + "，" + n.effect + "（" + n.reason + "）").join("；") + "]";
+  return "\n\n[降级提示：" + notes.map(n => n.what + "，" + n.effect + "（" + reasonOf(n) + "）").join("；") + "]";
 }
 
 /**
@@ -1045,6 +1078,10 @@ export function resolveSkillAndRoute(
   const requested = (typeof requestedSkill === "string" ? requestedSkill : "").trim();
   const skillName = requested || DEFAULT_FALLBACK_SKILL;
   const fallback = requested.length === 0;
+  // 回显用的 skill 名：先归一（首行 / 压空白 / 截断到 80 字符）再拼进 note。
+  // 原始名字来自模型输入，可能超长、带换行或带 `]`，原样拼接会破坏返回文本的
+  // `[...]` 单行结构，并能绕过结果预算；归一后长度有界、恒为单行。
+  const echoName = firstLineClamped(skillName, SKILL_NAME_ECHO_MAX) || "unknown";
   let skill = COHUB_SKILLS.find(s => s.name === skillName);
   let note: string | undefined;
   if (!skill) {
@@ -1052,7 +1089,7 @@ export function resolveSkillAndRoute(
     skill = COHUB_SKILLS.find(s => s.name === DEFAULT_FALLBACK_SKILL)!;
     // 拼错 / 未登记的 skill 名：角色与 preset 一起落到 co-fixer（实施类 write preset），
     // 原因必须回到返回文本，否则调用方只会看到「跑出一个 co-fixer」而不知道是自己写错了名字。
-    note = '传入的 skill 名 "' + skillName + '" 未匹配任何 co-* 代理，已兜底为 '
+    note = '传入的 skill 名 "' + echoName + '" 未匹配任何 co-* 代理，已兜底为 '
       + DEFAULT_FALLBACK_SKILL + "，子代理 preset 同步回退为实施类 " + SUBAGENT_WRITE_PRESET;
   } else if (fallback) {
     (logger ?? ctx.logger)?.warn?.(
