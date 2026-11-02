@@ -273,7 +273,7 @@ export function createDelegateBatchTool(
 
       // 收集结果（最外层 try-finally 确保所有 runs 被清理）
       const results: DelegateBatchResult[] = [];
-      const runs: Array<{ run: any; ac: AbortController; onExecAbort: (() => void) | null; taskId: string; skillName: string; skillTag: string; taskNotes: DegradeNote[]; startedAt: number }> = [];
+      const runs: Array<{ run: any; safeDispose: () => void; ac: AbortController; onExecAbort: (() => void) | null; taskId: string; skillName: string; skillTag: string; taskNotes: DegradeNote[]; startedAt: number }> = [];
       // 每任务的降级原因（按 starts 顺序），供末尾统一合并成一段提示
       const perTaskNotes: Array<{ taskId: string; notes: DegradeNote[] }> = [];
       // 结果对象上的 degrade 字段：渲染后逐字 trim（末尾合并提示另走 formatDegradeNotes 原样前缀）
@@ -302,36 +302,59 @@ export function createDelegateBatchTool(
             continue;
           }
           const { run, taskId, skillName, skillTag, taskNotes, ac, onExecAbort, startedAt } = val;
-          runs.push({ run, taskId, skillName, skillTag, taskNotes, ac, onExecAbort, startedAt });
+          // 幂等 dispose：race 的超时/abort 分支与末尾统一清理共用同一个，重复调用安全。
+          let disposed = false;
+          const safeDispose = (): void => {
+            if (disposed) return;
+            disposed = true;
+            // 同步调用的 reject 无人接（unhandledRejection）：显式吞掉并异步等释放完成
+            void Promise.resolve().then(() => run.dispose()).catch(() => { /* 已释放 */ });
+          };
+          runs.push({ run, safeDispose, taskId, skillName, skillTag, taskNotes, ac, onExecAbort, startedAt });
           perTaskNotes.push({ taskId, notes: taskNotes });
 
           // 防 unhandledRejection
           run.result.catch(() => {});
         }
 
-        // 逐个 await run.result（带独立超时和独立 AbortController）
-        for (const { run, taskId, skillName, skillTag, taskNotes, ac, startedAt } of runs) {
+        // 逐个 await run.result（带独立超时和独立 AbortController；父级 abort 也参与竞速）
+        for (const { run, safeDispose, taskId, skillName, skillTag, taskNotes, ac, startedAt } of runs) {
           let outcome: any;
           let timer: ReturnType<typeof setTimeout> | null = null;
+          // 用数组收集监听器清理函数：避开 TS 对「只在回调内赋值」的 let 变量窄化成 null
+          const abortOffs: Array<() => void> = [];
 
           // 超时预算以 spawn 时刻为起点：扣除该 task 已耗时（含 start 前的 route/agentOptions 解析
           // 与前面 task 的等待）。若已耗尽则立即走超时分支（delay=0）。
-          // 错误文本保持原样（仍是完整预算值），避免改变调用方可见语义。
+          // 错误文本报「实际耗时」（= 此刻 - startedAt），预算值仅作括号内参考，便于排查。
           const remainingMs = Math.max(0, wallClockBudgetMs - (Date.now() - startedAt));
+          const parentSignal: AbortSignal | undefined = exec.signal;
 
           try {
             outcome = await Promise.race([
               run.result,
               new Promise<never>((_, reject) => {
+                // abort 与超时共用同一条收尾路径：先 dispose 释放 run，再 reject 结束等待，
+                // 避免死等一个永不 settle 的 result（dispose 幂等，finally 再调无副作用）。
+                const failFast = (message: string): void => {
+                  if (timer) { clearTimeout(timer); timer = null; }
+                  safeDispose();
+                  reject(new Error(message));
+                };
+                const onAbort = (): void => {
+                  if (!ac.signal.aborted) ac.abort();
+                  failFast(`已取消：实际耗时 ${Date.now() - startedAt}ms（父级 abort）`);
+                };
+                if (parentSignal) {
+                  if (parentSignal.aborted) { onAbort(); return; }
+                  parentSignal.addEventListener("abort", onAbort, { once: true });
+                  abortOffs.push(() => parentSignal.removeEventListener("abort", onAbort));
+                }
                 timer = setTimeout(() => {
                   // 超时时主动 abort 子代理
                   if (!ac.signal.aborted) ac.abort();
-                  reject(new Error(`超时：${wallClockBudgetMs}ms`));
+                  failFast(`超时：实际耗时 ${Date.now() - startedAt}ms（预算 ${wallClockBudgetMs}ms）`);
                 }, remainingMs);
-                // 如果 exec.signal 先触发，清理 timer
-                if (exec.signal && !exec.signal.aborted) {
-                  exec.signal.addEventListener("abort", () => { if (timer) clearTimeout(timer); }, { once: true });
-                }
               }),
             ]);
 
@@ -375,16 +398,17 @@ export function createDelegateBatchTool(
             });
           } finally {
             if (timer) clearTimeout(timer);
+            for (const off of abortOffs) { try { off(); } catch { /* 可能已释放 */ } }
           }
         }
       } finally {
-        // 统一清理所有 runs
-        for (const { run, ac, onExecAbort } of runs) {
+        // 统一清理所有 runs（safeDispose 幂等：超时/abort 分支已释放过的不再重复）
+        for (const { safeDispose, ac, onExecAbort } of runs) {
           if (onExecAbort && exec.signal) {
             try { exec.signal.removeEventListener("abort", onExecAbort); } catch { /* 可能已释放 */ }
           }
           if (!ac.signal.aborted) ac.abort();
-          try { run.dispose(); } catch { /* 已释放 */ }
+          safeDispose();
         }
       }
 

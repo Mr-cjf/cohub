@@ -783,7 +783,15 @@ async function startSubagentRunOnce(
   const subagents = ctx?.subagents;
   if (!subagents) throw new Error("cohub: startSubagentRun requires the subagents service");
 
-  const signal = spec.signal ?? new AbortController().signal;
+  // 不可传哑 signal：过去用 `new AbortController().signal` 兜底，那个 signal 永不 abort，
+  // 等于让子运行静默获得「中止免疫」，父轮停止/会话释放都杀不掉它。
+  // signal 为 undefined 时按下方的「无 signal（不可中止）」分支显式处理。
+  const signal: AbortSignal | undefined = spec.signal;
+  // 显式处理：无 signal = 子运行不可中止。不伪造哑信号（那等于静默中止免疫），
+  // 打一条 warn 让它可诊断，并把 signal 字段按需省略（不传 undefined）。
+  if (signal === undefined) {
+    ctx?.logger?.warn?.("[cohub] startSubagentRun 无可用 signal：子运行不可中止（父轮停止无法回收）");
+  }
 
   if (typeof subagents.startActivation === "function") {
     // 0.2.1+：persona 前置到 prompt 首个 text 块补偿（原生能力不再对模型工具层暴露）
@@ -800,7 +808,7 @@ async function startSubagentRunOnce(
         ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
         ...(spec.toolFilter !== undefined ? { toolFilter: spec.toolFilter } : {}),
       },
-      signal,
+      ...(signal !== undefined ? { signal } : {}),
       delivery: "caller",
     });
     // request.toolFilter 在 0.2.1-rc.3 的 startActivation 里**不被消费**（其内部
@@ -823,7 +831,7 @@ async function startSubagentRunOnce(
     ...(spec.toolFilter !== undefined ? { toolFilter: spec.toolFilter } : {}),
     ...(spec.agentPreset !== undefined ? { agentPreset: spec.agentPreset } : {}),
     ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
-    signal,
+    ...(signal !== undefined ? { signal } : {}),
   });
   return {
     id: run.id,
@@ -1908,7 +1916,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             if (watchdog) watchdog.detach();
             if (learner) learner.detach();
             if (onExecAbort && outerSignal) outerSignal.removeEventListener("abort", onExecAbort);
-            if (ac?.signal.aborted) {
+            // 同时判 outerSignal：stall 关闭时 ac 是 undefined（默认路径），
+            // 只看 ac 会把父轮中止的 spawn 失败误归因为 failed 并直接 throw（重试语义也不同）。
+            if (ac?.signal.aborted || outerSignal?.aborted === true) {
               lastReason = "aborted";
               lastDiagnostic = undefined;
               lastPartial = "";
@@ -1928,13 +1938,47 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           if (watchdog) watchdog.bind(run.id);
           if (learner) learner.bind(run.id);
           run.result.catch(() => {}); // dispose 后的拒绝不产生 unhandledRejection
+          // 幂等释放：abort 竞速输掉时要先释放子运行，finally 里的释放必须是安全重入
+          let disposed = false;
+          const safeDispose = async (): Promise<void> => {
+            if (disposed) return;
+            disposed = true;
+            try { await run.dispose(); } catch { /* 已释放 */ }
+          };
+          // 子代理不响应 signal 时 run.result 可能永不结算 —— 父轮次中止不能一直等：
+          // 与同一 AbortSignal 竞速，输掉即先 safeDispose() 再抛（finally 要等 result 结算才到）。
+          const RACED_ABORT = { delegateRaceAborted: true } as const;
+          let abortHandler: (() => void) | null = null;
           let outcome: any;
           try {
-            outcome = await run.result;
+            if (signal && !signal.aborted) {
+              // 只有「开始等待时未中止」才参与竞速：竞速语义是「等待期间才中止」。
+              const abortPromise = new Promise<never>((_, reject) => {
+                const onAbort = () => reject(RACED_ABORT);
+                abortHandler = onAbort;
+                signal.addEventListener("abort", onAbort, { once: true });
+              });
+              outcome = await Promise.race([run.result, abortPromise]);
+            } else {
+              // 无 signal（不可中止）或进入前已中止：保持既有契约 —— 照常 spawn 并 await 结果，
+              // 已中止的 signal 已原样转发给子代理，由子代理侧决定立即结算。
+              // （此处不短路：竞速在 signal 已 abort 时会立刻输，不能用它取代等待。）
+              // 已知风险（oracle 指出，测试契约反证不可改）：子代理完全不响应 signal 时此 await
+              // 可能长期不结算；改成「不等待 + aborted 结算」会落到重试/抛错路径，
+              // runtime-0.2 ④（pre-aborted 必须正常返回）直接红，故保留契约并记录风险。
+              outcome = await run.result;
+            }
           } catch (error) {
-            // P4：运行期拒绝也是失败出口（finally 已负责清理资源）
-            reportAttempt(String(run?.id ?? ""), "failed", "error");
-            throw error;
+            if (error === RACED_ABORT) {
+              // race 输给 abort：先释放子运行，再归一到既有 aborted 出口（重试/结构化 cause 与本函数一致）
+              await safeDispose();
+              // 诊断信息：race 输掉时 run.result 未结算，output 拿不到 —— 显式标记，保住 partial 归因可辨性
+              outcome = { stopReason: "aborted", output: [], diagnostic: "raced abort（result 未结算）" };
+            } else {
+              // P4：运行期拒绝也是失败出口（finally 已负责清理资源）
+              reportAttempt(String(run?.id ?? ""), "failed", "error");
+              throw error;
+            }
           } finally {
             if (learner) {
               if (learner.flush()) {
@@ -1944,7 +1988,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             }
             if (watchdog) watchdog.detach();
             if (onExecAbort && outerSignal) outerSignal.removeEventListener("abort", onExecAbort);
-            try { run.dispose(); } catch { /* 已释放 */ }
+            // 与 :1859 的 onExecAbort 同处清理：竞速 handler 共用同一引用，移除防监听器泄漏
+            if (abortHandler && signal) signal.removeEventListener("abort", abortHandler);
+            await safeDispose();
           }
 
           if (outcome?.stopReason === "completed") {
@@ -2063,6 +2109,25 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           // job cancel / owner 释放 → abort 子代理；子代理 run.dispose() 由 runAttempts 的
           // finally 保证（run.result 结算后必执行），因此 kill 路径不泄漏子代理。
           const cancelAc = new AbortController();
+          // A：父轮中止 → 立即杀掉后台子代理（强硬语义）。正常轮次结束只切 idle、不 abort
+          // exec.signal，所以不会误杀正常收尾的后台任务。
+          // 实际实现**不区分** reason.kind：只要 exec.signal 触发 abort 就硬杀 —— 用户停止
+          // （"user"）、会话释放（"disposed"）、hook/parent 触发的中止一律同等对待
+          // （会话没了，后台任务留着无意义）。上面日志里的 reason.kind 仅用于观测，不参与判定。
+          const parentSig: AbortSignal | undefined = exec?.signal;
+          const onParentAbort = (): void => { try { cancelAc.abort(); } catch { /* 已中止 */ } };
+          const detachParentAbort = (): void => {
+            try { parentSig?.removeEventListener("abort", onParentAbort); } catch { /* ignore */ }
+          };
+          if (parentSig) {
+            if (parentSig.aborted) {
+              ctx.logger?.info?.("[cohub background] 父轮已中止，后台 delegate 直接按取消处理（reason="
+                + String((parentSig as any).reason?.kind ?? "unknown") + "）");
+              onParentAbort();
+            } else {
+              parentSig.addEventListener("abort", onParentAbort, { once: true });
+            }
+          }
           let jobId: string | undefined;
           try {
             const startJob = (ownerValue: any) => jobs.start({
@@ -2094,6 +2159,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
                     }
                     // 失败没有正文结果：原因放 detail（job_output/job_list 的 statusLine 会渲染它）。
                     return { status: "failed", detail: String(error) };
+                  } finally {
+                    // job 结束/失败/被 kill 都走到这里：移除父轮 abort 监听器，防监听器泄漏
+                    detachParentAbort();
                   }
                 })();
                 return {
@@ -2125,6 +2193,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
               + "或等自动唤醒（job 完成且你空闲时会自动开新一轮，最多连续 3 次）。"
               + "等待期间可以继续派发别的任务或推进其他工作（后台任务不计入当前批次耗时）。";
           }
+          // 走到这里 = 没有 jobId（start 抛错 / 未返回 id）→ 回退前台，后台运行体不存在：
+          // 父轮 abort 监听器必须在此摘除，否则会挂在父 signal 上直到会话释放（泄漏）。
+          detachParentAbort();
           // start() 未抛错但没给出 jobId：同样是降级，别让它静默
           if (bgFallbackReason === undefined) {
             bgFallbackReason = "jobs.start 未返回 jobId";
