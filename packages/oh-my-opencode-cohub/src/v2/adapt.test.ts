@@ -19,6 +19,7 @@ import {
   setZod,
   type V1AgentLike,
 } from './adapt';
+import { buildVariantBody } from './index';
 
 describe('toV2Model', () => {
   test('拆分 provider/model', () => {
@@ -173,5 +174,28 @@ describe('wrapToolInput', () => {
       },
     });
     expect(wrapToolInput({ a: 1 })).toEqual({ a: 1 });
+  });
+});
+
+describe('buildVariantBody（variant 补齐的请求体构造）', () => {
+  test('openai-compatible 用 snake_case reasoning_effort', () => {
+    expect(buildVariantBody('@ai-sdk/openai-compatible', 'max')).toEqual({
+      reasoning_effort: 'max',
+    });
+  });
+
+  test('openai 用嵌套 reasoning.effort', () => {
+    expect(buildVariantBody('@ai-sdk/openai', 'max')).toEqual({ reasoning: { effort: 'max' } });
+  });
+
+  test('anthropic 用 output_config.effort', () => {
+    expect(buildVariantBody('@ai-sdk/anthropic', 'max')).toEqual({
+      output_config: { effort: 'max' },
+    });
+  });
+
+  test('未知包名返回空对象（仅占位不改请求）', () => {
+    expect(buildVariantBody(undefined, 'max')).toEqual({});
+    expect(buildVariantBody('@ai-sdk/other', 'max')).toEqual({});
   });
 });
