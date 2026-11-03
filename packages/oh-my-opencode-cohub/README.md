@@ -48,6 +48,15 @@ opencode plugin oh-my-opencode-cohub@<精确版本号> --global --force
 2. 插件运行时写入默认配置文件 `~/.config/opencode/oh-my-opencode-cohub.json`
 3. **重启 OpenCode 后生效**——已运行的会话不会热切加载新版本，需用户重启
 
+> **升级到 2.x 时的配置迁移**（从 1.x 升级需手动处理，否则模型配置不生效）：
+>
+> 1. **字段名**：`plugin` → `plugins`（2.x 只读 `plugins`）
+> 2. **删除 `agent` 块**：旧版会把 13 条代理配置写进全局 `opencode.json` 的 `agent` 字段。2.x 中该字段在插件注入**之后**应用，会覆盖 `oh-my-opencode-cohub.json` 里的模型设置，导致配置"看起来对了但模型还是旧的"。清掉 `agent` 块后，模型以 `oh-my-opencode-cohub.json` 为唯一来源
+> 3. **清理残留插件目录**：`~/.config/opencode/plugins/oh-my-opencode-cohub.bak-*`（旧版遗留目录每次启动都会加载失败）
+>
+> 判断是否迁移到位：重启后 Orchestrator 的状态栏应显示你在 `oh-my-opencode-cohub.json` 里配置的模型名（例如 `deepseek-v4.1-flash`），而非 `gpt-5.4`。
+
+
 > **bunx 包 CLI 仅用于隔离 HOME 检验**：`bunx oh-my-opencode-cohub install/uninstall` 等包自带 CLI 只在隔离 HOME 环境中验证安装/卸载流程，**不要在真实 HOME 上整文件重写配置**。
 
 ### 方式二：npm 安装 + 手动配置
@@ -608,6 +617,7 @@ npm run build
 
 | 版本 | 日期 | 主要变更 |
 |------|------|---------|
+| 1.20.1 | 2026-11-03 | 文档补充 2.x 升级陷阱：全局 `opencode.json` 的 `agent` 块会在插件注入后覆盖 `oh-my-opencode-cohub.json` 的模型设置，需删除（`default_agent` 可保留）；同时补充 `plugin`→`plugins` 字段改名与残留插件目录清理。移除 2.x 入口的逐代理临时诊断日志（`COHUB_V2_DIAG=1` 汇总记录保留） |
 | 1.20.0 | 2026-11-03 | **新增 OpenCode 2.x 支持**：`package.json` 增加 `exports["./server"]` 子路径入口（`src/v2/`），与 1.x 根导出共存；2.x 优先解析 `./server`。新增兼容适配层（`ctx` → v1 `PluginInput`）、事件桥接（`session.retry.scheduled` → `session.status`、`session.execution.failed` → `session.error`）、定义转换（`prompt` → `system`、`permission` → `permissions[]`、`'prov/model'` → 模型引用）。工具改为中立形状 `PortableToolDefinition`（`src/tools/portable.ts`），不再依赖宿主包；`@opencode-ai/plugin` 改为动态导入（2.x 不装该包，静态导入会导致 `Cannot find package`）。修复代理配置读取：同时支持嵌套 `config` 与扁平两种形态。已在本机 OpenCode Desktop 2.2.5 真机验证 13 代理 / 2 工具 / 中文注入 / Job Board / idle / 事件映射全部生效；2.x 不含 TUI 面板 |
 | 1.19.0 | 2026-10-19 | 新增 `co-orchestrator-gpt`（GPT 专用 orchestrator 纯调度变体，独立 agent，mode: primary）；DS 的 `co-orchestrator` 提示词与行为保持不变。GPT 变体采用「先最小修复 → 先定向验证 → 再查漏补缺」节奏；`close_job` 权限扩展至 co-orchestrator-gpt（运行时权限分支 + job-control 纵深防御）；CLI 安装模板同步 13 个代理，TUI 兜底列表加入 GPT 变体；文档同步（包 README / 包 AGENTS / .rules/05 / 根 README / 根 AGENTS） |
 | 1.18.4 | 2026-10-16 | README 文档跟进：版本历史补齐 1.18.3 与当前编排语义（诚实镜像原生 task 生命周期，**不激活自动调度/自动重试**）；上下文 `summaryReadMode`（`bounded`/`full`）与 opt-in 诊断日志说明；`close_job` 取消边界（已绑定子会话真实 abort / 未绑定仅本地取消）与后台超时清理例外（30 秒检查、30 分钟超时标记 errored）。无运行时代码变更 |

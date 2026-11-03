@@ -1,4 +1,12 @@
 # CHANGELOG
+## [1.20.1] - 2026-11-03
+
+### 修复
+- **代理构建日志收敛**：移除 2.x 入口里逐代理的临时诊断输出，`COHUB_V2_DIAG=1` 仍保留代理/工具/上下文注册的汇总记录。
+
+### 文档
+- **新增「升级陷阱」说明**：1.x 会把 13 条代理配置写进全局 `opencode.json` 的 `agent` 字段；2.x 中该字段在插件 `agent.transform` **之后**应用，会静默覆盖 `oh-my-opencode-cohub.json` 的模型设置。README 与包 AGENTS.md 补充迁移步骤（`plugin`→`plugins`、删除 `agent` 块、清理 `plugins/oh-my-opencode-cohub.bak-*` 残留）与自查方法。
+
 ## [1.20.0] - 2026-11-03
 
 ### 新增

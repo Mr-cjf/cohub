@@ -103,6 +103,17 @@ grep -c '@opencode-ai/plugin' dist/v2/index.js   # 应为 0
 | 消息形状 | `{ info: { role }, parts: [] }` | `{ role, content: [] }` |
 | session 入参 | `{ path, body, query }` | 扁平 `{ sessionID, ... }` |
 
+### ⚠️ 升级陷阱：全局 `opencode.json` 的 `agent` 块会覆盖插件配置
+
+1.x 时代插件会把 13 条代理配置**写进** `~/.config/opencode/opencode.json` 的 `agent` 字段（双重注册策略的一部分）。
+
+2.x 的加载顺序是：**插件 `agent.transform` 先跑，配置文件 `agent` 后应用**。于是旧的 `agent` 块会静默覆盖 `oh-my-opencode-cohub.json` 里的模型设置——表现为"插件加载成功、prompt 正确、但模型还是几个月前的旧值"。
+
+排查特征：`opencode debug agents` 显示的模型与 `oh-my-opencode-cohub.json` 不一致，且 `~/.config/opencode/opencode.json` 里存在 `agent.co-*` 条目。
+
+处理：删掉全局 `opencode.json` 的整个 `agent` 块（`default_agent` 可以保留），模型改由 `oh-my-opencode-cohub.json` 单一来源决定。
+
+
 
 ## 操作手册
 
