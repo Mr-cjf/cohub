@@ -1,4 +1,16 @@
 # CHANGELOG
+
+## [1.20.2] - 2026-11-03
+
+### 修复
+- **2.x 诊断输出收敛补齐**：1.20.1 声称已移除逐代理的临时诊断输出，但实际代码未改动。本次真正移除逐工具（`tool.update` / `tool.add`）与逐事件（`event <type> -> <mapped>`）的写入，`COHUB_V2_DIAG=1` 下仍保留代理/工具/上下文/hook 注册的汇总记录。
+- **v2 子代理因无效 variant 加载失败**：OpenCode 2.x 宿主遇到模型未声明的 `variant` 会抛 `VariantUnavailableError` 导致子代理无法加载（1.x 只是静默降级）。插件现在会把代理配置声明的 `variant` 补齐进宿主模型目录，避免崩溃；请求体字段按 provider 的 AI SDK 包自动适配（`@ai-sdk/openai-compatible` → `reasoning_effort`、`@ai-sdk/openai` → `reasoning.effort`、`@ai-sdk/anthropic` → `output_config.effort`）。边界：仅在目标模型已存在于宿主目录时补齐（不会创建空模型），同 id 已声明时不覆盖，取不到 `api.package` 时只占位不生效；Council councillors 不在覆盖范围。
+
+### 文档
+- **测试清单校正**：包 `AGENTS.md` 的测试文件数由 13 更正为 25，补全 `src/`、`src/config/`、`src/prompts/`、`src/v2/` 等 4 个此前遗漏的目录；`src/v2/index.ts` 与 `src/v2/compat.ts` 注释不再写死具体测试文件数量。
+- **variant 配置指导**：README 新增「variant 必须与模型声明对齐」注意事项、「手动声明 variants」示例（camelCase `reasoningEffort`，由宿主按 provider 自动转换）、以及「variant 不生效 / 子代理加载失败怎么查」排查步骤；修正 `MiniMax-M3` 搭配 `variant` 的无效示例（该模型仅支持 toggle 型推理，无 effort 档位）。
+- **1.x variant 注入日志**：`config` hook 现在输出 `代理=model#variant` 清单，便于对照 provider 声明排查（1.x 无法在注册期校验，只能提示）。
+
 ## [1.20.1] - 2026-11-03
 
 ### 修复

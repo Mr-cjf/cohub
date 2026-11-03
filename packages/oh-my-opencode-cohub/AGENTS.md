@@ -45,11 +45,14 @@ npm run build
 4. `tsc --emitDeclarationOnly`
 
 外部依赖不打包：`@opencode-ai/plugin`、`@opencode-ai/sdk`、`@opentui/core`、`@opentui/solid`、`zod`。
-⚠️ `dist/v2/index.js` **不得**包含 `@opencode-ai/plugin` 的静态 import（2.x 宿主没装该包），构建后请确认：
+⚠️ `dist/v2/index.js` **不得**包含 `@opencode-ai/plugin` 的**静态** import（2.x 宿主没装该包，静态导入会让整个模块图解析失败）。**允许** `loadV1Tool()` 内 try/catch 包裹的**动态** `await import(...)`。构建后请确认：
 
 ```bash
-grep -c '@opencode-ai/plugin' dist/v2/index.js   # 应为 0
+# 应只有 1 处，且必须位于 loadV1Tool 的 try/catch 内（动态 import）
+grep -n '@opencode-ai/plugin' dist/v2/index.js
 ```
+
+若出现静态 `import ... from '@opencode-ai/plugin'` 或裸 `require`，即为缺陷。
 
 `dist/` 在 `.gitignore` 中。
 
@@ -86,6 +89,8 @@ grep -c '@opencode-ai/plugin' dist/v2/index.js   # 应为 0
 - **Background Job Board**：1.x 走 `experimental.chat.messages.transform`；2.x 同样走 `session.hook('context')`，由 `toV1Messages` / `applyV1Messages` 做消息形状双向适配
 - **TaskTracker**：`tool.execute.before` 注册任务 → `tool.execute.after` 更新状态（两代同名）
 - **TUI state**：写入 `~/.local/share/opencode/storage/oh-my-opencode-cohub/`，TUI 面板每 250ms 轮询。**2.x 目前不带 TUI**
+- **variant 补齐（v2）**：2.x 宿主遇到 `model.variants` 中不存在的 variant 会抛 `VariantUnavailableError`（1.x 静默降级）。`src/v2/index.ts` 在 `setup` 中把代理配置声明的 variant 通过 `ctx.catalog.transform` 补进模型目录，并按 `model.api.package` 生成正确的请求体片段（`buildVariantBody`）。**注意**：宿主 `ModelV2Info.variants` 是**数组** `Array<{id, headers, body}>`，不是字典；且 `await ctx.catalog.transform()` 在 batch 内只登记不执行，不能依赖其回调在 `setup` 期同步跑完——因此采用「补齐」而非「剔除」策略。
+  - **不变量**：① 模型不存在时**绝不**调用 `catalog.model.update`（宿主该 API 是 upsert，会创建能力不完整的空模型）；② 同 id variant 已存在时**不覆盖**（用户显式声明优先）；③ 拿不到 `api.package` 时只补空 body 并写诊断，档位不会生效（诊断经 `COHUB_V2_DIAG` 门控，默认不写文件）；④ Council 的 councillors 配置**不在**补齐范围。
 
 ## 2.x 迁移备忘（实测 OpenCode Desktop 2.2.5）
 
@@ -147,14 +152,18 @@ bun test
 # 等效命令：npm run test
 ```
 
-测试覆盖 `src/**/*.test.ts`，共 **13 个**测试文件：
+测试覆盖 `src/**/*.test.ts`，共 **25 个**测试文件：
 
 | 目录 | 测试文件 |
 |------|----------|
-| `src/context/` | `engine` / `extractor` / `truncate` |
-| `src/orchestration/` | `contract` / `engine` / `retry` / `scheduler` |
-| `src/task-manager/` | `quality` / `stats` / `tracker` |
-| `src/tools/` | `adaptive-params` / `council` / `model-stats` |
+| `src/` | `index` |
+| `src/config/` | `loader` |
+| `src/context/` | `diag-log` / `engine` / `extractor` / `prompt-budget` / `truncate` |
+| `src/orchestration/` | `contract` / `engine` / `rate-limit` / `retry` / `scheduler` |
+| `src/prompts/` | `routing` |
+| `src/task-manager/` | `build-lock` / `quality` / `stats` / `tracker` |
+| `src/tools/` | `adaptive-params` / `council` / `job-control` / `model-stats` |
+| `src/v2/` | `adapt` / `compat` / `events` / `variant-backfill` |
 
 （`package.json` 的 `test` 脚本等价于 `bun test ./src`。）
 
@@ -177,6 +186,7 @@ bun test
 | 系统未安装 bun | `npm run build` 失败 | `npm install -g bun` 或使用系统的 bun |
 | 忘记 `git push --follow-tags` | tag 未推送，CI 不触发 npm 发布 | 发版步骤 4 不可遗漏 |
 | 在 `master`/`test`/`dev` 分支执行 git 提交技能 | 违反分支保护约定 | 仅在功能分支使用提交和发版技能 |
+| 给代理配置了模型未声明的 `variant` | v2 下子代理直接加载失败（`VariantUnavailableError`）；v1 静默降级 | 在 `opencode.json` 的 `provider.<p>.models.<m>.variants` 声明后再配，或去掉 variant |
 
 ## 外部依赖与配置
 
