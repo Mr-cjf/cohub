@@ -124,6 +124,33 @@ function resolvePrompt(base: string, replace?: string, append?: string): string 
   return base;
 }
 
+/**
+ * v1 宿主在模型未声明该 variant 时会静默降级为默认档位（不报错），
+ * 因此这里只能提示、无法校验。真正会硬失败的是 v2 宿主
+ * （抛 VariantUnavailableError，导致子代理加载失败）。
+ *
+ * 输出格式便于 grep：`config.hook variant 注入: co-planner=guiyi/gpt-6.1-sol#max, ...`
+ * 刻意不做 provider 探测：config hook 在 Plugin 构造期执行，此时调
+ * client.config.providers() 会撞上 Provider.node ↔ Plugin.node 的循环等待。
+ */
+function logVariantInjection(agentConfigs: Record<string, unknown>): void {
+  const entries = Object.entries(agentConfigs)
+    .map(([name, cfg]) => {
+      const c = cfg as Record<string, unknown>;
+      const variant = typeof c.variant === 'string' ? c.variant : '';
+      if (!variant) return '';
+      const model = typeof c.model === 'string' ? c.model : '(default)';
+      return `${name}=${model}#${variant}`;
+    })
+    .filter(entry => entry !== '');
+  void appendLog(
+    'config.hook',
+    entries.length > 0
+      ? `config.hook variant 注入: ${entries.join(', ')}`
+      : 'config.hook variant 注入: (无代理配置 variant)',
+  );
+}
+
 /** Agent 定义：name + description + config */
 interface AgentDefinition {
   name: string;
@@ -810,9 +837,14 @@ const CoHubPlugin: Plugin = async (input, options) => {
             promptPreview: prompt.slice(0, 120),
             hasModel: !!c.model,
             hasVariant: !!c.variant,
+            model: c.model,
+            variant: c.variant,
           };
         }),
       )}`);
+      // v1 无法校验 variant 是否被 provider 声明（config hook 在构造期，探测会有循环等待），
+      // 只能把 agent+model+variant 三元组写进日志供人工对照 provider 声明排查。
+      logVariantInjection(agentConfigs);
     },
 
     'tool.execute.before': async (input, output) => {

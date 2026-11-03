@@ -81,7 +81,7 @@ export interface V1AgentLike {
  * - `agents` 数组：`{ name, config: { mode, prompt, ... } }`
  * - `hooks.agent` 记录：`{ name, mode, prompt, permission, ... }`（config 已摊平）
  */
-function resolveConfig(agent: V1AgentLike): Record<string, unknown> {
+export function resolveConfig(agent: V1AgentLike): Record<string, unknown> {
   if (agent.config && typeof agent.config === 'object') return agent.config;
   return agent as Record<string, unknown>;
 }
@@ -94,8 +94,14 @@ function resolveConfig(agent: V1AgentLike): Record<string, unknown> {
  *
  * 注意：**不写 `id`**。v2 的 `update(id, fn)` 已经按 id 定位，
  * 而 id 是带 brand 的类型，覆写会破坏宿主内部一致性。
+ *
+ * variant 原样下发：若宿主目录里没有该 variant，由入口层提前把它补进 catalog，
+ * 而不是在这里剔除（见 `v2/index.ts` 的补齐逻辑）。
  */
-export function applyAgentDefinition(target: Record<string, unknown>, agent: V1AgentLike): void {
+export function applyAgentDefinition(
+  target: Record<string, unknown>,
+  agent: V1AgentLike,
+): void {
   const config = resolveConfig(agent);
 
   const mode = config.mode;
@@ -125,6 +131,7 @@ export function applyAgentDefinition(target: Record<string, unknown>, agent: V1A
     }
     target.model = merged;
   } else if (config.variant !== undefined) {
+    // 模型字符串解析不出 provider 时，仍把 variant 合并进宿主已有的 model
     const existing = target.model as Record<string, unknown> | undefined;
     if (existing) target.model = { ...existing, variant: config.variant };
   }

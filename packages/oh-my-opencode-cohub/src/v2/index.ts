@@ -6,7 +6,7 @@
  * 1.x 只读根导出，因此两代可以共存于同一个 npm 包）。
  *
  * 设计取向：**不重写编排逻辑**。`src/index.ts` 里那套上下文引擎、任务追踪、
- * 编排引擎、council 都经过 13 个测试文件覆盖，把它们全部改写成 v2 风格会引入
+ * 编排引擎、council 等业务模块都有完整的单元测试覆盖，把它们全部改写成 v2 风格会引入
  * 与"适配新宿主"无关的回归面。这里的做法是：
  *
  * 1. 用 `compat.ts` 把 v2 的 `ctx` 反向适配成 v1 的 `PluginInput`；
@@ -18,7 +18,15 @@
 import { CoHubPlugin, __setNativeToolWrapping } from '../index';
 import { createV1Input } from './compat';
 import { toV1Event, mapEventType } from './events';
-import { applyAgentDefinition, wrapToolInput, setZod, type V1AgentLike } from './adapt';
+import {
+  applyAgentDefinition,
+  resolveConfig,
+  toV2Model,
+  wrapToolInput,
+  setZod,
+  type V1AgentLike,
+} from './adapt';
+import { backfillVariants, type CatalogModelInfo } from './variant-backfill';
 import type { PortableToolDefinition } from '../tools/portable';
 import { z } from 'zod';
 import * as fs from 'node:fs';
@@ -31,10 +39,30 @@ export interface V2PluginDefinition {
   setup: (ctx: V2Context) => Promise<() => void> | (() => void);
 }
 
+/**
+ * 只读的模型目录视图（仅取我们需要的部分）。
+ *
+ * 分工：`get` 用于确认模型已存在，`update` 只作用于已存在模型——
+ * 宿主 `update` 是 upsert，对未知模型调用会创建空模型污染目录。
+ */
+interface CatalogView {
+  model?: {
+    update?(
+      providerID: string,
+      modelID: string,
+      fn: (draft: CatalogModelInfo) => void,
+    ): void;
+    get?(providerID: string, modelID: string): CatalogModelInfo | undefined;
+  };
+}
+
 /** 只声明我们真正用到的 v2 上下文能力，避免把宿主类型变成硬依赖 */
 interface V2Context {
   location?: { directory?: string };
   options?: Record<string, unknown>;
+  catalog?: {
+    transform(fn: (catalog: CatalogView) => unknown): Promise<unknown> | unknown;
+  };
   agent?: {
     transform: (fn: (editor: V2AgentEditor) => void) => Promise<unknown>;
   };
@@ -178,6 +206,8 @@ function applyV1Messages(target: unknown[], transformed: V1Message[]): void {
   }
 }
 
+export { buildVariantBody } from './variant-backfill';
+
 /**
  * 构造 v2 插件定义。
  *
@@ -222,6 +252,35 @@ export function createV2Plugin(): V2PluginDefinition {
       // （已用 OpenCode 2.2.5 真实二进制验证）。因此 13 个代理逐个 update 即可。
       const agentDefs = Object.values(hooks.agent ?? {});
       diag(`agentDefs=${agentDefs.length} names=${agentDefs.map((d) => d.name).join(',')}`);
+
+      // ---------- 补齐 agent 声明的 variant ----------
+      // v2 宿主遇到 model.variants 里不存在的 variant 会抛 VariantUnavailableError
+      // （v1 只是静默降级），导致子代理加载失败。
+      // 这里把 agent 配置声明的 variant 直接补进 catalog，让宿主能找到它。
+      // 幂等：每次目录物化都会重放，已存在则跳过。
+      if (ctx.catalog && typeof ctx.catalog.transform === 'function') {
+        const declared: Array<{ providerID: string; modelID: string; variant: string }> = [];
+        for (const def of agentDefs) {
+          const cfg = resolveConfig(def);
+          const ref = toV2Model(cfg.model);
+          if (!ref) continue;
+          const variant = cfg.variant;
+          if (typeof variant !== 'string' || variant.length === 0) continue;
+          declared.push({ providerID: ref.providerID, modelID: ref.id, variant });
+        }
+
+        if (declared.length > 0) {
+          try {
+            await ctx.catalog.transform((catalog: CatalogView) => {
+              backfillVariants(catalog, declared, diag);
+            });
+          } catch {
+            // catalog 不可用：不阻断代理注册。此时 variant 保持原样下发，
+            // 若宿主报 VariantUnavailableError，需在 opencode.json 手动声明。
+          }
+        }
+      }
+
       if (agentDefs.length > 0 && ctx.agent) {
         await ctx.agent.transform((editor) => {
           for (const def of agentDefs) {
@@ -262,10 +321,8 @@ export function createV2Plugin(): V2PluginDefinition {
               editor.update(name, (target) => {
                 Object.assign(target, v2Tool);
               });
-              diag(`tool.update ${name}`);
             } else {
               editor.add(v2Tool);
-              diag(`tool.add ${name}`);
             }
           }
           diag(`tool.transform done, has=${editor.list().filter((t) => Object.keys(v1Tools).includes(t.id)).map((t) => t.id).join(',')}`);
@@ -363,7 +420,6 @@ export function createV2Plugin(): V2PluginDefinition {
             for await (const ev of stream) {
               const mapped = mapEventType(ev.type ?? '');
               if (!mapped) continue;
-              diag(`event ${ev.type} -> ${mapped}`);
               const v1Event = toV1Event({
                 type: mapped,
                 data: ev.data,
