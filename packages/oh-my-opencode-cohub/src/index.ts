@@ -35,6 +35,7 @@ import { createOrchestrationLayer } from './orchestration';
 import { classifyRateLimit } from './orchestration/rate-limit';
 import { stripExistingContracts } from './orchestration/contract';
 import { enforcePromptBudget } from './context/extractor';
+import type { PortableToolDefinition } from './tools/portable';
 
 /** 默认 prompt 最大 token 数（超过此值的 CoHub 注入将被整体降级为裸用户 prompt） */
 const DEFAULT_PROMPT_MAX_TOKENS = 12_000;
@@ -134,6 +135,42 @@ interface AgentDefinition {
  * 中文语言指令 —— 可注入到 AGENTS.md 或 instructions
  */
 const CHINESE_INSTRUCTION = CHINESE_LANGUAGE_INSTRUCTION;
+
+/**
+ * 运行模式标记。
+ *
+ * 同一份工厂被两代宿主复用：v1 入口直接调它，v2 入口（`src/v2/index.ts`）
+ * 也调它取 hooks，再由适配层翻译成 v2 的 domain 注册。
+ *
+ * 但有一种能力**无法跨代复用**：v1 的工具包装器 `tool()` 来自
+ * `@opencode-ai/plugin`，而 2.x 宿主不装这个包（那是 `Cannot find package`
+ * 崩溃的直接原因）。所以 v2 路径下必须跳过工具包装，改由适配层用
+ * `ctx.tool.add()` 注册中立形状的 `PortableToolDefinition`。
+ *
+ * 用模块级标记而不是参数，是为了不改变 v1 工厂的公开签名（有测试直接调用它）。
+ */
+let nativeToolWrapping = true;
+
+/** 由 v2 入口在调用工厂前关闭 v1 工具包装（内部 API，不对外承诺稳定性） */
+export function __setNativeToolWrapping(enabled: boolean): void {
+  nativeToolWrapping = enabled;
+}
+
+/**
+ * v1 工具包装器。
+ *
+ * 之所以延迟到调用时才 import：模块顶层的 `import { tool } from '@opencode-ai/plugin'`
+ * 会让 **整个模块图** 在 2.x 宿主里解析失败——即使那段代码根本不会执行。
+ * 2.x 没有这个包，静态导入就是硬失败，动态导入才允许 v2 入口共享同一份工厂。
+ */
+async function loadV1Tool(): Promise<((input: unknown) => unknown) | undefined> {
+  try {
+    const mod = (await import('@opencode-ai/plugin')) as { tool?: (input: unknown) => unknown };
+    return mod.tool;
+  } catch {
+    return undefined;
+  }
+}
 
 const CoHubPlugin: Plugin = async (input, options) => {
   // 插件级 client 闭包：event hook 的参数（{ event: Event }）会遮蔽插件外层 input，
@@ -335,6 +372,28 @@ const CoHubPlugin: Plugin = async (input, options) => {
       }
     },
   );
+  // ===== 工具：中立定义 → v1 宿主包装 =====
+  // 工具模块只产出 { description, args, execute } 这一跨代形状
+  //（见 src/tools/portable.ts），由这里包装成 v1 的 tool()。
+  const wrapPortableTools = async (
+    defs: Record<string, PortableToolDefinition>,
+  ): Promise<NonNullable<Awaited<ReturnType<Plugin>>['tool']>> => {
+    const out: Record<string, NonNullable<Awaited<ReturnType<Plugin>>['tool']>[string]> = {};
+    // v2 路径不经过这里（见 __setNativeToolWrapping），避免触碰 v1 宿主包
+    if (!nativeToolWrapping) return out;
+    const tool = await loadV1Tool();
+    if (!tool) return out;
+    for (const [name, def] of Object.entries(defs)) {
+      out[name] = tool({
+        description: def.description,
+        args: def.args as Record<string, unknown>,
+        async execute(args: unknown, context: unknown) {
+          return def.execute(args, context as never);
+        },
+      }) as NonNullable<Awaited<ReturnType<Plugin>>['tool']>[string];
+    }
+    return out;
+  };
   /**
    * 从 tool.execute.after 的 output 对象中提取子会话 session ID。
    * output 形态（SDK 1.17.15）：{ title, output, metadata }。
@@ -690,7 +749,10 @@ const CoHubPlugin: Plugin = async (input, options) => {
     agent: agentConfigs,
 
     // 工具：council_session（多模型并行共识）+ close_job（中止卡住子任务）
-    tool: { ...councilTools, ...jobTools },
+    tool: await wrapPortableTools({ ...councilTools, ...jobTools }),
+
+    // v2 入口用：中立形状的原始定义（不依赖任何宿主包，见 src/tools/portable.ts）
+    portableTools: { ...councilTools, ...jobTools },
 
     // 方式二：config hook 再次写入（确保兼容所有模式）
     config: async (cfg: Record<string, unknown>) => {
@@ -1356,4 +1418,6 @@ const CoHubPlugin: Plugin = async (input, options) => {
 };
 
 export const server = CoHubPlugin;
+/** OpenCode 2.x 入口按名复用同一工厂，避免把插件逻辑复制成两份 */
+export { CoHubPlugin };
 export default CoHubPlugin;

@@ -4,7 +4,9 @@
 // Mirrors oh-my-opencode-slim's council implementation with cohub-specific
 // agent naming and simplified depth tracking.
 
-import { tool } from '@opencode-ai/plugin';
+// zod 直接引入，理由见 src/tools/portable.ts
+import { z } from 'zod';
+import type { PortableToolSet, PortableToolDefinition } from './portable';
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
 import type { TextPart, ReasoningPart } from '@opencode-ai/sdk';
@@ -74,9 +76,6 @@ export {
   classifyFailure,
   RetryBudget,
 };
-
-// zod access via tool.schema (same pattern as slim)
-const z = tool.schema;
 
 // ============================================================================
 // Type Definitions（平台绑定的接口保留在本地）
@@ -655,8 +654,8 @@ export class CouncilManager {
 export function createCouncilTool(
   ctx: PluginInput,
   councilManager: CouncilManager,
-): Record<string, ReturnType<typeof tool>> {
-  const council_session = tool({
+): PortableToolSet {
+  const council_session: PortableToolDefinition = {
     description: [
       'Launch a multi-LLM council session for consensus-based analysis.',
       '',
@@ -720,7 +719,7 @@ export function createCouncilTool(
 
       return output;
     },
-  });
+  };
 
   return { council_session };
 }
