@@ -40,11 +40,17 @@ npm run build
 
 完整 4 步（`package.json` `build` script）：
 1. `bun run scripts/generate-prompts.ts` — 将 `src/prompts/*.md` → `src/prompts/*.ts`
-2. `bun build src/index.ts src/tui.ts --outdir dist --target node --format esm`（external 依赖见下方列表）
+2. `bun build src/index.ts src/tui.ts src/v2/index.ts --outdir dist --target node --format esm`（external 依赖见下方列表）
 3. `bun build src/cli/index.ts --outdir dist/cli --target node --format esm`
 4. `tsc --emitDeclarationOnly`
 
 外部依赖不打包：`@opencode-ai/plugin`、`@opencode-ai/sdk`、`@opentui/core`、`@opentui/solid`、`zod`。
+⚠️ `dist/v2/index.js` **不得**包含 `@opencode-ai/plugin` 的静态 import（2.x 宿主没装该包），构建后请确认：
+
+```bash
+grep -c '@opencode-ai/plugin' dist/v2/index.js   # 应为 0
+```
+
 `dist/` 在 `.gitignore` 中。
 
 ## 源码地图
@@ -52,6 +58,11 @@ npm run build
 | 找什么 | 去哪里 |
 |--------|--------|
 | 插件入口（agent 注册、hook、消息转换） | `src/index.ts` |
+| **OpenCode 2.x 入口**（`./server` 子路径） | `src/v2/index.ts` |
+| **2.x 兼容层**（v2 ctx → v1 PluginInput） | `src/v2/compat.ts` |
+| **2.x 事件桥接**（v2 事件 → v1 语义） | `src/v2/events.ts` |
+| **2.x 定义转换**（prompt/model/permission 词汇） | `src/v2/adapt.ts` |
+| **跨代工具形状**（不依赖宿主包） | `src/tools/portable.ts` |
 | TUI 侧边栏面板 | `src/tui.ts` |
 | 13 个 agent 提示词源文件（人工编辑） | `src/prompts/*.md` |
 | 提示词自动生成文件（勿手动编辑） | `src/prompts/*.ts` |
@@ -67,11 +78,31 @@ npm run build
 
 ## 关键架构约定
 
-- **双重注册**：代理同时通过 `return { agent }` 和 `config` hook 写入，确保兼容 HTTP 服务器模式
-- **中文注入**：通过 `experimental.chat.system.transform` 推送中文指令，不走 `instructions` 字段
-- **Background Job Board**：通过 `experimental.chat.messages.transform` 注入到 user 消息末尾
-- **TaskTracker**：`tool.execute.before` 注册任务 → `tool.execute.after` 更新状态
-- **TUI state**：写入 `~/.local/share/opencode/storage/oh-my-opencode-cohub/`，TUI 面板每 250ms 轮询
+- **双入口共包**：`exports["."]`（1.x，默认导出是 `(input, options) => Hooks` 函数）与 `exports["./server"]`（2.x，默认导出是 `{ id, setup }`）并存。2.x 优先解析 `./server`，1.x 只读根导出。**改任何一侧都要确认另一侧仍可加载**
+- **2.x 不重写编排逻辑**：`src/v2/` 只负责把 v2 的 `ctx` 翻译成 v1 形状，然后复用 `src/index.ts` 的工厂。业务模块（context / orchestration / task-manager / tools）保持单一实现
+- **工具必须产出中立形状**：`src/tools/*` 只导出 `PortableToolDefinition`（`{ description, args, execute }`），由入口层分别包装。**禁止在工具模块里直接 import 宿主包**——2.x 不装 `@opencode-ai/plugin`，静态导入会让整个模块图解析失败
+- **双重注册（仅 1.x）**：代理通过 `return { agent }` + `config` hook 写入。2.x **没有 config hook**，改由 `AgentEditor.default()` 表达默认代理
+- **中文注入**：1.x 走 `experimental.chat.system.transform`；2.x 走 `session.hook('context')`。两者都在适配层统一
+- **Background Job Board**：1.x 走 `experimental.chat.messages.transform`；2.x 同样走 `session.hook('context')`，由 `toV1Messages` / `applyV1Messages` 做消息形状双向适配
+- **TaskTracker**：`tool.execute.before` 注册任务 → `tool.execute.after` 更新状态（两代同名）
+- **TUI state**：写入 `~/.local/share/opencode/storage/oh-my-opencode-cohub/`，TUI 面板每 250ms 轮询。**2.x 目前不带 TUI**
+
+## 2.x 迁移备忘（实测 OpenCode Desktop 2.2.5）
+
+| 项 | 1.x | 2.x |
+|---|---|---|
+| 插件形态 | 文件或目录 | **必须是目录**（含 `package.json`），单文件被拒：`configured plugin path must be a directory` |
+| 导出契约 | `async (input, options) => Hooks` | `{ id, setup(ctx) }` |
+| 包名 | `@opencode-ai/plugin` | `@opencode/plugin` / `@opencode/schema` / `@opencode/client` |
+| 配置字段 | `agent` / `provider` / `plugin` / `mcp` | `agents` / `providers` / `plugins` / `mcp.servers` |
+| 代理新增 | `agent` 配置直接声明 | `ctx.agent.transform` + `update(id, fn)`（**对未知 id 会创建**，无 `add`） |
+| `config` hook | 有 | **不存在** |
+| `session.idle` 事件 | 有 | **没有**，改用 `session.hook('experimental.idle')` |
+| agent prompt 字段 | `prompt` | `system` |
+| 权限 | `permission: { tool: 'deny' }` | `permissions: [{ action, resource, effect }]` |
+| 消息形状 | `{ info: { role }, parts: [] }` | `{ role, content: [] }` |
+| session 入参 | `{ path, body, query }` | 扁平 `{ sessionID, ... }` |
+
 
 ## 操作手册
 

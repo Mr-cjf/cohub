@@ -8,7 +8,8 @@ OpenCode 中文智能体编排插件 CoHub——纯调度模式、全中文提�
 
 - 🚀 **独立运行**：纯 OpenCode Plugin，依赖 `@opencode-ai/plugin` SDK，零外部插件依赖
 - 🤖 **12 个专职代理 + 1 个 GPT 专用变体（co-orchestrator-gpt）**：8 个通用代理（orchestrator/oracle/librarian/explorer/designer/fixer/observer/council）+ 4 个规范/方案代理（rule-user/rule-project/rule-app/planner）+ 1 个 GPT 专用 orchestrator 纯调度变体
-- 🪝 **自动注入**：通过 `experimental.chat.system.transform` 钩子在每次 LLM 调用时统一注入中文语言要求与并行工具调用总则（覆盖全部 13 个 agent）
+- 🪝 **自动注入**：1.x 通过 `experimental.chat.system.transform`、2.x 通过 `session.hook('context')` 注入中文语言要求与并行工具调用总则（覆盖全部 13 个 agent）
+- 🔌 **双代宿主兼容**：同一 npm 包同时提供 1.x（`exports["."]`）与 2.x（`exports["./server"]`）入口，2.x 优先加载 `./server`，两代共存不冲突
 - 🧠 **纯调度 Orchestrator**：不碰任何文件工具，只负责规划、委派、验证
 - 🇨🇳 **全中文提示词**：13 个 agent 全部使用中文提示词
 - 📋 **规范分析代理**：rule-user（用户级 AGENTS.md）、rule-project（从项目根逐级发现 AGENTS.md / CLAUDE.md / AGENTS.local.md / CLAUDE.local.md 及 `.rules/*.md`）、rule-app（定向分析 `.opencode/rules/*.md`）
@@ -18,6 +19,15 @@ OpenCode 中文智能体编排插件 CoHub——纯调度模式、全中文提�
 - 📜 **AGENTS.md 专用分析代理**：co-rule-user / co-rule-project / co-rule-app 三个专用代理分别分析用户级/项目级 AGENTS.md 与 .opencode/rules，orchestrator 在方案制定前自动委派，分析结果注入执行上下文
 - 📖 **架构借鉴**：插件架构和代理编排理念借鉴了 oh-my-opencode-slim，但完全独立实现、无运行时依赖
 - 🔒 **同工作树构建互斥**：同一 projectDir 下多个 OpenCode 会话并行时，构建类命令（npm/bun/pnpm/yarn build、bun build、tsc、generate-prompts）自动串行加锁；不同 worktree 并行不受影响；建议独立特性使用 `git worktree` 隔离
+
+## 兼容性
+
+| OpenCode 版本 | 支持情况 | 入口 |
+|---|---|---|
+| 1.x | 完整支持（含 TUI 面板） | 根导出 `exports["."]` |
+| 2.x（≥ 2.0，实测 2.2.5） | 完整支持（**不含 TUI 面板**） | `./server` 子路径导出 |
+
+同一 npm 包同时携带两代入口：2.x 优先解析 `./server`，1.x 只读根导出，无需安装两个版本。2.x 上代理注册、中文注入、Background Job Board、任务追踪、编排引擎、`council_session` / `close_job` 工具均可用；**TUI 侧边栏面板与包自带 CLI 在 2.x 上不可用**。
 
 ## 安装
 
@@ -34,7 +44,7 @@ opencode plugin oh-my-opencode-cohub@<精确版本号> --global --force
 
 > 安装前先对 `~/.config/opencode/opencode.json` 与 `~/.config/opencode/tui.json` 做**时间戳备份**；命令只写入插件相关条目，**保留其他配置**。
 
-1. 将 `oh-my-opencode-cohub@<精确版本号>` 注册到全局 `plugin` 配置（`--global --force` 覆盖为指定精确版本）
+1. 将 `oh-my-opencode-cohub@<精确版本号>` 注册到全局插件配置（`--global --force` 覆盖为指定精确版本）
 2. 插件运行时写入默认配置文件 `~/.config/opencode/oh-my-opencode-cohub.json`
 3. **重启 OpenCode 后生效**——已运行的会话不会热切加载新版本，需用户重启
 
@@ -46,15 +56,18 @@ opencode plugin oh-my-opencode-cohub@<精确版本号> --global --force
 npm install oh-my-opencode-cohub
 ```
 
-然后在 `~/.config/opencode/opencode.json` 中添加：
+然后在 `~/.config/opencode/opencode.json` 中添加（字段名按宿主版本区分）：
 
 ```json
-{
-  "plugin": ["oh-my-opencode-cohub"]
-}
+// OpenCode 1.x
+{ "plugin": ["oh-my-opencode-cohub"] }
+
+// OpenCode 2.x
+{ "plugins": ["oh-my-opencode-cohub"] }
 ```
 
-重启 OpenCode 即可。
+重启 OpenCode 即可。2.x 会自动选择 `./server` 入口，无需额外配置。
+
 
 ### 方式三：复制文案交给 AI 配置
 
@@ -595,6 +608,7 @@ npm run build
 
 | 版本 | 日期 | 主要变更 |
 |------|------|---------|
+| 1.20.0 | 2026-11-03 | **新增 OpenCode 2.x 支持**：`package.json` 增加 `exports["./server"]` 子路径入口（`src/v2/`），与 1.x 根导出共存；2.x 优先解析 `./server`。新增兼容适配层（`ctx` → v1 `PluginInput`）、事件桥接（`session.retry.scheduled` → `session.status`、`session.execution.failed` → `session.error`）、定义转换（`prompt` → `system`、`permission` → `permissions[]`、`'prov/model'` → 模型引用）。工具改为中立形状 `PortableToolDefinition`（`src/tools/portable.ts`），不再依赖宿主包；`@opencode-ai/plugin` 改为动态导入（2.x 不装该包，静态导入会导致 `Cannot find package`）。修复代理配置读取：同时支持嵌套 `config` 与扁平两种形态。已在本机 OpenCode Desktop 2.2.5 真机验证 13 代理 / 2 工具 / 中文注入 / Job Board / idle / 事件映射全部生效；2.x 不含 TUI 面板 |
 | 1.19.0 | 2026-10-19 | 新增 `co-orchestrator-gpt`（GPT 专用 orchestrator 纯调度变体，独立 agent，mode: primary）；DS 的 `co-orchestrator` 提示词与行为保持不变。GPT 变体采用「先最小修复 → 先定向验证 → 再查漏补缺」节奏；`close_job` 权限扩展至 co-orchestrator-gpt（运行时权限分支 + job-control 纵深防御）；CLI 安装模板同步 13 个代理，TUI 兜底列表加入 GPT 变体；文档同步（包 README / 包 AGENTS / .rules/05 / 根 README / 根 AGENTS） |
 | 1.18.4 | 2026-10-16 | README 文档跟进：版本历史补齐 1.18.3 与当前编排语义（诚实镜像原生 task 生命周期，**不激活自动调度/自动重试**）；上下文 `summaryReadMode`（`bounded`/`full`）与 opt-in 诊断日志说明；`close_job` 取消边界（已绑定子会话真实 abort / 未绑定仅本地取消）与后台超时清理例外（30 秒检查、30 分钟超时标记 errored）。无运行时代码变更 |
 | 1.18.3 | 2026-10-16 | 编排提示词并发语义修正：移除默认 2-3 / 固定数量 / 强制分批限制，无依赖、无共享可变状态冲突的任务同一条消息同时派发，不以任务/文件数量或猜测容量预限；Wave 仅展示依赖层次不构成等待屏障，已就绪任务同时启动不等无关慢任务；同文件独立只读可并行，仅真实写冲突或要求特定文件版本/读取结果的读写任务按实际冲突与依赖串行；保留 429/TPM 限流反馈（尊重 retry.next / Retry-After）、有限重试、后台已启动任务不重复派发、定向规则分析与已核实事实复用。仅提示词文案调整，无运行时 API / TUI / MCP 变更 |

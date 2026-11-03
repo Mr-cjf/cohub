@@ -1,4 +1,28 @@
 # CHANGELOG
+## [1.20.0] - 2026-11-03
+
+### 新增
+- **OpenCode 2.x 支持**：新增 `./server` 入口（`src/v2/`），通过 `package.json` 的 `exports` 与 1.x 根入口共存——2.x 优先解析 `./server`，1.x 只读根导出，同一 npm 包服务两代宿主。
+- **兼容适配层**：`src/v2/compat.ts` 把 2.x 的 `ctx` 反向适配为 1.x 的 `PluginInput`（`path/body/query` 调用风格），使上下文引擎、任务追踪、编排引擎、council 全部零改动复用。
+- **事件桥接**：`src/v2/events.ts` 把 2.x 的事件模型映射回 1.x 语义（`session.retry.scheduled` → `session.status`、`session.execution.failed` → `session.error`，`sessionID` 补齐到 `properties.info.id`）。
+- **定义转换**：`src/v2/adapt.ts` 统一 v1 → v2 的词汇差异：`prompt` → `system`、`'prov/model'` → `{ providerID, id, variant }`、`permission: { tool: effect }` → `permissions: [{ action, resource, effect }]`、`temperature` → `request.body.temperature`。
+- **中立工具形状**：`src/tools/portable.ts` 让 `council_session` / `close_job` 不依赖任何宿主包，由入口层分别包装成 1.x 的 `tool()` 与 2.x 的 `ctx.tool.add()`。
+- **2.x 可观测量**：`COHUB_V2_DIAG=1` 时把代理/工具/hook 注册结果写入临时日志，便于在真实宿主中核对。
+
+### 变更
+- **工具包装改为按需加载**：`src/index.ts` 的 `@opencode-ai/plugin` 从静态 import 改为动态 import。2.x 宿主不装该包，静态导入会让整个模块图解析失败（`Cannot find package`），即使那段代码不会执行。
+- **`hooks.portableTools`**：工厂额外返回中立形状的原始工具定义，供 2.x 入口消费；1.x 的 `hooks.tool` 行为不变。
+
+### 修复
+- **代理配置读取**：适配层同时支持 `{ name, config: {...} }`（工厂内部 agents 数组）与 `{ name, mode, prompt, ... }`（工厂返回的扁平 `agent` 记录）两种形态，修复扁平形态下 prompt/mode/model 全部丢失的问题。
+
+### 测试
+- 新增 `src/v2/{adapt,events,compat}.test.ts` 共 35 个用例，覆盖模型解析、权限合并、prompt 映射、事件映射与入参折叠。
+- 全量 554 个测试通过。
+
+### 验证
+- 在 OpenCode Desktop **2.2.5** 真实二进制上验证：13 个代理注册成功（含 `co-orchestrator-gpt`），prompt 长度与 1.x 基线逐项一致（8753 / 4061 / 3470 / 2532 等）；2 个工具注册成功；`session.context` 注入生效（system 4 → 6 段）；`experimental.idle` 与事件流均触发；实际会话以 `co-orchestrator` 身份运行。
+
 ## [1.19.1] - 2026-10-19
 
 ### 新增
