@@ -28,7 +28,7 @@ import {
   type DegradeNote,
 } from "./delegate.ts";
 import { applyResultBudget, approxTokens, resolveResultBudget, resolveSkillResultMaxChars } from "./result-budget.ts";
-import type { CoHubSkill } from "./skills.ts";
+import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
 import { contentText } from "./text-utils.ts";
 import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 import { maybeDeferTodoNudge } from "./todo-nudge.ts";
@@ -42,6 +42,34 @@ import { maybeDeferTodoNudge } from "./todo-nudge.ts";
  * `task.id` 的原始值在结果映射等处**不受此上限影响**——这里只是展示层归一。
  */
 const BATCH_TASK_ID_ECHO_MAX = 40;
+
+/**
+ * 合法 skill 名单（唯一权威来源：skills.ts 的 COHUB_SKILLS 运行时值）。
+ * 用于两处：① parameters 里 skill.description 的可读名单；② 派发前的白名单校验。
+ * 从 COHUB_SKILLS 派生而非另抄一份，避免名单漂移（新增技能后自动生效）。
+ */
+const KNOWN_SKILL_NAMES: readonly string[] = COHUB_SKILLS.map(s => s.name);
+
+/** 名单的「13 选 1」单行文案（description 与错误文案共用，保证两处逐字一致） */
+const SKILL_NAMES_TEXT = KNOWN_SKILL_NAMES.join(", ");
+
+/** 合法名单的短名文案（错误文案用 ` / ` 分隔，便于阅读） */
+const SKILL_NAMES_SHORT_TEXT = KNOWN_SKILL_NAMES.join(" / ");
+
+/**
+ * 白名单校验：非空 skill 必须在 KNOWN_SKILL_NAMES 内。
+ * 空串/缺失一律放行（由调用方的既有兜底逻辑处理，保持 :184-196 行为不变）。
+ * 命中返回 { ok: true }；未命中返回带「正确写法」的错误文案，由调用方转成该 task 的 error 结果。
+ */
+function assertKnownSkill(raw: string): { ok: true } | { ok: false; error: string } {
+  if (raw.length === 0) return { ok: true };
+  if (KNOWN_SKILL_NAMES.includes(raw)) return { ok: true };
+  return {
+    ok: false,
+    error: `skill 名 "${raw}" 无效。合法值：${SKILL_NAMES_SHORT_TEXT}`
+      + `（co-orchestrator 为主代理，通常委派用其余 ${KNOWN_SKILL_NAMES.length - 1} 个）`,
+  };
+}
 
 /** 单个批量委派任务 */
 export interface DelegateBatchTask {
@@ -128,7 +156,7 @@ export function createDelegateBatchTool(
       tasks: {
         type: "array",
         required: true,
-        description: "任务列表，每项 skill/prompt 必填；上限 schedule.maxParallelBatch（默认 3，最大 20）",
+        description: "任务列表（≤maxParallelBatch）。每项仅接受 3 个字段：id(可选) / skill(必填) / prompt(必填)；出现其它字段会被参数校验拒绝。",
         items: {
           type: "object",
           additionalProperties: false,
@@ -137,7 +165,8 @@ export function createDelegateBatchTool(
             skill: {
               type: "string",
               required: true,
-              description: "必填，co-* 代理名（如 co-fixer/co-explorer/co-oracle）",
+              description: "必填。合法值（" + KNOWN_SKILL_NAMES.length + " 选 1）：" + SKILL_NAMES_TEXT
+                + "。注意 co-orchestrator 为主代理，通常委派用其余 " + (KNOWN_SKILL_NAMES.length - 1) + " 个。",
             },
             prompt: { type: "string", required: true, description: "必填，给该代理的具体任务（自包含）" },
           },
@@ -202,6 +231,23 @@ export function createDelegateBatchTool(
           // 而不是从「逐个收集结果」的 await 时刻开始计——后者会让第 i 个 task 拿到
           // 从第 i-1 个 settle 起算的完整预算，整批最坏退化为 N × wallClockBudgetMs。
           const startedAt = Date.now();
+          // 白名单校验（第三道防线）：非空 skill 必须在 COHUB_SKILLS 名单内。
+          // 不合法时**只让该 task 失败**（返回 skillError，由收集阶段转成 status:"error"），
+          // 绝不抛全局异常——同批其它 task 照常派发，不被一个写错的 skill 名拖垮。
+          // 空串/缺失仍走上方的兜底（:184-196 不变），这里只拦「非空但不合法」。
+          const skillCheck = assertKnownSkill(requestedSkill);
+          if (!skillCheck.ok) {
+            ctx.logger?.warn?.(
+              "[cohub delegate_batch] task \"" + taskId + "\" 的 skill 名 \"" + requestedSkill
+              + "\" 不在合法名单内，已按错误返回（不再静默降级为 " + DEFAULT_FALLBACK_SKILL + "）",
+            );
+            // 不创建 run / AbortController：该 task 不进入 runs 清理列表
+            return {
+              taskId, skillName: requestedSkill, skillTag: requestedSkill, task,
+              taskNotes: [], run: undefined, ac: undefined, onExecAbort: null, startedAt,
+              startError: undefined, skillError: skillCheck.error,
+            };
+          }
           const { skill, route, note: skillNote } = resolveSkillAndRoute(requestedSkill, getRoutes, ctx, ctx.logger);
           // 降级原因收集槽：**每个 task 独立一个数组**（对应 delegate 的单次 execute）。
           // 若整批共用一个数组，同一 id（如 "skill"）的 note 会被后一个 task 覆盖，
@@ -260,13 +306,13 @@ export function createDelegateBatchTool(
               // 少了这一行，batch 路径的 preset/toolFilter 降级就只剩 warn（等同静默）。
               degradeNotes: taskNotes,
             });
-            return { taskId, skillName: skill.name, skillTag, task, taskNotes, run, ac, onExecAbort, startedAt, startError: undefined };
+            return { taskId, skillName: skill.name, skillTag, task, taskNotes, run, ac, onExecAbort, startedAt, startError: undefined, skillError: undefined };
           } catch (startError) {
             // start 失败：清理 onExecAbort 监听器，返回带错误标记的对象
             if (onExecAbort && exec.signal) {
               try { exec.signal.removeEventListener("abort", onExecAbort); } catch { /* 可能已释放 */ }
             }
-            return { taskId, skillName: skill.name, skillTag, task, taskNotes, run: undefined, ac, onExecAbort: null, startedAt, startError };
+            return { taskId, skillName: skill.name, skillTag, task, taskNotes, run: undefined, ac, onExecAbort: null, startedAt, startError, skillError: undefined };
           }
         }),
       );
@@ -289,6 +335,18 @@ export function createDelegateBatchTool(
             continue;
           }
           const val = s.value as any;
+          if (val.skillError) {
+            // skill 名不合法：只让本 task 失败，同批其它 task 继续（无 run 对象，不加入 runs 清理列表）
+            perTaskNotes.push({ taskId: val.taskId, notes: val.taskNotes ?? [] });
+            results.push({
+              id: val.taskId,
+              skill: val.skillTag,
+              status: "error",
+              error: val.skillError,
+              ...degradeField(val.taskNotes ?? []),
+            });
+            continue;
+          }
           if (val.startError) {
             // start 失败：记录失败结果，不加入 runs 列表（没有 run 对象）
             perTaskNotes.push({ taskId: val.taskId, notes: val.taskNotes ?? [] });
