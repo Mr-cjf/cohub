@@ -43,6 +43,7 @@
     "typecheck:0.2": "bunx tsc --noEmit -p test/tsconfig.runtime-0.2.json",
     "typecheck:src": "bunx tsc --noEmit -p tsconfig.typecheck.json",
     "typecheck": "bun run typecheck:src && bun run typecheck:0.2",
+    "prepublish-check": "bun run scripts/prepublish-check.ts",
     "prepublishOnly": "npm run build",
     "build:client": "bun run scripts/build-client.js",
     "audit": "node scripts/audit-session.mjs"

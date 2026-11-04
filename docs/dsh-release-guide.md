@@ -203,6 +203,24 @@ git log --oneline dsh-v<上个版本>..HEAD
 
 CHANGELOG 条目在发版前用独立 `docs:` commit 提交，格式参考 Keep a Changelog，分「新增 / 修复 / 变更 / 移除」，每条写清**对使用者的影响**。
 
+### 本地预检脚本（推荐）
+
+以下检查可在打 tag 前用一条命令完成，避免「打完 tag 才发现 CI 失败」：
+
+```bash
+cd packages/dsh-cohub
+npm run prepublish-check                        # 检查当前 package.json 版本
+npm run prepublish-check -- --version 0.12.0    # 预演指定版本（不修改任何文件）
+```
+
+覆盖：四处版本一致性（package.json / lock 顶层 / lock packages[""] / README 首屏锚点）、
+tag 未被占用（本地 + 远端）、工作区干净、分支同步、CHANGELOG 有对应条目。
+
+输出 ✅ / ❌ / ⚠️ 三级：❌ 使退出码为 1；⚠️ 仅提示不阻断（如远端不可达、有未推送提交）。
+
+> ⚠️ **不要把它挂到 `prepublishOnly`**：CI 执行 `npm publish` 时 tag 必然已存在，
+> 检查「tag 未被占用」会误判并阻断发布。该脚本只用于本地打 tag 之前。
+
 ---
 
 ## 4. 执行顺序（顺序错了就出事）
