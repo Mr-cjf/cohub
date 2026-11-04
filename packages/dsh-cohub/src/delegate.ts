@@ -907,7 +907,8 @@ class StallWatchdog {
     lastToolAt: 0,
     lastToolResultAt: 0,       // 距上次工具结果（S2 用）
     lastSuccessAt: 0,          // 距最近一次成功工具结果（宽限窗口用；0 = 尚无成功）
-    lastReasoningAt: 0,        // 最近一次推理产出时刻（S2 用）
+    lastReasoningAt: 0,        // 最近一次推理产出时刻（仅诊断参考）
+    lastActivityAt: 0,         // 最近一次任意活动（工具调用/工具结果/推理/正文输出）时刻（S2 用）
     lastReasoningIndex: -1,    // 最近 reasoning-delta 的 index（按块计数，S3 用）
     sawReasoningChunks: false, // 是否已见到 chunk 级推理事件（避免与 message 级重复计数）
     reasoningStreak: 0,        // 连续推理块且期间 0 次工具调用（S3）
@@ -977,6 +978,7 @@ class StallWatchdog {
     const now = Date.now();
     if (type === "tool/call") {
       this.s.lastToolAt = now;
+      this.s.lastActivityAt = now;
       this.s.pendingCall = { key: String(d?.name ?? "") + "|" + normalizeArguments(d?.arguments), callId: d?.callId };
       // 工具调用打断纯推理连击（S3 重置）
       this.s.reasoningStreak = 0;
@@ -990,6 +992,7 @@ class StallWatchdog {
       this.s.pendingCall = null;
       this.s.lastToolAt = now;
       this.s.lastToolResultAt = now;
+      this.s.lastActivityAt = now;
       if (isError) {
         // S1：归一化签名连续相同 → 连续计数；签名变化 → 重置为 1
         // S1 停滞检测依赖签名区分度，不做数字归一，否则不同数值错误会被并成一类而误判停滞
@@ -1014,15 +1017,20 @@ class StallWatchdog {
       if (chunk?.type === "reasoning-delta") {
         this.s.sawReasoningChunks = true;
         this.s.lastReasoningAt = now;
+        this.s.lastActivityAt = now;
         // 按块（index 变化）计数，避免同一块的多个 delta 重复累计
         if (chunk.index !== this.s.lastReasoningIndex) {
           this.s.reasoningStreak++;
           this.s.lastReasoningIndex = chunk.index;
         }
+      } else if (chunk?.type === "text-delta") {
+        // 正文输出也算活动（刷新 S2 空闲时钟）；但不得计入推理连击（避免误触 S3）
+        this.s.lastActivityAt = now;
       }
     } else if (type === "assistant/message" && !this.s.sawReasoningChunks) {
       // 无 chunk 级事件的 transport 兜底：按 assistant/message 内容里的 reasoning 块计数
       const blocks = Array.isArray(d?.message?.content) ? d.message.content : [];
+      this.s.lastActivityAt = now;
       if (blocks.some((b: any) => b?.type === "reasoning")) {
         this.s.lastReasoningAt = now;
         this.s.reasoningStreak++;
@@ -1038,9 +1046,7 @@ class StallWatchdog {
     const cfg = this.cfg;
     const now = Date.now();
     const s1 = s.consecutiveErrors >= cfg.consecutiveErrors;
-    const s2 = s.lastToolResultAt > 0
-      && (now - s.lastToolResultAt) > cfg.idleMs
-      && s.lastReasoningAt > s.lastToolResultAt;
+    const s2 = s.lastActivityAt > 0 && (now - s.lastActivityAt) > cfg.idleMs;
     const s3 = s.reasoningStreak >= cfg.reasoningWithoutAction;
     const s4 = s.loopStreak >= cfg.loopCount;
     const fired: string[] = [];
@@ -1167,7 +1173,8 @@ export function normalizeReasoningEffort(value: unknown): string | undefined {
  *
  * 用户已配置的字段**永远优先**——本函数只提供缺省值，绝不覆盖任何显式配置。
  * 依据：统一「高推理档 + 大输出预算」会让只做定位/读图的代理白付延迟与输出预算；
- * 探索类只降推理强度，实施类需要足够大的 maxTokens，规划类输出本来就短。
+ * 探索类只降推理强度；实施类（co-fixer）不再设输出上限，完全继承 provider 默认 maxTokens；
+ * 仅规划类（co-planner）有硬上限，因为其输出本来就短。
  * 其余代理（oracle / council / designer / rule-*）保持不动（完全继承父会话）。
  *
  * @param skillName 兜底后的 skill 名（COHUB_SKILLS 中的 name）
@@ -1179,8 +1186,6 @@ export function skillTierDefaults(skillName: string | undefined): Record<string,
     case "co-librarian":
     case "co-observer":
       return { reasoningEffort: "low" };
-    case "co-fixer":
-      return { maxTokens: 8192 };
     case "co-planner":
       return { maxTokens: 4096 };
     default:
