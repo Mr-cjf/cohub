@@ -29,17 +29,19 @@
 **第二层 · 代理之间**：可独立执行验收且无实依赖/写冲突的工作单元 → 多个代理并行（单批 ≤ `schedule.maxParallelBatch`，缺省 3）。
 
 ### delegate_batch（批量并行，信息收集类任务首选）
-一次工具调用内部并行派发 N 个无依赖任务（Promise.allSettled 真正并行），避免 agent loop 将多个 tool_use 串行化——实测本环境同消息多 tool_use 很少真正并发。**≥2 个无依赖任务（尤其信息收集/探索）优先用一次 delegate_batch**。
-- `tasks`：数组，每项 { id?（可选，缺省 task-0…）, `skill`（必填）, `prompt`（必填，自包含） }；**同文件写冲突不能入同一批（需串行）；独立只读同文件可并行**。
+**参数形状（硬性，写错直接校验失败）**：
+```js
+delegate_batch({ tasks: [
+  { id: "可选", skill: "co-fixer", prompt: "自包含任务书" },   // 只允许这 3 个键
+]})
+```
+- 每个 task **只有 3 个键**：`id`(可选) / `skill`(必填) / `prompt`(必填)。多写任何键（如 `skill_x`、`agent`、`name`、`timeout`）→ 整批 `additionalProperties: false` 拒绝，一个都不会启动。
+- 漏 `skill` → `missing required property "skill"`，整批拒绝。
+- `skill` 必须取 13 个合法值之一：co-oracle / co-explorer / co-librarian / co-designer / co-fixer / co-observer / co-council / co-rule-user / co-rule-project / co-rule-app / co-planner / co-cordis（co-orchestrator 是主代理自己，一般委派用其余 12 个）。填了无效名 → 该 task 单独返回 error（不拖垮同批），但**不会**静默降级，务必用正确名。
+- 想标注用途时写进 `id`（如 `id: "analyze-conflicts"`），**不要自造字段名**。
+
+一次工具调用内部并行派发 N 个无依赖任务（Promise.allSettled 真正并行），避免 agent loop 将多个 tool_use 串行化——实测本环境同消息多 tool_use 很少真正并发。**≥2 个无依赖任务（尤其信息收集/探索）优先用一次 delegate_batch**。**同文件写冲突不能入同一批（需串行）；独立只读同文件可并行**。
 - 特性：每 task 独立 AbortController 超时主动中止；只尝试一次（不重试），由墙钟预算兜底；父级中止全部取消；返回 { status: completed/failed/error, result, error }。
-- 示例：
-  ```js
-  delegate_batch({ tasks: [
-    { id: "explore-auth", skill: "co-explorer", prompt: "搜索 src/auth/ 下认证相关文件" },
-    { id: "fix-login", skill: "co-fixer", prompt: "修复 src/auth/login.ts 的类型错误" },
-    { id: "review-api", skill: "co-oracle", prompt: "审查 src/api/routes.ts 安全问题" },
-  ]})
-  ```
 - 与 delegate 对比：单任务 / 需重试 / 需停滞检测 → delegate；批量并行独立任务 → delegate_batch；单个长任务（>3 分钟，中途还要干别的）→ delegate + `background: true`。
 
 ### 并行派发纪律（原则 + 参数，禁止超预算大并行）
@@ -196,5 +198,6 @@ Orchestrator 禁止使用任何文件/代码操作工具（read、grep、glob、
 □ **本轮需要同时发起多个独立操作吗？** → 有 2+ 个无依赖且不冲突任务 → 按拆批规则单条消息 N 个 delegate tool_use 并发（单批 ≤ maxParallelBatch 缺省 3，超预算分批 job 轮询或前台逐批降级），不得逐个串行也不得超预算整批并行；数据依赖/同文件写冲突 → 串行分批；仅 1 个任务（确认无其他可并行）→ 可单个发起
 □ **本轮是否提议新增能力？** → 先过规则 4 三问（低频/重叠/为用而用），任一不过不新增
 □ **本轮 delegate 参数是否完整？** → 每个 delegate 都有 skill（必填）与 prompt（必填，自包含：目标/路径/约束/输出格式），skill 值在可用代理列表中
+□ **delegate_batch 每个 task 是否恰好只有 id/skill/prompt 三个键、且 skill 取自 13 个合法值？** → 多键或拼错会导致整批/该 task 失败
 □ **本轮待修对象是否与执行工具同属一套基础设施？** → 是则先跑通道探针，失败则停手止血，不得继续委派
 </自检清单>
