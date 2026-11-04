@@ -8,6 +8,7 @@
 //   Config  —— schemastery 运行时配置 schema（cordis.patch.yml 的 config 据此校验）
 //   apply   —— 挂载时执行：注册系统提示词 section、runtime skills、内置 agent preset
 import z from "@deepseek-ai/schemastery";
+import type { Volatile } from "@deepseek-ai/cosmokit";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
@@ -37,10 +38,23 @@ import { DEFAULT_ERROR_CATEGORIES } from "./env-signatures";
  * `Schema.prototype.volatile` 自 schemastery 3.18.4 起提供；
  * 若被安装到更旧的版本（如某些宿主环境或裸装场景），降级为普通字段，
  * 而不是在模块顶层求值时抛 TypeError 导致整个插件导入失败。
+ *
+ * 类型层面：`Config` 的 volatile 字段在类型上必须如实带 `.get()`。但不能把返回类型
+ * 直接写成 `Volatile<T>`——schemastery 的 `z.object` 用 `TypeT<X> = ReturnType<From<X>>`
+ * 推断字段类型，而 `From<X>` 只认 schema 节点；`Volatile<T>` 不是 schema 节点，会退化为
+ * `never`（表现为 `parsed.skills.get()` 报 "Property 'get' does not exist on type 'never'"）。
+ * 因此这里推导 `.volatile()` 自身的产物类型：它仍是 schema 节点，但解析输出是 `Volatile<T>`，
+ * 同时用 `Volatile` 做静态保证（产物必须是 cosmokit 引用），避免退化成普通 schema。
  */
-function volatileSchema<T extends object>(schema: T): T {
-  const fn = (schema as { volatile?: () => T }).volatile;
-  return typeof fn === "function" ? fn.call(schema) : schema;
+type VolatileSchema<S> = S extends { volatile: (...args: any[]) => infer R }
+  ? R extends (...args: any[]) => infer O
+    ? O extends Volatile<unknown> ? R : never
+    : never
+  : never;
+
+function volatileSchema<T extends object>(schema: T): VolatileSchema<T> {
+  const fn = (schema as { volatile?: () => VolatileSchema<T> }).volatile;
+  return (typeof fn === "function" ? fn.call(schema) : schema) as VolatileSchema<T>;
 }
 
 /** 单个 councillor 配置（M4 council 工具使用） */
