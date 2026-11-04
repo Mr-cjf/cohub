@@ -40,11 +40,20 @@ npm run build
 
 完整 4 步（`package.json` `build` script）：
 1. `bun run scripts/generate-prompts.ts` — 将 `src/prompts/*.md` → `src/prompts/*.ts`
-2. `bun build src/index.ts src/tui.ts --outdir dist --target node --format esm`（external 依赖见下方列表）
+2. `bun build src/index.ts src/tui.ts src/v2/index.ts --outdir dist --target node --format esm`（external 依赖见下方列表）
 3. `bun build src/cli/index.ts --outdir dist/cli --target node --format esm`
 4. `tsc --emitDeclarationOnly`
 
 外部依赖不打包：`@opencode-ai/plugin`、`@opencode-ai/sdk`、`@opentui/core`、`@opentui/solid`、`zod`。
+⚠️ `dist/v2/index.js` **不得**包含 `@opencode-ai/plugin` 的**静态** import（2.x 宿主没装该包，静态导入会让整个模块图解析失败）。**允许** `loadV1Tool()` 内 try/catch 包裹的**动态** `await import(...)`。构建后请确认：
+
+```bash
+# 应只有 1 处，且必须位于 loadV1Tool 的 try/catch 内（动态 import）
+grep -n '@opencode-ai/plugin' dist/v2/index.js
+```
+
+若出现静态 `import ... from '@opencode-ai/plugin'` 或裸 `require`，即为缺陷。
+
 `dist/` 在 `.gitignore` 中。
 
 ## 源码地图
@@ -52,6 +61,11 @@ npm run build
 | 找什么 | 去哪里 |
 |--------|--------|
 | 插件入口（agent 注册、hook、消息转换） | `src/index.ts` |
+| **OpenCode 2.x 入口**（`./server` 子路径） | `src/v2/index.ts` |
+| **2.x 兼容层**（v2 ctx → v1 PluginInput） | `src/v2/compat.ts` |
+| **2.x 事件桥接**（v2 事件 → v1 语义） | `src/v2/events.ts` |
+| **2.x 定义转换**（prompt/model/permission 词汇） | `src/v2/adapt.ts` |
+| **跨代工具形状**（不依赖宿主包） | `src/tools/portable.ts` |
 | TUI 侧边栏面板 | `src/tui.ts` |
 | 13 个 agent 提示词源文件（人工编辑） | `src/prompts/*.md` |
 | 提示词自动生成文件（勿手动编辑） | `src/prompts/*.ts` |
@@ -67,11 +81,44 @@ npm run build
 
 ## 关键架构约定
 
-- **双重注册**：代理同时通过 `return { agent }` 和 `config` hook 写入，确保兼容 HTTP 服务器模式
-- **中文注入**：通过 `experimental.chat.system.transform` 推送中文指令，不走 `instructions` 字段
-- **Background Job Board**：通过 `experimental.chat.messages.transform` 注入到 user 消息末尾
-- **TaskTracker**：`tool.execute.before` 注册任务 → `tool.execute.after` 更新状态
-- **TUI state**：写入 `~/.local/share/opencode/storage/oh-my-opencode-cohub/`，TUI 面板每 250ms 轮询
+- **双入口共包**：`exports["."]`（1.x，默认导出是 `(input, options) => Hooks` 函数）与 `exports["./server"]`（2.x，默认导出是 `{ id, setup }`）并存。2.x 优先解析 `./server`，1.x 只读根导出。**改任何一侧都要确认另一侧仍可加载**
+- **2.x 不重写编排逻辑**：`src/v2/` 只负责把 v2 的 `ctx` 翻译成 v1 形状，然后复用 `src/index.ts` 的工厂。业务模块（context / orchestration / task-manager / tools）保持单一实现
+- **工具必须产出中立形状**：`src/tools/*` 只导出 `PortableToolDefinition`（`{ description, args, execute }`），由入口层分别包装。**禁止在工具模块里直接 import 宿主包**——2.x 不装 `@opencode-ai/plugin`，静态导入会让整个模块图解析失败
+- **双重注册（仅 1.x）**：代理通过 `return { agent }` + `config` hook 写入。2.x **没有 config hook**，改由 `AgentEditor.default()` 表达默认代理
+- **中文注入**：1.x 走 `experimental.chat.system.transform`；2.x 走 `session.hook('context')`。两者都在适配层统一
+- **Background Job Board**：1.x 走 `experimental.chat.messages.transform`；2.x 同样走 `session.hook('context')`，由 `toV1Messages` / `applyV1Messages` 做消息形状双向适配
+- **TaskTracker**：`tool.execute.before` 注册任务 → `tool.execute.after` 更新状态（两代同名）
+- **TUI state**：写入 `~/.local/share/opencode/storage/oh-my-opencode-cohub/`，TUI 面板每 250ms 轮询。**2.x 目前不带 TUI**
+- **variant 补齐（v2）**：2.x 宿主遇到 `model.variants` 中不存在的 variant 会抛 `VariantUnavailableError`（1.x 静默降级）。`src/v2/index.ts` 在 `setup` 中把代理配置声明的 variant 通过 `ctx.catalog.transform` 补进模型目录，并按 `model.api.package` 生成正确的请求体片段（`buildVariantBody`）。**注意**：宿主 `ModelV2Info.variants` 是**数组** `Array<{id, headers, body}>`，不是字典；且 `await ctx.catalog.transform()` 在 batch 内只登记不执行，不能依赖其回调在 `setup` 期同步跑完——因此采用「补齐」而非「剔除」策略。
+  - **不变量**：① 模型不存在时**绝不**调用 `catalog.model.update`（宿主该 API 是 upsert，会创建能力不完整的空模型）；② 同 id variant 已存在时**不覆盖**（用户显式声明优先）；③ 拿不到 `api.package` 时只补空 body 并写诊断，档位不会生效（诊断经 `COHUB_V2_DIAG` 门控，默认不写文件）；④ Council 的 councillors 配置**不在**补齐范围。
+
+## 2.x 迁移备忘（实测 OpenCode Desktop 2.2.5）
+
+| 项 | 1.x | 2.x |
+|---|---|---|
+| 插件形态 | 文件或目录 | **必须是目录**（含 `package.json`），单文件被拒：`configured plugin path must be a directory` |
+| 导出契约 | `async (input, options) => Hooks` | `{ id, setup(ctx) }` |
+| 包名 | `@opencode-ai/plugin` | `@opencode/plugin` / `@opencode/schema` / `@opencode/client` |
+| 配置字段 | `agent` / `provider` / `plugin` / `mcp` | `agents` / `providers` / `plugins` / `mcp.servers` |
+| 代理新增 | `agent` 配置直接声明 | `ctx.agent.transform` + `update(id, fn)`（**对未知 id 会创建**，无 `add`） |
+| `config` hook | 有 | **不存在** |
+| `session.idle` 事件 | 有 | **没有**，改用 `session.hook('experimental.idle')` |
+| agent prompt 字段 | `prompt` | `system` |
+| 权限 | `permission: { tool: 'deny' }` | `permissions: [{ action, resource, effect }]` |
+| 消息形状 | `{ info: { role }, parts: [] }` | `{ role, content: [] }` |
+| session 入参 | `{ path, body, query }` | 扁平 `{ sessionID, ... }` |
+
+### ⚠️ 升级陷阱：全局 `opencode.json` 的 `agent` 块会覆盖插件配置
+
+1.x 时代插件会把 13 条代理配置**写进** `~/.config/opencode/opencode.json` 的 `agent` 字段（双重注册策略的一部分）。
+
+2.x 的加载顺序是：**插件 `agent.transform` 先跑，配置文件 `agent` 后应用**。于是旧的 `agent` 块会静默覆盖 `oh-my-opencode-cohub.json` 里的模型设置——表现为"插件加载成功、prompt 正确、但模型还是几个月前的旧值"。
+
+排查特征：`opencode debug agents` 显示的模型与 `oh-my-opencode-cohub.json` 不一致，且 `~/.config/opencode/opencode.json` 里存在 `agent.co-*` 条目。
+
+处理：删掉全局 `opencode.json` 的整个 `agent` 块（`default_agent` 可以保留），模型改由 `oh-my-opencode-cohub.json` 单一来源决定。
+
+
 
 ## 操作手册
 
@@ -105,14 +152,18 @@ bun test
 # 等效命令：npm run test
 ```
 
-测试覆盖 `src/**/*.test.ts`，共 **13 个**测试文件：
+测试覆盖 `src/**/*.test.ts`，共 **25 个**测试文件：
 
 | 目录 | 测试文件 |
 |------|----------|
-| `src/context/` | `engine` / `extractor` / `truncate` |
-| `src/orchestration/` | `contract` / `engine` / `retry` / `scheduler` |
-| `src/task-manager/` | `quality` / `stats` / `tracker` |
-| `src/tools/` | `adaptive-params` / `council` / `model-stats` |
+| `src/` | `index` |
+| `src/config/` | `loader` |
+| `src/context/` | `diag-log` / `engine` / `extractor` / `prompt-budget` / `truncate` |
+| `src/orchestration/` | `contract` / `engine` / `rate-limit` / `retry` / `scheduler` |
+| `src/prompts/` | `routing` |
+| `src/task-manager/` | `build-lock` / `quality` / `stats` / `tracker` |
+| `src/tools/` | `adaptive-params` / `council` / `job-control` / `model-stats` |
+| `src/v2/` | `adapt` / `compat` / `events` / `variant-backfill` |
 
 （`package.json` 的 `test` 脚本等价于 `bun test ./src`。）
 
@@ -135,6 +186,7 @@ bun test
 | 系统未安装 bun | `npm run build` 失败 | `npm install -g bun` 或使用系统的 bun |
 | 忘记 `git push --follow-tags` | tag 未推送，CI 不触发 npm 发布 | 发版步骤 4 不可遗漏 |
 | 在 `master`/`test`/`dev` 分支执行 git 提交技能 | 违反分支保护约定 | 仅在功能分支使用提交和发版技能 |
+| 给代理配置了模型未声明的 `variant` | v2 下子代理直接加载失败（`VariantUnavailableError`）；v1 静默降级 | 在 `opencode.json` 的 `provider.<p>.models.<m>.variants` 声明后再配，或去掉 variant |
 
 ## 外部依赖与配置
 

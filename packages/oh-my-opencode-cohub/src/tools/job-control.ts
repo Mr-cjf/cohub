@@ -20,13 +20,14 @@
 // - onCancelled 仅在「本次从 running 真实取消落地」时回调一次；重复取消/未知/失败
 //   不得假成功触发；回调自身异常不得引发二次 abort（try/catch 保护）。
 
-import { tool } from '@opencode-ai/plugin';
+// zod 直接引入：v1 的 `tool.schema` 只是 zod 的别名，
+// 但 v1 的 `tool()` 包装器在 2.x 宿主里不可用（包名都换了），
+// 因此这里只取 schema 能力，让工具定义在两代宿主下都能构造。
+import { z } from 'zod';
 import type { PluginInput } from '@opencode-ai/plugin';
 import type { TaskTracker } from '../task-manager/tracker.js';
 import { appendLog } from '../utils/log.js';
-
-// zod access via tool.schema（与 council.ts 相同的模式）
-const z = tool.schema;
+import type { PortableToolSet, PortableToolDefinition } from './portable';
 
 /**
  * 创建 close_job 工具定义。
@@ -49,8 +50,8 @@ export function createCloseJobTool(
   tracker: TaskTracker,
   onClosed?: () => void,
   onCancelled?: (alias: string) => void,
-): Record<string, ReturnType<typeof tool>> {
-  const close_job = tool({
+): PortableToolSet {
+  const close_job: PortableToolDefinition = {
     description:
       'Close (abort) a stuck or unnecessary subagent background task. ' +
       'Accepts the child Session ID (e.g. ses_xxx, shown in the Background Job Board) or the task alias (e.g. coe-1). ' +
@@ -187,7 +188,7 @@ export function createCloseJobTool(
         2,
       );
     },
-  });
+  };
 
   return { close_job };
 }

@@ -1,4 +1,48 @@
 # CHANGELOG
+
+## [1.20.2] - 2026-11-03
+
+### 修复
+- **2.x 诊断输出收敛补齐**：1.20.1 声称已移除逐代理的临时诊断输出，但实际代码未改动。本次真正移除逐工具（`tool.update` / `tool.add`）与逐事件（`event <type> -> <mapped>`）的写入，`COHUB_V2_DIAG=1` 下仍保留代理/工具/上下文/hook 注册的汇总记录。
+- **v2 子代理因无效 variant 加载失败**：OpenCode 2.x 宿主遇到模型未声明的 `variant` 会抛 `VariantUnavailableError` 导致子代理无法加载（1.x 只是静默降级）。插件现在会把代理配置声明的 `variant` 补齐进宿主模型目录，避免崩溃；请求体字段按 provider 的 AI SDK 包自动适配（`@ai-sdk/openai-compatible` → `reasoning_effort`、`@ai-sdk/openai` → `reasoning.effort`、`@ai-sdk/anthropic` → `output_config.effort`）。边界：仅在目标模型已存在于宿主目录时补齐（不会创建空模型），同 id 已声明时不覆盖，取不到 `api.package` 时只占位不生效；Council councillors 不在覆盖范围。
+
+### 文档
+- **测试清单校正**：包 `AGENTS.md` 的测试文件数由 13 更正为 25，补全 `src/`、`src/config/`、`src/prompts/`、`src/v2/` 等 4 个此前遗漏的目录；`src/v2/index.ts` 与 `src/v2/compat.ts` 注释不再写死具体测试文件数量。
+- **variant 配置指导**：README 新增「variant 必须与模型声明对齐」注意事项、「手动声明 variants」示例（camelCase `reasoningEffort`，由宿主按 provider 自动转换）、以及「variant 不生效 / 子代理加载失败怎么查」排查步骤；修正 `MiniMax-M3` 搭配 `variant` 的无效示例（该模型仅支持 toggle 型推理，无 effort 档位）。
+- **1.x variant 注入日志**：`config` hook 现在输出 `代理=model#variant` 清单，便于对照 provider 声明排查（1.x 无法在注册期校验，只能提示）。
+
+## [1.20.1] - 2026-11-03
+
+### 修复
+- **代理构建日志收敛**：移除 2.x 入口里逐代理的临时诊断输出，`COHUB_V2_DIAG=1` 仍保留代理/工具/上下文注册的汇总记录。
+
+### 文档
+- **新增「升级陷阱」说明**：1.x 会把 13 条代理配置写进全局 `opencode.json` 的 `agent` 字段；2.x 中该字段在插件 `agent.transform` **之后**应用，会静默覆盖 `oh-my-opencode-cohub.json` 的模型设置。README 与包 AGENTS.md 补充迁移步骤（`plugin`→`plugins`、删除 `agent` 块、清理 `plugins/oh-my-opencode-cohub.bak-*` 残留）与自查方法。
+
+## [1.20.0] - 2026-11-03
+
+### 新增
+- **OpenCode 2.x 支持**：新增 `./server` 入口（`src/v2/`），通过 `package.json` 的 `exports` 与 1.x 根入口共存——2.x 优先解析 `./server`，1.x 只读根导出，同一 npm 包服务两代宿主。
+- **兼容适配层**：`src/v2/compat.ts` 把 2.x 的 `ctx` 反向适配为 1.x 的 `PluginInput`（`path/body/query` 调用风格），使上下文引擎、任务追踪、编排引擎、council 全部零改动复用。
+- **事件桥接**：`src/v2/events.ts` 把 2.x 的事件模型映射回 1.x 语义（`session.retry.scheduled` → `session.status`、`session.execution.failed` → `session.error`，`sessionID` 补齐到 `properties.info.id`）。
+- **定义转换**：`src/v2/adapt.ts` 统一 v1 → v2 的词汇差异：`prompt` → `system`、`'prov/model'` → `{ providerID, id, variant }`、`permission: { tool: effect }` → `permissions: [{ action, resource, effect }]`、`temperature` → `request.body.temperature`。
+- **中立工具形状**：`src/tools/portable.ts` 让 `council_session` / `close_job` 不依赖任何宿主包，由入口层分别包装成 1.x 的 `tool()` 与 2.x 的 `ctx.tool.add()`。
+- **2.x 可观测量**：`COHUB_V2_DIAG=1` 时把代理/工具/hook 注册结果写入临时日志，便于在真实宿主中核对。
+
+### 变更
+- **工具包装改为按需加载**：`src/index.ts` 的 `@opencode-ai/plugin` 从静态 import 改为动态 import。2.x 宿主不装该包，静态导入会让整个模块图解析失败（`Cannot find package`），即使那段代码不会执行。
+- **`hooks.portableTools`**：工厂额外返回中立形状的原始工具定义，供 2.x 入口消费；1.x 的 `hooks.tool` 行为不变。
+
+### 修复
+- **代理配置读取**：适配层同时支持 `{ name, config: {...} }`（工厂内部 agents 数组）与 `{ name, mode, prompt, ... }`（工厂返回的扁平 `agent` 记录）两种形态，修复扁平形态下 prompt/mode/model 全部丢失的问题。
+
+### 测试
+- 新增 `src/v2/{adapt,events,compat}.test.ts` 共 35 个用例，覆盖模型解析、权限合并、prompt 映射、事件映射与入参折叠。
+- 全量 554 个测试通过。
+
+### 验证
+- 在 OpenCode Desktop **2.2.5** 真实二进制上验证：13 个代理注册成功（含 `co-orchestrator-gpt`），prompt 长度与 1.x 基线逐项一致（8753 / 4061 / 3470 / 2532 等）；2 个工具注册成功；`session.context` 注入生效（system 4 → 6 段）；`experimental.idle` 与事件流均触发；实际会话以 `co-orchestrator` 身份运行。
+
 ## [1.19.1] - 2026-10-19
 
 ### 新增
