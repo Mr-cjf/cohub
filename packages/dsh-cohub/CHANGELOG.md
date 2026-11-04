@@ -2,6 +2,22 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.11.0] - 2026-11-04
+
+### 修复
+
+- **停滞检测不再误杀慢思考子代理**：S2「无结果空转」原先以「距上次工具结果」计时，且完全忽略 `text-delta` 与长命令执行期，导致「先读上下文再写长方案」的规划类任务与带构建验证的任务被结构性中断（实测空转 188s–957s 后被 abort）。现将 tool/call、tool/result、reasoning-delta、text-delta 四类事件统一刷新活动时钟，S2 改为只判「最近任意活动」。对使用者的影响：长时间思考或执行长命令的子代理不再被误判中止。
+- **`volatileSchema` 返回类型失真**：原签名标注返回 `T`，抹掉了 `.volatile()` 产物的 `Volatile<T>` 信息，导致 `typecheck:0.2` 的契约夹具报 4 条 TS2741（运行时一直正确）。现改为推导 `.volatile()` 产物类型。对使用者的影响：类型检查恢复全绿，无运行时行为变化。
+
+### 变更
+
+- **`delegate_batch` 增加 skill 白名单校验**：原先拼错 skill 名（如 `analyze`）会被静默降级为 `co-fixer`，且返回标签不带任何兜底标记，调用方无从察觉。现改为：非空但无效的 skill 名使该 task 单独返回 error 并列出全部合法值，同批其它 task 不受影响；空串/缺失仍保留原兜底行为。对使用者的影响：**行为不兼容变更**——拼错 skill 名将明确报错而非静默执行。
+- **`delegate_batch` 参数描述补全**：`tasks` 与 `skill` 的 description 现明确写出「每项仅接受 id/skill/prompt 三个字段」及 13 个合法 skill 值。对使用者的影响：调用方在调用前即可看到正确形态，减少因字段名拼写错误导致的整批校验失败。
+
+### 文档
+
+- **orchestrator 技能新增「通道前置检查（bootstrap 检查）」**：当待修对象与执行工具是同一套基础设施时，先派极小探针验证通道可用，连续 2 次基础设施类中止即停手止血而非继续委派；并记录「raced abort（result 未结算）不代表子代理未执行，须用 git status/diff 核对落盘副作用」。
+
 ## [0.10.5] - 2026-11-02
 
 ### 修复
