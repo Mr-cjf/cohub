@@ -9,6 +9,7 @@ lib/
 
 # 本地缓存与临时文件
 .tmp/
+.local-backup/
 .playwright-mcp/
 *.log
 .DS_Store
