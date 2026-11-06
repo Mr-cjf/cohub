@@ -2,6 +2,23 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.11.1] - 2026-11-06
+
+### 修复
+
+- **移除 preset 中已废弃的 `@deepseek-ai/dsh-tool-subagent-control/list-agents` 挂载行**：该子路径导出在 0.2.2-rc 已删除，preset 继续挂载会导致宿主加载报错；`list_agents` 工具由主插件 `tool-subagent-control` 自动注册，无需单独挂载。受影响的 preset：`co-orchestrator`、`cohub-cordis`。
+
+### 变更
+
+- **最低支持宿主版本抬升至 DSH `0.2.2-rc.1`**：`@deepseek-ai/dsh-*` 的 peer range 由 `^0.2.0-rc.2` 改为 `^0.2.2-rc.1`，devDependencies 精确固定 `0.2.2-rc.1`。改用 `^0.2.2-rc.1` 而非沿用 `^0.2.0-rc.2` 是必需的：`^0.2.0-rc.2` 按 npm 的 prerelease 元组规则只匹配 `0.2.0-*`，匹配不到 `0.2.2-rc.1`；新区间仍以 `0.2.2-rc.1` 为下限，低于它一律拒绝。`@deepseek-ai/cordis` peer `^4.0.1` 与 `@deepseek-ai/schemastery` peer `^3.18.4` **保持不变**（区间已覆盖宿主内置的 cordis 4.1.0 与 schemastery 3.19.0，且两者非 prerelease，不存在元组匹配问题）。对使用者的影响：**行为不兼容变更**——宿主低于 `0.2.2-rc.1` 时将因 peer 冲突无法安装，需先升级 DSH。
+
+### 文档
+
+- **README 依赖表 schemastery peer 修正**：兼容性一节原写 `schemastery` peer `^3.18.1`，与 `package.json` 实际的 `^3.18.4` 不符，现已对齐。
+- **README 前置条件同步至 `0.2.2-rc.1`**：原文写「宿主 DSH ≥ `0.2.0-rc.2`」，与新的 peer range 自相矛盾，已改写为 `^0.2.2-rc.1`；同时补明该版本为 prerelease（dist-tag `next`）以及宿主自身要求 Node ≥ 24.9.0，并说明 per-child `agentPreset` 所需的 `0.2.1` 已被新下限涵盖。
+- **组合创作技能的 workflow 示例修正**：`presets/cohub-cordis/skills/editing-cordis-compositions/SKILL.md` 中的示例原写 `dsh-workflow-worker-thread`，该名称在宿主运行时不提供，已改为实测存在的 `dsh-workflow-ptc`。
+- **技能补充 preset 布局形态与并发写风险说明**：`skills/cordis.md` 注明 `~/.dsh/.agent-presets/<id>/agent.cordis.yml` 属目录式 preset 布局，新版宿主另支持 `dsh-agent-preset` 声明行，动手前须先确认目标 preset 是哪种形态；`skills/orchestrator.md` 把 `~/.dsh/.agent-presets/**` 列入需要标注并发风险的配置类文件（cohub 自身会重装、宿主亦可能回写），并要求改完复查全量 diff 而非只看目标行。
+
 ## [0.11.0] - 2026-11-04
 
 ### 修复

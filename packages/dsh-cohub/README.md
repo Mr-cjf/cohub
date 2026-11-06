@@ -1,6 +1,6 @@
 # dsh-cohub
 
-> 本文对应 **v0.11.0**；完整变更历史见 [CHANGELOG.md](./CHANGELOG.md)。
+> 本文对应 **v0.11.1**；完整变更历史见 [CHANGELOG.md](./CHANGELOG.md)。
 
 DeepSeek Harness 版（对照 [OpenCode 版](../oh-my-opencode-cohub/)）：中文智能体编排插件。
 把「纯调度模式 + 13 个技能（12 个代理编排体系 + co-cordis 组合创作）+ 多模型共识 + 运行期调度韧性」移植到 DSH 原生能力之上。
@@ -9,7 +9,10 @@ DeepSeek Harness 版（对照 [OpenCode 版](../oh-my-opencode-cohub/)）：中�
 
 ### 1. 前置条件
 
-宿主 DSH ≥ `0.2.0-rc.2`（peer 依赖锁定）；其中子代理读写硬隔离（per-child `agentPreset`）需 ≥ `0.2.1`。不支持 DSH 0.1。
+宿主 DSH ≥ `0.2.2-rc.1`（`@deepseek-ai/dsh-*` peer 依赖声明为 `^0.2.2-rc.1`，等价于 `>=0.2.2-rc.1 <0.3.0-0`；低于此版本时 npm 会因 peer 冲突拒绝安装，属预期行为）。不支持 DSH 0.1，以及 0.2.0 / 0.2.1 系列。
+
+- 子代理读写硬隔离（per-child `agentPreset`）自 DSH `0.2.1` 起提供，已被上述下限涵盖，无需单独满足。
+- `0.2.2-rc.1` 是 prerelease，版本走 npm dist-tag `next`（2026-11-04 发布）；宿主自身要求 **Node ≥ 24.9.0**（`engines.node`），本地构建/运行前请先对齐 Node 版本。本包不单独声明 `engines.node`，Node 门槛以宿主为准。
 
 ### 2. 安装
 
@@ -84,7 +87,7 @@ cp presets/co-orchestrator/* ~/.dsh/.agent-presets/co-orchestrator/
 > pwsh -File scripts/deploy-preset.ps1 -PresetName co-orchestrator
 > ```
 
-在 GUI 的 agent preset 选择器中切换。注意：**DSH 0.2.1 起支持 per-child `agentPreset`**（`SubagentStartRequest.agentPreset` 为一等字段，子代理经 `presets.mount()` 独立组装），子代理不再继承父代理的 preset 组合与工具表——cohub 已用两个独立精简 preset（`cohub-subagent-readonly` / `cohub-subagent-write`）对子代理做**硬隔离**，故「绝不亲自操作文件」「只读代理不写文件」由工具面物理保证，不再只靠提示词。`toolFilter` 仍保留作为补充收窄手段（但它对子代理 own 层挂载的工具无效）。主代理侧「绝不亲自操作文件」继续由 co-orchestrator 技能在提示词层约束（与 OpenCode 原版一致）。
+在 GUI 的 agent preset 选择器中切换。注意：**DSH 0.2.1 起支持 per-child `agentPreset`**（`SubagentStartRequest.agentPreset` 为一等字段，子代理经 `presets.mount()` 独立组装；本包 peer 要求的 `^0.2.2-rc.1` 已涵盖该能力），子代理不再继承父代理的 preset 组合与工具表——cohub 已用两个独立精简 preset（`cohub-subagent-readonly` / `cohub-subagent-write`）对子代理做**硬隔离**，故「绝不亲自操作文件」「只读代理不写文件」由工具面物理保证，不再只靠提示词。`toolFilter` 仍保留作为补充收窄手段（但它对子代理 own 层挂载的工具无效）。主代理侧「绝不亲自操作文件」继续由 co-orchestrator 技能在提示词层约束（与 OpenCode 原版一致）。
 
 完整变更历史（含 v0.3.0–v0.8.2 全部条目）见 [CHANGELOG.md](./CHANGELOG.md)。
 
@@ -150,7 +153,7 @@ revision 做冲突栅栏），因此改完保存即生效，无需重启。
 留空 = 不覆盖；可填档位见上文
 [按代理配置推理强度](#按代理配置推理强度reasoningeffort)。
 
-`npm run test:client`（`test/client-runtime-0.2.ts`，84 条断言）覆盖该页的渲染契约与写回契约：
+`npm run test:client`（`test/client-runtime-0.2.ts`，120 条断言）覆盖该页的渲染契约与写回契约：
 `value=""` 继承占位项、目录加载中/失败降级手填、已存值不可用时 disabled 回显、只读连接、
 revision 冲突拒绝保存、只写显式配置的代理等。
 
@@ -276,14 +279,18 @@ skills:
 
 ## 兼容性
 
-宿主版本要求见「快速开始 → 前置条件」。`@deepseek-ai/cordis` peer `^4.0.1` / `schemastery` peer `^3.18.1`
-保持合法 range，测试 devDependencies **精确固定**宿主实测 `4.0.4` / `3.18.4`——lock 解析到最新不代表宿主实测，以宿主为准：
+宿主版本要求见「快速开始 → 前置条件」。`@deepseek-ai/dsh-*` peer 声明为 `^0.2.2-rc.1`；`@deepseek-ai/cordis`
+peer `^4.0.1` / `schemastery` peer `^3.18.4` **保持不变**——这两个区间已覆盖宿主内置的 cordis 4.1.0 与
+schemastery 3.19.0（非 prerelease，无 prerelease 元组匹配问题，故不需要随宿主一起抬）。
+测试 devDependencies **精确固定** `4.1.0` / `3.19.0`（与宿主内置一致；`@deepseek-ai/dsh-*` 侧则精确固定
+`0.2.2-rc.1`，与 peer 下限同版）——lock 解析到最新不代表宿主实测，以宿主为准：
 
 - **0.1 的 settings namespace 机制已移除**：`installSettingsSection` / `settingsNamespace` 在
   dsh-settings 0.2 已删除。本插件不再注册 `cohub` namespace，改为 Config 的三个动态字段标
   `.volatile()`（见上节）。`settings.yaml` 的 `cohub.*` 段**不会被自动迁移**（旧 importer 是否
   支持自定义 namespace 未证实，明确不触发），请通过设置页或 `cordis.patch.yml` 重新配置。
 - **不兼容 DSH 0.1**：宿主版本要求见「快速开始 → 前置条件」（0.1 宿主上 npm 会拒绝 peer 冲突，属预期行为）。
+  同理，**0.2.0 / 0.2.1 及全部 `0.2.2-*` 早期 rc 也已不在支持范围**——peer 下限是 `0.2.2-rc.1`，低于它一律按 peer 冲突拒绝。
 - **验证入口**：`npm run test:runtime`（`test/runtime-0.2.ts`，真实 schemastery/Volatile/defineTool
   契约 + 真实 cordis 挂载，离线 stub 子代理）、`npm run test:host`（`test/host-integration.ts`，
   真实 Loader + entry.update volatile 提交 + SettingsForms.describe 投影 + 真实 subagents 服务
@@ -292,6 +299,7 @@ skills:
   （`test/types/runtime-0.2.ts`，strict 编译检查公共边界与真实 DSH 0.2 导出）。完整宿主链路
   （真实 spawn/fork transport 的进程内实现、真实 LLM provider、preset 树真实挂载）由宿主集成验证覆盖，
   单测不冒称完全覆盖。
+- **continuable 子代理冷恢复后回到父 preset 全量工具**：`toolFilter` 不进 subagent descriptor，冷恢复（进程重启后接续）时子代理回到父 preset 的完整工具面。因此**工具隔离主要靠 `agentPreset` 承担**（`cohub-subagent-readonly` / `cohub-subagent-write`），不要把 `toolFilter` 当作安全边界。
 
 ### 环境契约持久化
 
@@ -421,7 +429,7 @@ presets/
   cohub-subagent-write/     子代理可写 preset（工具面硬隔离）
 test/
   unit.ts               基础集成
-  client-runtime-0.2.ts 设置页渲染 / 写回契约（84 条断言）
+  client-runtime-0.2.ts 设置页渲染 / 写回契约（120 条断言）
   delegate-p1.ts        P1 环境契约注入 + 重试 + 模型回退
   stall-p3.ts           停滞检测
   schedule-p3.ts        调度参数
