@@ -4,7 +4,7 @@ OpenCode 中文智能体编排插件 CoHub——纯调度模式、全中文提�
 
 [![GitHub](https://img.shields.io/badge/GitHub-Mr--cjf%2Fcohub-blue?logo=github)](https://github.com/Mr-cjf/cohub)
 
-> 本文对应 v1.20.2
+> 本文对应 v1.21.0
 
 ## 特性
 
@@ -578,6 +578,7 @@ CoHub 采用 Wave 波次分组并行模式。并行与推进由**主代理显式
 - **失败重派**：task 返回失败时，由 orchestrator 根据结果显式决定重派/换策略，不自动重试
 - **取消后继**：需要取消时显式调用 `close_job`——插件唯一注册的取消工具，对**已绑定子会话**的目标执行真实 `session.abort()`（未绑定子会话仅本地取消，以返回的 `session_aborted` 为准）；OpenCode 原生 `cancel_task` 路径仅同步插件内部状态（引擎标记 cancelled），不承诺真实中止目标会话。无自动级联取消——编排引擎的「级联取消」仅是内部状态同步（把未完成后继标记为 cancelled），不会自动中止其他运行中的会话
 - **验证区分**：修改 Wave 只改不编译（注明「验证待统一执行」），多文件修改完成后统一编译一次
+- **委派粒度**：以证据集聚类为默认拆分维度，单包硬上限为可独立判定诉求 ≤3、模块域 ≤2，跨模块交叉比对与多条件合成判定不入包；拆分不足与拆分过度同属违规。跨包结论由 orchestrator 基于「结论 + `path:line` 锚点」合成，或单独一个 co-oracle 合成判定包置于本 Wave 最后一层，不由证据包顺手汇总
 
 ## 依赖
 
@@ -676,6 +677,7 @@ npm run build
 
 | 版本 | 日期 | 主要变更 |
 |------|------|---------|
+| 1.21.0 | 2026-11-06 | **委派粒度「聚合上界」契约**：orchestrator 规则 3 补入聚合适用条件（证据重叠 / 结论互不依赖 / 无写冲突 / 未超上限）、单包硬上限（可独立判定诉求 ≤3、模块域 ≤2、跨模块交叉比对与多条件合成判定不入包）与派发前「粒度自检」；新增拆分维度优先级、跨包汇总归属规则（orchestrator 合成或单独 co-oracle 合成包置于 Wave 最后一层）、拆分不足与过度同属违规的对称声明。重写「并行退火警告」为「多派与聚合都是正常形态」，判断依据改为证据重叠度与是否超限；orchestrator 自检清单新增「包体量自检」；planner 限定为「不是拆分门槛，但是聚合上限」。`routing.test.ts` 新增「聚合上界契约」describe（6 个用例，含负向断言） |
 | 1.20.2 | 2026-11-03 | **修复 v2 子代理因无效 variant 加载失败**：OpenCode 2.x 宿主遇到模型未声明的 `variant` 会抛 `VariantUnavailableError` 导致子代理无法加载（1.x 静默降级）。新增 `src/v2/variant-backfill.ts`，把代理配置声明的 `variant` 补齐进宿主模型目录，请求体按 provider 包自动适配（`@ai-sdk/openai-compatible` → `reasoning_effort`、`@ai-sdk/openai` → `reasoning.effort`、`@ai-sdk/anthropic` → `output_config.effort`）；不创建空模型、不覆盖用户已声明的同 id variant、幂等。同时真正移除 2.x 逐工具/逐事件的临时诊断输出，补齐 1.x variant 注入日志。README 新增 variant 对齐要求、手动声明示例与排查步骤；AGENTS.md 测试清单由 13 校正为 25 |
 | 1.20.1 | 2026-11-03 | 文档补充 2.x 升级陷阱：全局 `opencode.json` 的 `agent` 块会在插件注入后覆盖 `oh-my-opencode-cohub.json` 的模型设置，需删除（`default_agent` 可保留）；同时补充 `plugin`→`plugins` 字段改名与残留插件目录清理。移除 2.x 入口的逐代理临时诊断日志（`COHUB_V2_DIAG=1` 汇总记录保留） |
 | 1.20.0 | 2026-11-03 | **新增 OpenCode 2.x 支持**：`package.json` 增加 `exports["./server"]` 子路径入口（`src/v2/`），与 1.x 根导出共存；2.x 优先解析 `./server`。新增兼容适配层（`ctx` → v1 `PluginInput`）、事件桥接（`session.retry.scheduled` → `session.status`、`session.execution.failed` → `session.error`）、定义转换（`prompt` → `system`、`permission` → `permissions[]`、`'prov/model'` → 模型引用）。工具改为中立形状 `PortableToolDefinition`（`src/tools/portable.ts`），不再依赖宿主包；`@opencode-ai/plugin` 改为动态导入（2.x 不装该包，静态导入会导致 `Cannot find package`）。修复代理配置读取：同时支持嵌套 `config` 与扁平两种形态。已在本机 OpenCode Desktop 2.2.5 真机验证 13 代理 / 2 工具 / 中文注入 / Job Board / idle / 事件映射全部生效；2.x 不含 TUI 面板 |
