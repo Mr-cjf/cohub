@@ -59,7 +59,7 @@ codex plugin remove oh-my-codex-cohub@personal
 普通任务只执行必要的理解、收集、规则分析、规划、执行和验证步骤；复杂任务可采用完整流程。Codex 版的规划、调度和执行技能共享[效率规范](skills/cohub/references/efficiency.md)与[批量操作规范](skills/cohub/references/batch-execution.md)：
 
 - **文件**：集中搜索和读取，关联文件合并为一次补丁，同文件写入串行，保留用户及其他代理改动。
-- **代理**：就绪队列准备、原生调用连续发送、容量补位及实际派发验收遵循[效率规范](skills/cohub/references/efficiency.md)的 `dispatch_prepare` / `dispatch_send` 契约。插件不设任务数上限；实际启动间隔由宿主决定。
+- **代理**：就绪队列准备、原生调用连续发送、容量补位及实际派发验收遵循[效率规范](skills/cohub/references/efficiency.md)的 `dispatch_prepare` / `dispatch_send` 契约。插件不设并发数上限，但单包内容体量受[批量操作规范](skills/cohub/references/batch-execution.md)的「单包容量上限」约束（诉求 ≤3、模块域 ≤2，禁跨模块合成判定），超限拆包同批并行；实际启动间隔由宿主决定。
 - **命令**：独立命令一轮并行调用，有依赖或共享生成目录、锁文件、测试状态时串行；逐项记录结果及运行会话。
 - **验证**：执行批次可标记 `implementation-only`，整批写入结束后由指定负责人统一构建及测试，验证前保持 `implemented` 状态。
 - **失败**：仅阻断失败项的下游，独立任务可继续；确认旧执行已结束并修复原因后，重跑受影响的任务和检查。
