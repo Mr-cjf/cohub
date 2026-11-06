@@ -179,6 +179,44 @@ describe('1.18.8 测试决策契约：验证范围与扩大条件', () => {
   });
 });
 
+describe('聚合上界契约：单包硬上限与对称违规', () => {
+  test('正向：聚合适用条件与单包硬上限必须可检索', () => {
+    expect(orchestrator).toContain('聚合适用的条件');
+    expect(orchestrator).toContain('单包硬上限');
+    expect(orchestrator).toContain('诉求 ≤3');
+    expect(orchestrator).toContain('模块域 ≤2');
+    expect(orchestrator).toContain('跨模块交叉比对');
+    expect(orchestrator).toContain('合成判定');
+  });
+
+  test('正向：派发前强制自检行与拆分优先级存在', () => {
+    expect(orchestrator).toContain('粒度自检');
+    expect(orchestrator).toContain('拆分维度优先级');
+    expect(orchestrator).toContain('禁止按文件数拆分');
+  });
+
+  test('正向：汇总归属与对称违规声明存在', () => {
+    expect(orchestrator).toContain('汇总归属');
+    expect(orchestrator).toContain('禁止让某个证据包');
+    expect(orchestrator).toContain('同属违规');
+  });
+
+  test('正向：自检清单含包体量自检项', () => {
+    expect(orchestrator).toContain('包体量自检');
+  });
+
+  test('负向：反向压力"单个 task 调用是最后手段"不得残留', () => {
+    expect(orchestrator).not.toContain('单个 task 调用是最后手段');
+    expect(orchestrator).toContain('多派是正常形态');
+  });
+
+  test('planner：大小/复杂度是聚合上限而非拆分门槛', () => {
+    expect(planner).toContain('不是拆分门槛');
+    expect(planner).toContain('是聚合上限');
+    expect(planner).toContain('单包硬上限');
+  });
+});
+
 describe('GPT 专用 orchestrator 变体（co-orchestrator-gpt）', () => {
   test('分诊交给 co-planner：方案须输出任务级别/阶段划分/验证级别/Wave 分组', () => {
     expect(orchestratorGpt).toContain('分诊交给 @co-planner');
