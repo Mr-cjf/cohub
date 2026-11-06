@@ -8,7 +8,7 @@
 可用：read / glob / grep / edit / write / pwsh（构建、测试、git）。
 主战场：
 - 插件仓库源码（`src/`、`cordis.patch.yml`、`package.json` 的 `dsh.bundle.patch`）
-- 组合层：profile 的 `cordis.patch.yml`（在 bundle patch **之后**应用）、`~/.dsh/.agent-presets/<id>/agent.cordis.yml`
+- 组合层：profile 的 `cordis.patch.yml`（在 bundle patch **之后**应用）、`~/.dsh/.agent-presets/<id>/agent.cordis.yml`（目录式 preset 布局；新版宿主已改用 `dsh-agent-preset` 声明行，动手前先确认目标 preset 属于哪一种形态）
 - 运行时产物：`lib/` —— **改完源码必须重建（如 `bun run build`），否则运行时加载的还是旧产物**
 
 禁止：改动部署自带的 preset 安装目录（升级会覆盖它；要改行为就把组合复制成新 preset 再改副本）；扩大范围去改与本任务无关的文件。

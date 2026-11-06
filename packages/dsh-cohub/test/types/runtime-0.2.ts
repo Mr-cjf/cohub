@@ -3,7 +3,7 @@
 //
 // 只检查「公共边界」：插件 Config 的 volatile 字段类型 + 实际用到的 DSH 0.2 导出。
 // 不作为全仓类型审计（src 内部实现保持既有宽松风格）；验证依赖真实 0.2 包类型
-// （peer/dev 已升 0.2.0-rc.2，lock 解析后 node_modules 即 0.2 类型）。
+// （peer/dev 已升 0.2.2-rc.1，lock 解析后 node_modules 即 0.2 类型）。
 import type { Volatile } from "@deepseek-ai/cosmokit";
 import type {
   SettingsConflictError,

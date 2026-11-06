@@ -35,7 +35,8 @@ export interface CouncilRuntimeConfig {
 
 /**
  * 创建 council_session 工具。
- * 并行调用 ctx.subagents.start()，每个 councillor 通过 agentOptions 路由到自己的 provider/model；
+ * 并行调用 ctx.subagents.startActivation()（实际路径 startSubagentRun → startActivation），
+ * 每个 councillor 通过 agentOptions 路由到自己的 provider/model；
  * 结果聚合为结构化文本返回给调用代理（co-council）综合。
  */
 export function createCouncilTool(config: CouncilRuntimeConfig, ctx: any) {

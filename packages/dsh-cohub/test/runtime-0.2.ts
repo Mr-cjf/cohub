@@ -1,10 +1,10 @@
 // dsh-port/test/runtime-0.2.ts —— DSH 0.2 运行期契约验证（离线、无网络、不触用户配置）
 // 用法：npm run test:runtime（node test/runtime-0.2.ts，node >= 24 类型剥离）
 // 前置：已 bun run build（lib/ 为 0.2 语义产物）且 node_modules 解析到 0.2 依赖树
-//       （lock 更新后：@deepseek-ai/cordis ~4.0.4、schemastery ~3.18.4、dsh-* 0.2.0-rc.2）。
+//       （lock 更新后：@deepseek-ai/cordis ~4.1.0、schemastery ~3.19.0、dsh-* 0.2.2-rc.1）。
 //
 // 分层说明（准确分层，不冒称完全宿主覆盖）：
-//   ✓ 真实层：schemastery 3.18.4 解析 Config（.volatile() 契约）；cosmokit Volatile
+//   ✓ 真实层：schemastery 3.19.0 解析 Config（.volatile() 契约）；cosmokit Volatile
 //     （isVolatile / updateVolatile）；@deepseek-ai/dsh-tools 真实 defineTool 构造工具；
 //     cordis 真实 Context 挂载插件 apply（stub 服务最小集）；delegate 真实执行路径。
 //   ✗ 未覆盖（标注边界，需宿主集成验证）：cordis-plugin-loader 的真实 _commitVolatile

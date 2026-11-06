@@ -53,10 +53,10 @@ function check(name: string, cond: boolean) {
   // session-projection：tokenMeter 真实使用 ctx.sessionProjections.snapshot，peer 必须 required
   const peers: Record<string, string> = manifest.peerDependencies ?? {};
   const optional: Record<string, unknown> = manifest.peerDependenciesMeta ?? {};
-  check("peer 含 @deepseek-ai/dsh-session-projection ^0.2.0-rc.2", peers["@deepseek-ai/dsh-session-projection"] === "^0.2.0-rc.2");
+  check("peer 含 @deepseek-ai/dsh-session-projection ^0.2.2-rc.1", peers["@deepseek-ai/dsh-session-projection"] === "^0.2.2-rc.1");
   check("session-projection peer 非 optional（required）", optional["@deepseek-ai/dsh-session-projection"] === undefined);
   const projMeta = JSON.parse(readFileSync(join(process.cwd(), "node_modules", "@deepseek-ai/dsh-session-projection", "package.json"), "utf8"));
-  check("session-projection 已安装 0.2.0-rc.2（dev 精确锁定）", projMeta.version === "0.2.0-rc.2");
+  check("session-projection 已安装 0.2.2-rc.1（dev 精确锁定）", projMeta.version === "0.2.2-rc.1");
 }
 
 // ── 渲染 shim：组件不调用任何 React hook，只拼 createElement 元素树 ──

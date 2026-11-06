@@ -153,7 +153,7 @@ export const DELEGATE_PERSONA = "你是被委派的专职代理：严格遵循�
 /** 子代理 spawn transport 名（非 LLM provider；别跟 agentOptions.provider 搞混） */
 export const DEFAULT_SPAWN_TRANSPORT = "spawn";
 
-/** 统一入口返回的运行句柄：抹平 0.2.0（run.id）与 0.2.1（activation.childId）的差异 */
+/** 统一入口返回的运行句柄（由 startActivation 回执的 childId 归一而来） */
 export interface SubagentRunHandle {
   id: string;
   result: Promise<any>;
@@ -165,10 +165,11 @@ export interface SubagentRunHandle {
 // 每请求约 75 个工具 schema（native 42 个 ≈ 9,014 tokens）被子代理无差别继承，
 // 而只读代理永远用不到 write/pwsh、写类代理也不该再往下委派。
 //
-// 机制（官方原生支持，无需自造）：SubagentStartRequest.toolFilter 被 SubagentRuntime
-// 透传进 startActivation 的 composition，再由 child-agent 的 applyChildComposition
-// 施为 childCtx.tools.restrict(filter)——时序在子代理创建窗口内、首次请求之前，
-// 因此不污染父代理工具表，也不存在「先看见再被撤掉」的空窗。
+// 机制（cohub 自建）：0.2.2-rc.1 的 SubagentStartRequest 已不含 toolFilter，
+// startActivation 的 composition 也只组装 { agentPreset }，request 里没有可透传的
+// 裁剪通道。真正生效靠 applyChildToolFilterDirectly 在 child 发布后自行对子 scope
+// 施加 tools.restrict()——时序在首次请求之前，因此不污染父代理工具表，
+// 也不存在「先看见再被撤掉」的空窗。
 //
 // 策略：deny 减法，不用 allow 白名单。
 //   - allow 会连带裁掉 todo_write / skill / list_agents / job_* / read_image 等
@@ -356,10 +357,11 @@ export interface SpawnRunSpec {
   prompt: Array<{ type: string; text: string }>;
   parent: any;
   /** 子代理人格前缀。0.2.1 起 SubagentStartRequest 不再把 persona 暴露给模型工具层，
-   *  但服务端仍接受该字段；cohub 统一走 prompt 首块 / 原生字段两条路（见下）。 */
+   *  服务端也不再消费该字段；cohub 统一把它前置为 prompt 首个 text 块（见 startSubagentRunOnce）。 */
   persona?: string;
   /** P1-1 子代理工具表裁剪（deny 减法，见 resolveSkillToolFilter）。
-   *  0.2.0 / 0.2.1 的 SubagentStartRequest 均接受 toolFilter。 */
+   *  0.2.2-rc.1 的 SubagentStartRequest **已不含 toolFilter 字段**，startActivation 也不消费它
+   *  （composition 只组装 agentPreset）——真正生效靠 applyChildToolFilterDirectly 自行 restrict。 */
   toolFilter?: { allow?: string[]; deny?: string[] };
   /** 子代理独立 agent preset id（见 resolveSkillAgentPreset）。
    *  DSH 0.2.1 起 SubagentStartRequest.agentPreset 是一等字段：child 创建时走
@@ -544,7 +546,7 @@ function sameToolFilter(
 }
 
 /**
- * 跨版本 spawn 子代理的统一入口（对外）。
+ * spawn 子代理的统一入口（对外）。只支持 dsh-subagent 0.2.2-rc.1+：统一走 startActivation。
  *
  * 两段式 fail-soft（把「失败」前移成「过滤」）：
  *   ① **下发前**：已学过 restrictableNames 时先用它求交集，直接下发「能裁的那部分」；
@@ -711,8 +713,8 @@ function applyChildToolFilterDirectly(
   };
   const agents = resolveAgentsService(ctx);
   if (agents === undefined) {
-    // 静默跳过而非降级：走到本函数的一定是 0.2.1+ 的 startActivation 分支，而
-    // startActivation 内部就用 `ownerCtx.agents.create()` 建子代理（lib/index.js:1815），
+    // 静默跳过而非降级：只有 startActivation 会调本函数，而它内部就用
+    // `ownerCtx.agents.create()` 建子代理（dsh-subagent lib/index.js），
     // 故真实宿主必然存在 agents 服务；取不到只可能是单测桩 / 未来服务改名。
     // 这种情况登记「裁剪未生效」属于对外部环境的误报，故不下发提示（仍不阻断委派）。
     return;
@@ -762,18 +764,23 @@ function applyChildToolFilterDirectly(
 }
 
 /**
- * 跨版本 spawn 子代理的实际实现。
+ * spawn 子代理的实际实现（单一路径：startActivation）。
  *
  * DSH 0.2.1 运行时 SubagentRuntime 移除了 start(provider, request)，改为 startActivation(spec)：
  *   - spec.provider 与 label/request/signal/delivery 同级；
- *   - request 是 Omit<SubagentStartRequest, "label" | "signal">：persona / toolFilter
- *     仍被接受（只是不再由模型面向的 subagent 工具暴露给 LLM），cohub 显式经 request 透传；
+ *   - request 是 Omit<SubagentStartRequest, "label" | "signal">：persona 已于 0.2.1 从字段表移除，
+ *     toolFilter 在 0.2.2-rc.1 亦已移除，故两者都不再经 request 透传（cohub 自行补偿）；
  *   - 返回 { childId, messageId?, result, dispose } —— 注意是 childId 不是 id；
  *   - delivery 必须显式传 "caller"：默认 "parent" 会在子代理 prompt 末尾追加 send_message 返回指引、
  *     并在父会话写入完成通知，而 cohub 三个工具都自行聚合结果，走 parent 路径是行为回归。
  *
- * 0.2.0 保留原生 start(provider, request)：persona / toolFilter 都是 SubagentStartRequest
- * 的一等字段（0.2.0-rc.2 的类型里就已存在），故两个分支都透传。特性探测双分支，两个版本都能跑。
+ * persona 补偿：startActivation 不再向模型工具层暴露 persona 原生能力，故把 spec.persona
+ * 前置为 prompt 的首个 text 块（与原生能力等价）；toolFilter 在 SubagentStartRequest 里
+ * 已无对应字段，需 cohub 自己在子 scope 上 restrict（见 applyChildToolFilterDirectly）。
+ *
+ * 只支持 0.2.2-rc.1+：该版本的 SubagentRuntime 已移除 start(provider, request)，
+ * 方法表只剩 startActivation，旧的双分支特性探测（typeof subagents.start === "function"）
+ * 永不可达，已删除；此后统一走 startActivation 单一路径。
  */
 async function startSubagentRunOnce(
   ctx: any,
@@ -793,50 +800,31 @@ async function startSubagentRunOnce(
     ctx?.logger?.warn?.("[cohub] startSubagentRun 无可用 signal：子运行不可中止（父轮停止无法回收）");
   }
 
-  if (typeof subagents.startActivation === "function") {
-    // 0.2.1+：persona 前置到 prompt 首个 text 块补偿（原生能力不再对模型工具层暴露）
-    const prompt = spec.persona !== undefined
-      ? [{ type: "text", text: spec.persona }, ...spec.prompt]
-      : spec.prompt;
-    const receipt = await subagents.startActivation({
-      provider,
-      label: spec.label,
-      request: {
-        prompt,
-        parent: spec.parent,
-        ...(spec.agentPreset !== undefined ? { agentPreset: spec.agentPreset } : {}),
-        ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
-        ...(spec.toolFilter !== undefined ? { toolFilter: spec.toolFilter } : {}),
-      },
-      ...(signal !== undefined ? { signal } : {}),
-      delivery: "caller",
-    });
-    // request.toolFilter 在 0.2.1-rc.3 的 startActivation 里**不被消费**（其内部
-    // composition 只组装 { agentPreset: request.agentPreset }），所以必须由 cohub 自己
-    // 对子 scope 施加 restrict —— 见 applyChildToolFilterDirectly 的长注释。
-    applyChildToolFilterDirectly(ctx, receipt.childId, spec.toolFilter, spec.degradeNotes);
-    return {
-      id: receipt.childId,
-      result: receipt.result,
-      dispose: () => receipt.dispose(),
-    };
-  }
-
-  // 0.2.0 回退：provider 契约仍声明 persona / toolFilter 能力
-  const run = await subagents.start(provider, {
+  // persona 前置到 prompt 首个 text 块补偿（原生能力不再对模型工具层暴露）
+  const prompt = spec.persona !== undefined
+    ? [{ type: "text", text: spec.persona }, ...spec.prompt]
+    : spec.prompt;
+  const receipt = await subagents.startActivation({
+    provider,
     label: spec.label,
-    prompt: spec.prompt,
-    parent: spec.parent,
-    ...(spec.persona !== undefined ? { persona: spec.persona } : {}),
-    ...(spec.toolFilter !== undefined ? { toolFilter: spec.toolFilter } : {}),
-    ...(spec.agentPreset !== undefined ? { agentPreset: spec.agentPreset } : {}),
-    ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
+    request: {
+      prompt,
+      parent: spec.parent,
+      ...(spec.agentPreset !== undefined ? { agentPreset: spec.agentPreset } : {}),
+      ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
+    },
     ...(signal !== undefined ? { signal } : {}),
+    delivery: "caller",
   });
+  // SubagentStartRequest 已无 toolFilter 字段（0.2.2-rc.1），startActivation 内的
+  // composition 也只组装 { agentPreset: request.agentPreset }，没有可透传的裁剪通道；
+  // 所以必须由 cohub 自己拿到 childId 后对子 scope 施加 restrict
+  // —— 见 applyChildToolFilterDirectly 的长注释。
+  applyChildToolFilterDirectly(ctx, receipt.childId, spec.toolFilter, spec.degradeNotes);
   return {
-    id: run.id,
-    result: run.result,
-    dispose: () => run.dispose(),
+    id: receipt.childId,
+    result: receipt.result,
+    dispose: () => receipt.dispose(),
   };
 }
 
@@ -1636,7 +1624,7 @@ export function buildDelegatePrompt(params: {
 /**
  * 创建 delegate 工具。
  * 按 skill 名精确匹配 COHUB_SKILLS，注入该 skill 的精简指令（brief）+（可选）执行器环境契约 + 用户具体任务；
- * 通过 ctx.subagents.start("spawn", ...) 自包含地 spawn 子代理。
+ * 通过 ctx.subagents.startActivation({ provider: "spawn", ... }) 自包含地 spawn 子代理。
  * 路由经 getRoutes() 读取（组合层或 settings 解析后的当前值）：配了可用 provider 时覆盖
  * provider/model(/maxTokens/reasoningEffort)；只配了 reasoningEffort 时只覆盖推理强度
  * （provider/model 仍继承父会话）；两者都没配（或 provider 不可用）则完全继承父/会话模型。
@@ -1898,7 +1886,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             if (!learner.attach(ctx)) learner = null;
           }
 
-          // ⑦ spawn 子代理（startSubagentRun 抹平 0.2.0 start / 0.2.1 startActivation；
+          // ⑦ spawn 子代理（startSubagentRun → startActivation；本包只支持 0.2.2-rc.1+，
           //    provider 参数是 transport 名，固定 "spawn"；agentOptions.provider 才是 LLM 供应商名，别搞混）
           let run: any;
           try {

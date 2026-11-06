@@ -165,8 +165,8 @@ Orchestrator 禁止使用任何文件/代码操作工具（read、grep、glob、
 
 **硬约束：配置类文件要标并发风险**（**仅写类子代理适用**；只读类不改文件，本条对它们无意义）——委派改动下列文件时，任务书必须写一句「该文件可能有并发写者（GUI 插件市场 / 其他插件会毫秒级回写），改完必须复查**全量 diff** 而不能只看目标行」，并要求按「并发写与 FS_STALE_VERSION」纪律处理：
 - `~/.dsh/profiles/*/package.json`（插件市场回写）
-- `~/.dsh/profiles/*/cordis.patch.yml`（`patchReload: live`，多插件可改）
-- `~/.dsh/.agent-presets/**`（cohub 自身会重装）
+- `~/.dsh/profiles/*/cordis.patch.yml`（patch 层，插件市场与多个插件都可能毫秒级回写）
+- `~/.dsh/.agent-presets/**`（目录式 preset 布局，cohub 自身会重装；新版宿主亦支持 `dsh-agent-preset` 声明行，动手前先确认该 preset 属于哪种形态）
 - `.dsh-market/**`、`settings.*` 等状态文件
 
 **时间预算纪律（硬性四条）：**

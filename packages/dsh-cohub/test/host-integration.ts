@@ -1,6 +1,6 @@
 // dsh-port/test/host-integration.ts —— DSH 0.2 宿主集成门禁（真实 Loader / SettingsForms / subagents / app-boot preflight）
 // 用法：node test/host-integration.ts（node >= 24 类型剥离）
-// 前置：已 bun run build（lib/ 为 0.2 语义产物），node_modules 对齐宿主 cordis 4.0.4 / schemastery 3.18.4。
+// 前置：已 bun run build（lib/ 为 0.2 语义产物），node_modules 对齐宿主 cordis 4.1.0 / schemastery 3.19.0。
 //
 // 分层说明（真实组件 + stub 边界标注，不冒称完整宿主）：
 //   ✓ 真实层：cordis-plugin-loader 真实 Loader + 真实 Include 树（mountRootInclude 官方 API）；
@@ -26,6 +26,38 @@ import ToolRuntime from "@deepseek-ai/dsh-tools";
 import SubagentRuntime from "@deepseek-ai/dsh-subagent";
 import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
 import LlmRuntime from "@deepseek-ai/dsh-llm";
+// 0.2.2-rc.1 服务注入图：SubagentRuntime.inject = ["workingDirectory","sessionProjections"]，
+// 而 WorkingDirectoryService.inject = ["fs","sessionProjections","systemPrompt"]。
+// 宿主真实栈必须显式挂 fs / workingDirectory，否则 SubagentRuntime fiber 停在 state=0，
+// ctx.subagents 永远 undefined（本文件此前 buildHost 缺这两层）。
+import FileSystem from "@deepseek-ai/dsh-fs";
+import WorkingDirectory from "@deepseek-ai/dsh-working-directory";
+// 0.2.2-rc.1：SubagentRuntime 的 manager 由 `ctx.inject(["agents"], ...)` 建立，
+// startActivation 共用 `ctx.agents.get(parent.id) === parent` 做「精确活父」授权，
+// WorkingDirectoryService.ensure() 又要 `ctx.fs.resolve/stat` 与真实 Session。
+// 故宿主栈必须再有 agents 服务与一个可用的 fs 后端，否则 delegate 工具无法真正 spawn。
+import AgentRegistry from "@deepseek-ai/dsh-agent";
+import { Session } from "@deepseek-ai/dsh-session";
+import { normalize, resolve as resolvePath } from "node:path";
+
+/**
+ * 最小 fs 后端（测试边界，明确标注）：dsh-fs 的 FileSystem 是抽象 seam，
+ * resolve/stat/processPath 由具体后端（dsh-fs-local / fs-sandbox）实现，二者不在本包
+ * node_modules。这里给一个「永远把路径当已存在目录」的内存实现，只为让
+ * WorkingDirectoryService.ensure() 走通（它要 fs.resolve + fs.stat 才能返回 cwd）。
+ * 不读写真实文件、不触达沙箱策略——与「真实 fs 后端」的差别仅此三点。
+ */
+class MemoryFs extends FileSystem {
+  async resolve(path: string, options?: { cwd?: string }) {
+    return normalize(resolvePath(options?.cwd ?? process.cwd(), path));
+  }
+  async stat() {
+    return { type: "directory" } as const;
+  }
+  processPath(target: string) {
+    return target;
+  }
+}
 import ConfigEditor from "@deepseek-ai/dsh-config-editor";
 import SettingsForms from "@deepseek-ai/dsh-settings";
 import { mountRootInclude, evaluatePluginCompatibility, getDshRuntimeVersion } from "@deepseek-ai/dsh-app-boot";
@@ -84,6 +116,17 @@ async function buildHost() {
   root.plugin(SystemPrompt);
   root.plugin(ToolRuntime);
   root.plugin(SkillRegistry);
+  // 0.2.2-rc.1 服务注入图（实测）：
+  //   WorkingDirectoryService.inject = ["fs","sessionProjections","systemPrompt"]
+  //   SubagentRuntime.inject        = ["workingDirectory","sessionProjections"]，
+  //   且其 manager 由 ctx.inject(["agents"], …) 建立（dsh-subagent lib/index.js:3009-3022），
+  //   startActivation 用 ctx.agents.get(parent.id) === parent 做「精确活父」授权。
+  // 缺 fs / workingDirectory → SubagentRuntime fiber 停在 state=0，root.subagents 恒 undefined；
+  // 缺 agents → manager 为空，delegate 的 spawn 抛 CONTINUATION_UNAVAILABLE。
+  // 故顺序必须是 fs → workingDirectory → agents → subagents。
+  root.plugin(MemoryFs);
+  root.plugin(WorkingDirectory, { defaultDirectory: process.cwd() });
+  root.plugin(AgentRegistry);
   root.plugin(SubagentRuntime);
   root.plugin(SessionProjectionRegistry);
   root.plugin(LlmRuntime);
@@ -93,6 +136,26 @@ async function buildHost() {
   new SettingsForms(root);
   await new Promise(r => setImmediate(r));
   return root;
+}
+
+/**
+ * 注册一个「精确活父」Agent（delegate 的 exec.agent 必须能在 ctx.agents 里按 id 找回同一对象，
+ * 否则 dsh-subagent 段会以 UNAUTHORIZED 拒绝建子代理）。
+ * 用官方 Session.create 造 header（version/id/cwd/isSeeded 由它校验并冻结），
+ * agent 本体是测试桩：只需要 id / session / ctx.fiber.assertActive / inject。
+ */
+async function registerParentAgent(root: any, id: string) {
+  const agents = root.get("agents");
+  const session = Session.create(id);
+  const agent: any = {
+    id,
+    session,
+    ctx: { fiber: { assertActive() {} }, on() {}, effect() {} },
+    inject() {},
+  };
+  agents.register(agent);
+  await new Promise(r => setImmediate(r));
+  return agent;
 }
 
 // ── 层 1：真实 Loader 挂载 cohub 行 + entry.update({config}) volatile 提交 → get() 见新值 ──
@@ -105,8 +168,22 @@ async function buildHost() {
   const entry = [...root.loader.entries()].find(e => e.options.id === "cohub");
   check("cohub 行真实挂载（fiber active）", entry?.fiber?.state === 2);
   check("entry.fiber.runtime.Config = 本包 Config", !!(entry?.fiber?.runtime?.Config));
-  const cfg = entry?.fiber?.config;
-  check("初始 skills = cordis.yml 配置的 1 条路由", Array.isArray(cfg?.skills?.get?.()) && cfg.skills.get().length === 1 && cfg.skills.get()[0].name === "co-fixer");
+  const cfg = entry?.fiber?.effectiveConfig;
+  // cordis 4.1.0 双观测点（都真实，互不替代）：
+  //   entry.fiber.config          —— 本次已解析的普通值（cfg.skills 是普通 Array）；
+  //   entry.fiber.effectiveConfig —— apply() 实际收到的**那一份**已解析 config
+  //     （cordis lib/index.js:359-360 `const config = this.resolveConfig(this.config); this._effectiveConfig = config;`
+  //      → 随后 `new runtime.callback(this.ctx, config)` 即传入插件）。
+  // volatile 提交走 loader `_commitVolatile`：`volatileEntries(fiber.effectiveConfig)` 取 ref，
+  // `updateVolatile(ref, source)` 原地写值（loader lib/index.js:528/546）。因此断言读
+  // effectiveConfig.<field>.get() 就是读「插件 apply 侧持有的同一引用」，语义与 3.18 时代
+  // entry.fiber.config.<field>.get() 完全一致，且此处不等价于放宽。
+  const rawCfg = entry?.fiber?.config;
+  check("初始 skills = cordis.yml 配置的 1 条路由",
+    Array.isArray(cfg?.skills?.get?.()) && cfg.skills.get().length === 1 && cfg.skills.get()[0].name === "co-fixer"
+    // 同时确认 cordis 4.1.0 的 config 语义：普通入口拿到的是已解析数组（不是 .get() 引用）
+    && Array.isArray(rawCfg?.skills) && typeof (rawCfg?.skills as any)?.get === "undefined"
+    && rawCfg.skills.length === 1 && rawCfg.skills[0].name === "co-fixer");
   check("初始 schedule 默认 batch=3", cfg?.schedule?.get?.()?.maxParallelBatch === 3);
 
   // 真实 entry.update({config})：Loader._commitVolatile 提交 volatile-only 变更（官方实际 API）
@@ -135,7 +212,10 @@ async function buildHost() {
   // 模型 transport 为 stub——不启动真实进程/LLM，仅验证 delegate→start 的转发与结果链路）
   root.subagents.registerProvider({
     name: "spawn",
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+    // agentPreset: true 是必需的——0.2.2-rc.1 的 assertCapabilities 对「请求带 agentPreset 但
+    // provider 未声明该能力」会直接拒绝（dsh-subagent lib/index.js:3327），测试 provider 必须
+    // 如实声明，否则 delegate 会走 preset fail-soft 降级（那是环境缺陷，不是被测语义）。
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: true, agentPreset: true },
     inheritsParentContext: false,
     start(request: any) {
       calls.push({ label: request.label, agentOptions: request.agentOptions, promptHead: String(request.prompt?.[0]?.text ?? "").slice(0, 30), aborted: request.signal?.aborted === true });
@@ -148,15 +228,27 @@ async function buildHost() {
   });
   await mountRootInclude(root, cordisPath, [], undefined, "host");
   await root.loader.await();
+  // delegate 的 exec.agent 必须是 ctx.agents 里的「精确活父」：0.2.2-rc.1 的
+  // SubagentRuntime.startActivation 用 `ctx.agents.get(parent.id) === parent` 授权建子代理
+  // （dsh-subagent lib/index.js:3060），传一个临时对象会被 UNAUTHORIZED 拒绝。
+  const parentAgent = await registerParentAgent(root, "parent-1");
   const entry = [...root.loader.entries()].find(e => e.options.id === "cohub");
   const delegate = root.tools.get("delegate");
   check("delegate 工具已注册（tools.get）", !!delegate);
 
   const out1 = await delegate.execute(
     { skill: "co-fixer", prompt: "任务甲" },
-    { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal },
+    { agent: parentAgent, signal: new AbortController().signal },
   );
-  check("真实 execute 返回子代理结果", out1 === "ok-child");
+  // 子代理真实输出必须原样回传；其后的 `[...]` 降级提示是本测试 provider 的既有边界：
+  // in-memory provider（external、无 prepareContinuable）不会在 ctx.agents 里留下子 Agent，
+  // 故 delegate 的 toolFilter 施加路径如实登记「裁剪未生效」（src/delegate.ts:734-739）。
+  // 这是被测代码的 fail-soft 语义，不是环境红；关键是首行必须是子代理输出，
+  // 且**不得**出现 preset 降级（provider 已如实声明 agentPreset 能力）。
+  const out1Text = String(out1);
+  check("真实 execute 返回子代理结果",
+    out1Text.startsWith("ok-child") && !out1Text.includes("preset 未生效")
+    && (!out1Text.includes("[") || out1Text.includes("工具裁剪未生效")));
   check("子代理 start 收到委派 label", calls[0]?.label === "delegate:co-fixer");
 
   // volatile 更新：schedule batch 3→9（模拟设置卡片提交）
@@ -165,10 +257,10 @@ async function buildHost() {
     skills: [{ name: "co-fixer", provider: "p1", model: "m1" }],
     schedule: { maxParallelBatch: 9, wallClockBudgetMs: 123 },
   } });
-  check("提交后 schedule.get().batch=9", entry.fiber?.config?.schedule?.get?.()?.maxParallelBatch === 9);
+  check("提交后 schedule.get().batch=9", entry.fiber?.effectiveConfig?.schedule?.get?.()?.maxParallelBatch === 9);
   await delegate.execute(
     { skill: "co-fixer", prompt: "任务乙" },
-    { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal },
+    { agent: parentAgent, signal: new AbortController().signal },
   );
   check("更新后下一 execute 仍正常（spawn 第二次）", calls.length === 2);
   // delegate 的 resolveRuntimeConfig 读取 settingsNow.schedule（getSettings() = currentSettings()），
@@ -186,7 +278,7 @@ async function buildHost() {
   } });
   await delegate.execute(
     { skill: "co-fixer", prompt: "任务丙" },
-    { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal },
+    { agent: parentAgent, signal: new AbortController().signal },
   );
   check("提交 reasoningEffort 后下一 execute 转发 agentOptions.reasoningEffort",
     calls[2]?.agentOptions?.reasoningEffort === "low");
@@ -211,9 +303,9 @@ async function buildHost() {
   check("表单 value 含 volatile 字段（schedule）", Object.keys(row?.value ?? {}).includes("schedule"));
   check("表单 value 含 volatile 字段（delegateRetry）", Object.keys(row?.value ?? {}).includes("delegateRetry"));
   check("schema 可读（schemastery 序列化节点）", !!row?.schema && typeof row.schema === "object");
-  // value 投影真实 fiber.config（volatile 引用当前值）
-  check("value.skills 与 config.skills.get() 一致", JSON.stringify(row?.value?.skills) === JSON.stringify(entry.fiber?.config?.skills?.get?.()));
-  check("value.schedule 与 config.schedule.get() 一致", JSON.stringify(row?.value?.schedule) === JSON.stringify(entry.fiber?.config?.schedule?.get?.()));
+  // value 投影真实 fiber 的 volatile 引用（apply 侧持有的那一份）：读 effectiveConfig。<field>.get()
+  check("value.skills 与 config.skills.get() 一致", JSON.stringify(row?.value?.skills) === JSON.stringify(entry.fiber?.effectiveConfig?.skills?.get?.()));
+  check("value.schedule 与 config.schedule.get() 一致", JSON.stringify(row?.value?.schedule) === JSON.stringify(entry.fiber?.effectiveConfig?.schedule?.get?.()));
   // 旧 settings.yaml 迁移不触发：临时 home 无 settings.yaml，importLegacyDocument 直接 return
   check("未触发旧 settings.yaml 迁移（home 无该文件且未被创建）", !existsSync(join(home, "settings.yaml")));
   // 官方设置页按序列化 schema 生成控件：schema 里必须有 reasoningEffort 才会出现可编辑字段
@@ -227,7 +319,7 @@ async function buildHost() {
   const rowAfter = root.settings.describe().find(f => f.ns === "cohub");
   check("提交后 describe() 的 value 带 reasoningEffort", rowAfter?.value?.skills?.[0]?.reasoningEffort === "high");
   check("提交后 config.skills.get() 也带 reasoningEffort（同一引用）",
-    entry.fiber?.config?.skills?.get?.()[0]?.reasoningEffort === "high");
+    entry.fiber?.effectiveConfig?.skills?.get?.()[0]?.reasoningEffort === "high");
   root.stop?.();
 }
 
@@ -237,26 +329,34 @@ async function buildHost() {
   const root = new Context();
   const baseUrl = pathToFileURL(join(process.cwd(), "test")).href + "/";
   root.plugin(Loader, { baseUrl });
+  // 同 buildHost：0.2.2-rc.1 下 SubagentRuntime 需要 fs → workingDirectory → agents 三级前置
+  // （WorkingDirectory.inject 还含 systemPrompt，故 SystemPrompt 也必须挂）
+  root.plugin(SystemPrompt);
+  root.plugin(MemoryFs);
+  root.plugin(WorkingDirectory, { defaultDirectory: process.cwd() });
+  root.plugin(AgentRegistry);
   root.plugin(SubagentRuntime);
   root.plugin(SessionProjectionRegistry);
   root.plugin(LlmRuntime);
   await new Promise(r => setImmediate(r));
   await root.loader.await?.();
+  await new Promise(r => setImmediate(r));
+  const parent = await registerParentAgent(root, "parent-ctrl");
 
   const events: string[] = [];
-  root.on("subagent/start", (info: any) => events.push("start:" + info.runId));
+  const eventRunIds: string[] = [];
+  root.on("subagent/start", (info: any) => { events.push("start:" + info.runId); eventRunIds.push(info.runId); });
   root.on("subagent/end", (info: any) => events.push("end:" + info.runId + ":" + info.stopReason));
 
   // 可控 provider：capabilities 全开；start 返回可控 result/dispose；记录 dispose 次数
   let disposed = 0;
   root.subagents.registerProvider({
     name: "ctrl",
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: true },
     inheritsParentContext: false,
-    start(request: any) {
-      const runId = "ctrl-child";
+    start() {
       return {
-        id: runId,
+        id: "ctrl-child",
         result: Promise.resolve({ output: [{ type: "text", text: "ctrl-ok" }], stopReason: "completed" }),
         dispose() { disposed++; },
       };
@@ -264,26 +364,26 @@ async function buildHost() {
   });
   await new Promise(r => setImmediate(r));
 
-  const parent: any = { id: "parent-ctrl", session: { id: "parent-ctrl-session" } };
-  // ① 正常路径
-  const run = await root.subagents.start("ctrl", {
+  // ① 正常路径（0.2.2-rc.1 唯一真实入口是 startActivation；返回 { childId, result, dispose }）
+  const receipt = await root.subagents.startActivation({
+    provider: "ctrl",
     label: "t-normal",
-    prompt: [{ type: "text", text: "正常任务" }],
-    parent,
+    request: { prompt: [{ type: "text", text: "正常任务" }], parent },
     signal: new AbortController().signal,
+    delivery: "caller",
   });
-  check("start 返回 SubagentRun（id）", !!run?.id);
-  const result = await run.result;
+  check("startActivation 返回子运行（childId）", !!receipt?.childId);
+  const result = await receipt.result;
   check("result.stopReason=completed", result?.stopReason === "completed");
   check("result.output 内容正确", String(result?.output?.[0]?.text) === "ctrl-ok");
-  check("dispose 可调用", typeof run.dispose === "function");
-  await run.dispose();
+  check("dispose 可调用", typeof receipt.dispose === "function");
+  await receipt.dispose();
   check("dispose 已执行", disposed === 1);
 
-  // ② 失败路径：start 本身拒绝（provider.start 抛错 → start() reject，无 run 可 dispose）
+  // ② 失败路径：provider.start 抛错 → startActivation reject（无子运行可 dispose）
   const failedProvider: any = {
     name: "failing",
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: true },
     inheritsParentContext: false,
     start() { throw new Error("ctrl-start-failed"); },
   };
@@ -291,14 +391,20 @@ async function buildHost() {
   await new Promise(r => setImmediate(r));
   let startErr: any = null;
   try {
-    await root.subagents.start("failing", { label: "t-fail", prompt: [{ type: "text", text: "x" }], parent, signal: new AbortController().signal });
+    await root.subagents.startActivation({
+      provider: "failing",
+      label: "t-fail",
+      request: { prompt: [{ type: "text", text: "x" }], parent },
+      signal: new AbortController().signal,
+      delivery: "caller",
+    });
   } catch (e) { startErr = e; }
   check("start 失败抛错（无 run）", startErr !== null && String(startErr?.message ?? startErr).includes("ctrl-start-failed"));
 
   // ③ 能力不足拒绝：请求 persona 但 provider 缺 persona capability → assertCapabilities 拒绝
   const noPersona: any = {
     name: "no-cap",
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: false },
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: false },
     inheritsParentContext: false,
     start() { throw new Error("should-not-reach"); },
   };
@@ -306,38 +412,61 @@ async function buildHost() {
   await new Promise(r => setImmediate(r));
   let capErr: any = null;
   try {
-    await root.subagents.start("no-cap", { label: "t-cap", prompt: [{ type: "text", text: "x" }], parent, persona: "p", signal: new AbortController().signal });
+    await root.subagents.startActivation({
+      provider: "no-cap",
+      label: "t-cap",
+      request: { prompt: [{ type: "text", text: "x" }], parent, persona: "p" },
+      signal: new AbortController().signal,
+      delivery: "caller",
+    });
   } catch (e) { capErr = e; }
   check("缺失 capability 被真实拒绝（fail loud）", capErr !== null && String(capErr?.code ?? capErr?.message ?? "").length > 0);
 
-  // ④ AbortSignal：pre-aborted signal → provider.start 收到已中止 signal（真实转发链）
+  // ④ pre-aborted signal：0.2.2-rc.1 的 startActivation 在发布前 throwIfAborted（materializeTracked
+  // 首行 inputs.signal.throwIfAborted()），故**拒绝建立子运行**，而非 0.2.0 start() 的「照常发布、
+  // 由 provider 自行决定」。这是宿主 API 语义变化，断言随之改为验证「拒绝 + 未产生副作用」。
+  let preStarted = 0;
+  root.subagents.registerProvider({
+    name: "ctrl2",
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: true },
+    inheritsParentContext: false,
+    start() { preStarted++; return { id: "ctrl2-child", result: Promise.resolve({ output: [], stopReason: "completed" }), dispose() {} }; },
+  });
+  await new Promise(r => setImmediate(r));
   const ac = new AbortController();
   ac.abort();
-  const runAbort = await root.subagents.start("ctrl", {
-    label: "t-abort",
-    prompt: [{ type: "text", text: "x" }],
-    parent,
-    signal: ac.signal,
-  });
-  check("pre-aborted signal 下 start 仍发布 run（provider 自行决定）", !!runAbort?.id);
-  await runAbort.dispose();
+  let abortErr: any = null;
+  try {
+    await root.subagents.startActivation({
+      provider: "ctrl2",
+      label: "t-abort",
+      request: { prompt: [{ type: "text", text: "x" }], parent },
+      signal: ac.signal,
+      delivery: "caller",
+    });
+  } catch (e) { abortErr = e; }
+  check("pre-aborted signal 下拒绝建立子运行（provider 未被调用、无 run）",
+    abortErr !== null && preStarted === 0 && (abortErr?.name === "AbortError" || abortErr?.code === 20 || /abort/i.test(String(abortErr?.message ?? ""))));
 
-  // ⑤ mid-flight 取消：start 已发布（run.id 存在）、result 受控 pending 时 abort —— provider 由
-  // 真实 signal 事件驱动 result settle（0.2 语义：取消/子级失败经 stopReason 解析而非 reject，
-  // stopReason='aborted'），再验证 run.result 停止传播与 dispose 资源清理；不以 signal.aborted
+  // ⑤ mid-flight 取消：startActivation 已发布子运行（childId 存在）、result 受控 pending 时，
+  // 走 0.2.2-rc.1 的真实取消通道 `subagents.interrupt(childId, {kind:"user", parentSessionId})`
+  // → manager 对激活 controller.abort() → provider 由真实 signal 事件驱动 result settle
+  // （stopReason='aborted'），再验证 result 停止传播与 dispose 资源清理；不以 signal.aborted
   // 为唯一结论，也不自行模拟 result 常量冒充宿主返回。
   let midStarted = 0;
   let midDisposed = 0;
   let midSettled = false;
+  let midSignalAborted = false;
   root.subagents.registerProvider({
     name: "mid",
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: true },
     inheritsParentContext: false,
     start(request: any) {
       midStarted++;
       let resolveResult: (r: any) => void = () => {};
       const result = new Promise<any>(r => { resolveResult = r; });
       const onAbort = () => {
+        midSignalAborted = true;
         if (midSettled) return;
         midSettled = true;
         resolveResult({ output: [], stopReason: "aborted" });
@@ -351,20 +480,29 @@ async function buildHost() {
     },
   });
   await new Promise(r => setImmediate(r));
-  const midAc = new AbortController();
-  const midRun = await root.subagents.start("mid", {
+  // 清空此前 ctrl 正常路径产生的生命周期边，只保留本条 mid 激活的 start/end
+  events.length = 0;
+  eventRunIds.length = 0;
+  const midReceipt = await root.subagents.startActivation({
+    provider: "mid",
     label: "t-mid-abort",
-    prompt: [{ type: "text", text: "长任务" }],
-    parent,
-    signal: midAc.signal,
+    request: { prompt: [{ type: "text", text: "长任务" }], parent },
+    signal: new AbortController().signal,
+    delivery: "caller",
   });
-  check("mid-flight: start 已发布 run（start 已发生）", !!midRun?.id && midStarted === 1);
-  check("mid-flight: abort 前 result 仍 pending（模型可控等待中）", !midSettled);
-  midAc.abort();
-  const midOutcome = await midRun.result;
-  check("mid-flight: abort 后 result 传播 stopReason=aborted（signal 驱动 settle）", midOutcome?.stopReason === "aborted" && midSettled);
-  await midRun.dispose();
+  check("mid-flight: 已发布子运行（provider.start 已发生）", !!midReceipt?.childId && midStarted === 1);
+  check("mid-flight: interrupt 前 result 仍 pending（模型可控等待中）", !midSettled);
+  root.subagents.interrupt(midReceipt.childId, { kind: "user", parentSessionId: parent.id });
+  const midOutcome = await midReceipt.result;
+  check("mid-flight: 取消后 result 传播 stopReason=aborted（真实 signal 驱动 settle）",
+    midOutcome?.stopReason === "aborted" && midSettled && midSignalAborted);
+  await midReceipt.dispose();
   check("mid-flight: dispose 已调用（资源清理）", midDisposed === 1);
+  check("mid-flight: 真实生命周期事件（start → end:aborted，runId 来自宿主 observer）",
+    // 注意：subagent/start|end 的 info.runId 是宿主为每次激活新铸的 SubagentRunId（不是 provider 的 id），
+    // 故按「计数 + stopReason」核对，而不是拼接 receipt.childId。
+    eventRunIds.length === 1 && events.includes("start:" + eventRunIds[0])
+    && events.includes("end:" + eventRunIds[0] + ":aborted"));
   root.stop?.();
 }
 
@@ -372,7 +510,7 @@ async function buildHost() {
 {
   console.log("===== 层 5：app-boot evaluatePluginCompatibility 真实执行 =====");
   const runtime = getDshRuntimeVersion();
-  check("getDshRuntimeVersion() = 0.2.0-rc.2", runtime === "0.2.0-rc.2");
+  check("getDshRuntimeVersion() = 0.2.2-rc.1", runtime === "0.2.2-rc.1");
   // 本包 package.json 作为真实 pack 候选：官方 helper 核验 dsh peer（无 exemptions）
   const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
   const issue = evaluatePluginCompatibility(manifest, {}, runtime);
@@ -383,7 +521,9 @@ async function buildHost() {
     peerDependencies: { "@deepseek-ai/dsh-tools": "^0.1.0-rc.1", "@deepseek-ai/cordis": "^3.0.0" },
   };
   const issue2 = evaluatePluginCompatibility(bad, {}, runtime);
-  check("不兼容 pack 返回 peers 明细", issue2 !== undefined && Object.keys(issue2?.peers ?? {}).includes("@deepseek-ai/dsh-tools"));
+  // 0.2.2-rc.1 的 helper 把明细放在 issue.requirements（不是旧版的 issue.peers）；
+  // 且只收录命名空间受管的 @deepseek-ai/dsh-* peer（@deepseek-ai/cordis 不参与核验）。
+  check("不兼容 pack 返回 requirements 明细", issue2 !== undefined && Object.keys(issue2?.requirements ?? {}).includes("@deepseek-ai/dsh-tools"));
   check("不兼容 pack 未被豁免", issue2?.exempted === false);
   // 无 peerDependencies 的 pack → undefined（合法）
   check("无 peer 的 pack 通过", evaluatePluginCompatibility({ name: "x", version: "1.0.0" }, {}, runtime) === undefined);
@@ -420,7 +560,7 @@ async function buildHost() {
   // 父 signal abort 时由真实 signal 事件驱动 settle 为 stopReason=aborted。
   root.subagents.registerProvider({
     name: "spawn",
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: true },
     inheritsParentContext: false,
     start(request: any) {
       delStarted++;
@@ -441,13 +581,16 @@ async function buildHost() {
   });
   await mountRootInclude(root, cordisPath, [], undefined, "host");
   await root.loader.await();
+  // 同层 2：exec.agent 必须是 ctx.agents 里的精确活父，否则 startActivation 在
+  // `ctx.agents.get(parent.id) === parent` 处就以 UNAUTHORIZED 拒绝，provider 根本收不到 spawn
+  const parentAgent = await registerParentAgent(root, "parent-delegate");
   const delegate = root.tools.get("delegate");
   check("delegate 工具已注册（取消链前置）", !!delegate);
 
   const parentAc = new AbortController();
   const execPromise = delegate.execute(
     { skill: "co-fixer", prompt: "长任务" },
-    { agent: { id: "parent-delegate", session: { header: { delegationDepth: 0 } } }, signal: parentAc.signal },
+    { agent: parentAgent, signal: parentAc.signal },
   ).then(
     (v: any) => ({ ok: true, value: v }),
     (e: any) => ({ ok: false, error: e }),
