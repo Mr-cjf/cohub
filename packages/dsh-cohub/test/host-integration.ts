@@ -90,7 +90,7 @@ writeFileSync(cordisPath, [
   "    installPresets: false",
   "    councillors: []",
   "    skills: [{ name: co-fixer, provider: p1, model: m1 }]",
-  "    schedule: { maxParallelBatch: 3, wallClockBudgetMs: 600000 }",
+  "    schedule: { maxParallelBatch: 5, wallClockBudgetMs: 600000 }",
 ].join("\n"));
 // DSH_HOME 隔离：env-signatures 等宿主路径能力全部指向临时 home
 process.env.DSH_HOME = home;
@@ -184,7 +184,7 @@ async function registerParentAgent(root: any, id: string) {
     // 同时确认 cordis 4.1.0 的 config 语义：普通入口拿到的是已解析数组（不是 .get() 引用）
     && Array.isArray(rawCfg?.skills) && typeof (rawCfg?.skills as any)?.get === "undefined"
     && rawCfg.skills.length === 1 && rawCfg.skills[0].name === "co-fixer");
-  check("初始 schedule 默认 batch=3", cfg?.schedule?.get?.()?.maxParallelBatch === 3);
+  check("初始 schedule 默认 batch=5", cfg?.schedule?.get?.()?.maxParallelBatch === 5);
 
   // 真实 entry.update({config})：Loader._commitVolatile 提交 volatile-only 变更（官方实际 API）
   await entry.update({ config: {
@@ -251,7 +251,7 @@ async function registerParentAgent(root: any, id: string) {
     && (!out1Text.includes("[") || out1Text.includes("工具裁剪未生效")));
   check("子代理 start 收到委派 label", calls[0]?.label === "delegate:co-fixer");
 
-  // volatile 更新：schedule batch 3→9（模拟设置卡片提交）
+  // volatile 更新：schedule batch 5→9（模拟设置卡片提交）
   await entry.update({ config: {
     installPresets: false, councillors: [],
     skills: [{ name: "co-fixer", provider: "p1", model: "m1" }],

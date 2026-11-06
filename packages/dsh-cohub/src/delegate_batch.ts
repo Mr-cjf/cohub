@@ -129,9 +129,9 @@ export function createDelegateBatchTool(
   function resolveRuntimeConfig() {
     const settingsNow = getSettings ? (getSettings() ?? {}) : {};
     const scheduleCfg = settingsNow.schedule ?? config.schedule;
-    // maxParallelBatch：从 settings 读取（默认 3），与硬上限 MAX_BATCH_SIZE 取小值；
+    // maxParallelBatch：从 settings 读取（默认 5，与 ScheduleConfig schema 缺省一致），与硬上限 MAX_BATCH_SIZE 取小值；
     // 保留 MAX_BATCH_SIZE 作为绝对安全上限（防止配置错误导致超量并行）。
-    const rawMaxParallel = Math.max(1, scheduleCfg?.maxParallelBatch ?? 3);
+    const rawMaxParallel = Math.max(1, scheduleCfg?.maxParallelBatch ?? 5);
     // P1-3（子代理结果预算）：settings 优先，config 兜底；缺省值即生效
     const budget = resolveResultBudget(settingsNow.resultBudget ?? config.resultBudget);
     // P1-1（子代理工具表裁剪）：默认开启；settings 未提供时回落 config
@@ -150,7 +150,7 @@ export function createDelegateBatchTool(
   return defineTool({
     name: "delegate_batch",
     description: "并发执行多个子代理任务：一次调用并行派发 N 个无依赖任务，返回各自结果。"
-      + "每项 skill/prompt 必填，单批默认 3（上限 20），不重试。",
+      + "每项 skill/prompt 必填，单批默认 5（上限 20），不重试。",
 
     parameters: {
       tasks: {

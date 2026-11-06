@@ -33,7 +33,7 @@ function check(name: string, cond: boolean) {
   check("schedule 是 Volatile 引用", isVolatile(parsed.schedule));
   check("delegateRetry 是 Volatile 引用", isVolatile(parsed.delegateRetry));
   check("skills 缺省空数组", Array.isArray(parsed.skills.get()) && parsed.skills.get().length === 0);
-  check("schedule 缺省 batch=3", parsed.schedule.get().maxParallelBatch === 3);
+  check("schedule 缺省 batch=5", parsed.schedule.get().maxParallelBatch === 5);
   check("schedule 缺省 wall=600000", parsed.schedule.get().wallClockBudgetMs === 600_000);
   check("delegateRetry 缺省 maxRetries=0", parsed.delegateRetry.get().maxRetries === 0);
   check("delegateRetry.stall 缺省 enabled=false", parsed.delegateRetry.get().stall?.enabled === false);

@@ -155,11 +155,11 @@ const EnvSignatures = z.object({
 }).default({});
 
 /** P3-3（N3）调度参数配置：批大小 / 墙钟预算。
- * 缺省值（3 / 600s）仅为本环境观测值，部署可调。
+ * 缺省值（5 / 600s）仅为本环境观测值，部署可调。
  * useJobTracking 与 adaptiveBatch 已于 2026-09-03 移除（声明但代码不读的死参数）。 */
 const ScheduleConfig = z.object({
-  /** 单批并行委派上限；缺省 3（本环境观测值，部署可调） */
-  maxParallelBatch: z.number().default(3),
+  /** 单批并行委派上限；缺省 5（本环境观测值，部署可调） */
+  maxParallelBatch: z.number().default(5),
   /** 单次执行单元墙钟预算（毫秒）；缺省取自共享常量 WALL_CLOCK_BUDGET_MS（本环境观测值，部署可调） */
   wallClockBudgetMs: z.number().default(WALL_CLOCK_BUDGET_MS),
 }).default({});

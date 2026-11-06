@@ -62,7 +62,7 @@
         # schedule（P3-3 N3 调度参数）：运行时代码直接读取 settings 使用。
         # useJobTracking / adaptiveBatch 已于 2026-09-03 移除（死参数）。
         #   schedule:
-        #     maxParallelBatch: 3        # 单批并行委派上限（本环境观测值，部署可调）
+        #     maxParallelBatch: 5        # 单批并行委派上限（本环境观测值，部署可调）
         #     wallClockBudgetMs: 600000  # 单次执行单元墙钟预算（10 分钟）
 
 # ── tool-cordis：本文件【刻意不挂】────────────────────────────────────────────

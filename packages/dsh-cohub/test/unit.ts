@@ -7,17 +7,66 @@ import systemPrompt from "@deepseek-ai/dsh-system-prompt";
 import skills from "@deepseek-ai/dsh-skill";
 import tools from "@deepseek-ai/dsh-tools";
 import subagents from "@deepseek-ai/dsh-subagent";
+import FileSystem from "@deepseek-ai/dsh-fs";
+import WorkingDirectory from "@deepseek-ai/dsh-working-directory";
+import AgentRegistry from "@deepseek-ai/dsh-agent";
+import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
+import { Session } from "@deepseek-ai/dsh-session";
+import { normalize, resolve as resolvePath } from "node:path";
 import * as cohub from "../lib/index.js";
+
+// 0.2.2-rc.1 服务注入图（同 test/host-integration.ts:29-38）：
+//   SubagentRuntime.inject = ["workingDirectory","sessionProjections"]，
+//   WorkingDirectoryService.inject = ["fs","sessionProjections","systemPrompt"]，
+//   且 SubagentRuntime 的 manager 由 `ctx.inject(["agents"], …)` 建立。
+// 缺任一层 → SubagentRuntime fiber 停在 state=0 → ctx.subagents 恒 undefined →
+// apply() 在「delegate 需要 subagents 服务」处 fail loud。故顺序必须是
+// fs → workingDirectory → agents → subagents → sessionProjections。
+// MemoryFs 是测试边界（同 host-integration.ts）：dsh-fs 真实后端不在本包 node_modules，
+// 只需 fs.resolve + fs.stat 让 WorkingDirectoryService.ensure() 返回 cwd。
+class MemoryFs extends FileSystem {
+  async resolve(path: string, options?: { cwd?: string }) {
+    return normalize(resolvePath(options?.cwd ?? process.cwd(), path));
+  }
+  async stat() {
+    return { type: "directory" } as const;
+  }
+  processPath(target: string) {
+    return target;
+  }
+}
 
 const root = new Context();
 root.plugin(systemPrompt);
 root.plugin(tools);
 root.plugin(skills);
+root.plugin(MemoryFs);
+root.plugin(WorkingDirectory, { defaultDirectory: process.cwd() });
+root.plugin(AgentRegistry);
 root.plugin(subagents);
+root.plugin(SessionProjectionRegistry);
 await new Promise(r => setImmediate(r)); // cordis 插件挂载为异步微任务，需一个 tick
 
+/**
+ * 注册一个「精确活父」Agent：0.2.2-rc.1 的 startActivation 用
+ * `ctx.agents.get(parent.id) === parent` 授权建子代理，传临时对象会被 UNAUTHORIZED 拒绝。
+ * 用官方 Session.create 造 header，agent 本体是测试桩（同 test/host-integration.ts:147-159）。
+ */
+async function registerParentAgent(ctx: any, id: string) {
+  const agent: any = {
+    id,
+    session: Session.create(id),
+    ctx: { fiber: { assertActive() {} }, on() {}, effect() {} },
+    inject() {},
+  };
+  ctx.get("agents").register(agent);
+  await new Promise(r => setImmediate(r));
+  return agent;
+}
+
 // 模拟 loader 包装：apply(ctx, config)
-cohub.apply(root, { councillors: [], councilTimeoutMs: 180_000 });
+// installPresets=false：测试不触碰用户 preset root（~/.dsh/.agent-presets）
+cohub.apply(root, { councillors: [], councilTimeoutMs: 180_000, installPresets: false });
 
 // ① systemPrompt 服务存在且可调用
 console.log('systemPrompt 服务:', typeof root.systemPrompt?.section === 'function' ? 'OK' : 'MISSING');
@@ -98,7 +147,7 @@ const ORCH_KEYS: [string, string][] = [
   ['delegate schema 必填 skill', 'invalid arguments: missing required property "skill"'],
   ['delegate schema 必填 prompt', 'prompt'],
   ['批次限制参数', 'schedule.maxParallelBatch'],
-  ['缺省批大小 3', '缺省 3'],
+  ['缺省批大小 5', '缺省 5'],
   ['墙钟预算参数', 'wallClockBudgetMs'],
   ['批量并行(工具层 allSettled)', 'Promise.allSettled'],
   ['消息层多 tool_use 并发', 'tool_use'],
@@ -130,7 +179,7 @@ const okLayer1 = orchContent.includes('子代理内部')
   && orchContent.includes('不自动合并');
 const okLayer2 = orchContent.includes('可独立执行验收')
   && orchContent.includes('maxParallelBatch')
-  && orchContent.includes('缺省 3')
+  && orchContent.includes('缺省 5')
   && orchContent.includes('delegate_batch')
   && orchContent.includes('tool_use');
 const okWriteConflict = orchContent.includes('写冲突')
@@ -147,13 +196,13 @@ const okBriefBudget = ['co-orchestrator', 'co-planner'].every((n) => {
 });
 const plannerBrief = COHUB_SKILLS.find((x: any) => x.name === 'co-planner')!.brief;
 // planner brief 必须给出完整并行判据（与 skills/planner.md:62-64 一致）：
-// 可独立验收 → 并行；不按文件数拆任务；同文件写冲突 → 串行；每批 ≤3。
+// 可独立验收 → 并行；不按文件数拆任务；同文件写冲突 → 串行；每批 ≤5。
 const okPlannerBrief = plannerBrief.includes('可独立验收')
   && plannerBrief.includes('无依赖/写冲突')
   && plannerBrief.includes('同问题多文件/多搜索交单代理内部并行')
   && plannerBrief.includes('不按文件数')
   && plannerBrief.includes('同文件写冲突串行')
-  && plannerBrief.includes('每批≤3');
+  && plannerBrief.includes('每批≤5');
 console.log('brief 预算(≤300/含中文):', okBriefBudget ? 'PASS' : 'FAIL');
 console.log('planner brief 并行判据(独立验收/非文件数/写冲突/批上限):', okPlannerBrief ? 'PASS' : 'FAIL');
 
@@ -211,6 +260,9 @@ console.log('全失败兜底:', allFailed.includes('All councillors failed') && 
 // ⑤ 集成：fake provider 并行分发 + agentOptions 模型路由
 // 0.2 真实 SubagentRuntime 在 start 前 assertCapabilities：请求带 agentOptions 时
 // provider 必须声明 capabilities.agentOptions=true，否则拒绝（fail loud，不静默忽略）。
+// 另：startActivation 用 `ctx.agents.get(parent.id) === parent` 做「精确活父」授权
+// （dsh-subagent lib/index.js:3060），传临时对象会被 UNAUTHORIZED 拒绝，故先注册真实父 Agent。
+const councilParent = await registerParentAgent(root, 'council-parent');
 const started: any[] = [];
 root.subagents.registerProvider({
   name: 'fake-council',
@@ -237,7 +289,7 @@ const tool = lib.createCouncilTool({
   councilProvider: 'fake-council',
 }, root);
 
-const out = await tool.execute({ prompt: '要不要重构？' }, { agent: { id: 'council-parent' }, signal: new AbortController().signal });
+const out = await tool.execute({ prompt: '要不要重构？' }, { agent: councilParent, signal: new AbortController().signal });
 const okRouting = started.length === 2
   && started[0].model.provider === 'p1' && started[0].model.model === 'm1'
   && started[1].model.provider === 'p2' && started[1].model.model === 'm2'

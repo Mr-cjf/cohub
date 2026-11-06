@@ -42,7 +42,7 @@
 
       ## 调度纪律
 
-      - 单批 ≤ 3 个并行委派（DSH 设置 → cohub.schedule.maxParallelBatch，缺省 3）；
+      - 单批 ≤ 5 个并行委派（DSH 设置 → cohub.schedule.maxParallelBatch，缺省 5）；
       - 单次执行单元墙钟预算 ≤ 600000ms（10 分钟，cohub.schedule.wallClockBudgetMs），不要用一次执行单元承载可能超过预算的整批；
       - 同文件写操作或有数据依赖的任务必须串行，不同文件且无依赖的必须并行；
       - 需要等待时用 job_list / job_output 轮询，不前台空等。

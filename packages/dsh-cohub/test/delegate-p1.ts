@@ -11,7 +11,7 @@ const DELEGATE_CONTRACT_MARKER = "--- 执行器环境契约（通用原则 + 探
  * fake subagents 服务的版本形态：
  * - "0.2.1"（默认）：只提供 startActivation(spec)，**不提供 start**——与宿主真实运行时一致，
  *   这样任何残留的 ctx.subagents.start(...) 调用都会像生产环境一样炸掉，而不是被桩掩盖。
- * - "0.2.0"：只提供 start(provider, request)，用于验证回退分支不回归。
+ * - "0.2.0"：只提供 start(provider, request)，用于验证老运行时被 fail loud 拒绝（不静默降级）。
  */
 type SubagentsFlavor = "0.2.1" | "0.2.0";
 
@@ -19,7 +19,7 @@ interface MakeCtxOptions {
   flavor?: SubagentsFlavor;
   /** 原始 spec 捕获数组（0.2.1 路径下断言 persona 前置 / delivery 用） */
   rawSpecs?: any[];
-  /** 原始 start 参数捕获数组（0.2.0 路径下断言 persona 原生字段用） */
+  /** 原始 start 参数捕获数组（0.2.0 路径下断言未发生静默回退用） */
   rawRequests?: any[];
 }
 
@@ -354,10 +354,11 @@ function check(name: string, cond: boolean) {
   // ⑥ 空串 / 纯空白 = 未配置（设置页清空字段会写回 ""）
   tool = createDelegateTool(ctx, () => [{ name: "co-fixer", reasoningEffort: "" }, { name: "co-explorer", reasoningEffort: "   " }]);
   await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec());
-  // 归一化（normalizeReasoningEffort）已把空串/纯空白折成 undefined，故此后的行为应是
-  // 「P1-2 分层默认值回落」而非「不传 agentOptions」：co-fixer 只有 maxTokens，co-explorer 回落到 low。
-  check("空串 reasoningEffort 归一为未配置（不含 reasoningEffort 键，仅分层默认 maxTokens）",
-    captured?.agentOptions?.reasoningEffort === undefined && captured?.agentOptions?.maxTokens === 8192);
+  // 归一化（normalizeReasoningEffort）把空串/纯空白折成 undefined；co-fixer 无分层默认
+  // （2026-09 起实施类不再设 maxTokens 上限，完全继承 provider 默认），也未配 provider，
+  // 故最终不交出任何 agentOptions 字段。
+  check("空串 reasoningEffort 归一为未配置（不传 reasoningEffort 键）",
+    !("reasoningEffort" in (captured?.agentOptions ?? {})));
   await tool.execute({ skill: "co-explorer", prompt: "任务" }, makeExec());
   check("纯空白 reasoningEffort 归一为未配置（回落到分层默认 low，不把空白串传给 DSH）",
     captured?.agentOptions?.reasoningEffort === "low");
@@ -381,12 +382,19 @@ function check(name: string, cond: boolean) {
 {
   console.log("===== 用例 12：0.2.1 仅 startActivation（无 start）delegate 仍可用 =====");
   const rawSpecs: any[] = [];
+  const restrictCalls: any[] = [];
   let spawnCount = 0;
   const start = (req: any) => {
     spawnCount++;
     return { id: "child-42", result: Promise.resolve({ output: [{ type: "text", text: "0.2.1 完成" }], stopReason: "completed" }), dispose() {} };
   };
   const ctx = makeCtx(start, [{ id: "deepseek-official" }], undefined, undefined, { flavor: "0.2.1", rawSpecs });
+  // P1-1 补偿通道（0.2.2-rc.1）：toolFilter 已从 SubagentStartRequest 移除，runtime 也不消费，
+  // 故 cohub 在 childId 发布后对子 scope 调 tools.restrict(filter)。桩里给出子代理 scope，
+  // 断言「裁剪真的被施加」而不是断言 request 携带一个会被静默丢弃的字段。
+  ctx.agents = {
+    get: (id: string) => (id === "child-42" ? { ctx: { tools: { restrict: (f: any) => restrictCalls.push(f) } } } : undefined),
+  };
   check("桩里确实没有 start 方法", typeof (ctx as any).subagents.start === "undefined");
   check("桩里提供 startActivation", typeof (ctx as any).subagents.startActivation === "function");
 
@@ -401,19 +409,25 @@ function check(name: string, cond: boolean) {
   check("label 在 spec 顶层（不在 request 内）", spec?.label === "delegate:co-fixer" && spec?.request?.label === undefined);
   check("signal 在 spec 顶层", spec?.signal instanceof AbortSignal || typeof spec?.signal?.aborted === "boolean");
   check("request 不含 persona 字段（persona 前置到 prompt 首块）", spec?.request && !("persona" in spec.request));
-  // P1-1：toolFilter 仍被 SubagentStartRequest 接受（只是不再经模型工具层暴露），
-  // 故 delegate 现在按角色透传 deny 裁剪；co-fixer 属写类：不含 write，但含 subagent_fork。
-  check("request 透传 toolFilter（按角色 deny 裁剪）",
-    spec?.request?.toolFilter?.deny?.includes("subagent_fork") === true
-    && spec?.request?.toolFilter?.deny?.includes("write") !== true);
+  // P1-1：0.2.2-rc.1 的 request 无 toolFilter 字段，故不得再塞（塞了也会被 runtime 静默丢弃）；
+  // 裁剪改由 cohub 在子 scope 上 restrict 施加——co-fixer 属写类：不含 write，但含 subagent_fork。
+  check("request 不再携带会被静默丢弃的 toolFilter 字段", spec?.request && !("toolFilter" in spec.request));
+  check("子 scope 收到按角色 deny 裁剪的 restrict",
+    restrictCalls.length === 1
+    && restrictCalls[0]?.deny?.includes("subagent_fork") === true
+    && restrictCalls[0]?.deny?.includes("write") !== true);
   check("persona 前置为 prompt 首个 text 块", spec?.request?.prompt?.[0]?.type === "text" && spec?.request?.prompt?.[0]?.text === DELEGATE_PERSONA);
   check("任务 prompt 顺延为第二块", spec?.request?.prompt?.[1]?.type === "text" && spec.request.prompt[1].text.includes("--- 你的具体任务 ---"));
   check("agentOptions 落到 request 内", spec?.request?.agentOptions?.provider === "deepseek-official");
 }
 
-// ---- 用例 13：DSH 0.2.0 回退 —— fake ctx 只提供 start，不提供 startActivation ----
+// ---- 用例 13：旧运行时（0.2.0，只有 start 没有 startActivation）→ fail loud，不静默降级 ----
+// 背景：src/delegate.ts:781-783 已删除 `typeof subagents.start === "function"` 的双分支探测
+// （0.2.2-rc.1 的 SubagentRuntime 移除 start 后该分支永不可达），此后统一走 startActivation。
+// 本用例因此不再断言「回退路径正常返回」，而是断言「不支持的老运行时立刻报错」——
+// 静默回退到 start 早就不可能发生，唯一需要防的是被吞成空结果。
 {
-  console.log("===== 用例 13：0.2.0 回退分支（仅 start） =====");
+  console.log("===== 用例 13：旧运行时（仅 start）→ fail loud =====");
   const rawRequests: any[] = [];
   let spawnCount = 0;
   const start = (req: any) => {
@@ -421,17 +435,14 @@ function check(name: string, cond: boolean) {
     return { id: "run-7", result: Promise.resolve({ output: [{ type: "text", text: "0.2.0 完成" }], stopReason: "completed" }), dispose() {} };
   };
   const ctx = makeCtx(start, [], undefined, undefined, { flavor: "0.2.0", rawRequests });
-  check("桩里没有 startActivation（走回退分支）", typeof (ctx as any).subagents.startActivation === "undefined");
+  check("桩里没有 startActivation（老运行时）", typeof (ctx as any).subagents.startActivation === "undefined");
 
   const tool = createDelegateTool(ctx, () => []);
-  const out = await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec());
-  check("0.2.0 回退路径正常返回", out === "0.2.0 完成");
-  check("spawn 次数 = 1", spawnCount === 1);
-  const req = rawRequests[0];
-  check("0.2.0 保留 persona 原生字段", req?.persona === DELEGATE_PERSONA);
-  check("0.2.0 prompt 未被前置 persona（单块）", req?.prompt?.length === 1 && req.prompt[0].text.includes("--- 你的具体任务 ---"));
-  check("0.2.0 label 在 request 内", req?.label === "delegate:co-fixer");
-  check("0.2.0 传了 signal", req?.signal !== undefined);
+  let err: any = null;
+  try { await tool.execute({ skill: "co-fixer", prompt: "任务" }, makeExec()); } catch (e) { err = e; }
+  check("老运行时抛错而非静默返回", !!err);
+  check("错误信息点名 startActivation 缺失", String(err?.message ?? "").includes("startActivation"));
+  check("未调用 start（不回退静默降级）", spawnCount === 0 && rawRequests.length === 0);
 }
 
 // ---- 用例 14：0.2.1 无 subagents 服务 → fail loud（不静默） ----

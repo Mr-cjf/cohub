@@ -10,9 +10,31 @@ import systemPrompt from "@deepseek-ai/dsh-system-prompt";
 import skills from "@deepseek-ai/dsh-skill";
 import tools from "@deepseek-ai/dsh-tools";
 import subagents from "@deepseek-ai/dsh-subagent";
+import FileSystem from "@deepseek-ai/dsh-fs";
+import WorkingDirectory from "@deepseek-ai/dsh-working-directory";
+import AgentRegistry from "@deepseek-ai/dsh-agent";
+import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
+import { normalize, resolve as resolvePath } from "node:path";
 import { Config, CohubSettingsSchema } from "../lib/index.js";
 import * as cohub from "../lib/index.js";
 import { createDelegateTool } from "../src/delegate.ts";
+
+/**
+ * 最小 fs 后端（测试边界，同 test/host-integration.ts:50-60）：dsh-fs 真实后端
+ * （dsh-fs-local / fs-sandbox）不在本包 node_modules，这里只让
+ * WorkingDirectoryService.ensure() 的 fs.resolve + fs.stat 走通，不读写真实文件。
+ */
+class MemoryFs extends FileSystem {
+  async resolve(path: string, options?: { cwd?: string }) {
+    return normalize(resolvePath(options?.cwd ?? process.cwd(), path));
+  }
+  async stat() {
+    return { type: "directory" } as const;
+  }
+  processPath(target: string) {
+    return target;
+  }
+}
 
 let pass = 0;
 let fail = 0;
@@ -29,7 +51,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
   // DSH 0.2：Config 的 skills/schedule/delegateRetry 是 .volatile() 字段，
   // 解析输出为 Volatile<T> 引用，需 .get() 取当前快照（见 runtime-0.2.ts）。
   const def = Config({});
-  check("缺省 maxParallelBatch=3", def.schedule.get().maxParallelBatch === 3);
+  check("缺省 maxParallelBatch=5", def.schedule.get().maxParallelBatch === 5);
   check("缺省 wallClockBudgetMs=600000", def.schedule.get().wallClockBudgetMs === 600_000);
   // useJobTracking / adaptiveBatch 已于 2026-09-03 从 ScheduleConfig 移除；以下反向断言验证不存在
   check("useJobTracking 已移除 → undefined", def.schedule.get().useJobTracking === undefined);
@@ -49,12 +71,29 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
   root.plugin(systemPrompt);
   root.plugin(tools);
   root.plugin(skills);
+  // 0.2.2-rc.1 服务注入图（同 test/host-integration.ts:29-38）：缺 fs / workingDirectory /
+  // agents 任一层 → SubagentRuntime fiber 停在 state=0 → ctx.subagents 恒 undefined →
+  // apply() 在「delegate 需要 subagents 服务」处 fail loud。
+  root.plugin(MemoryFs);
+  root.plugin(WorkingDirectory, { defaultDirectory: process.cwd() });
+  root.plugin(AgentRegistry);
   root.plugin(subagents);
+  root.plugin(SessionProjectionRegistry);
   await new Promise(r => setImmediate(r));
   cohub.apply(root, {
     councillors: [],
     councilTimeoutMs: 180_000,
+    installPresets: false,
     schedule: { maxParallelBatch: 7, wallClockBudgetMs: 234_567 },
+  });
+  // DSH 0.2.2-rc.1 起 tools 服务在 systemPrompt.tools() 里调用 selectExecutor()，
+  // 未挂载 executor 时 assemble() 直接抛 ToolExecutorUnavailableError（0.2 的“跑 agent 前
+  // 必须先装载 executor”契约，官方 native/PTC executor 不在本包 node_modules）。
+  // 这里注册一个最小 executor 桩，只为让 assemble() 走通——被测语义是「注入段已移除」，
+  // 与 executor 实现无关；不注册会让断言因环境缺层而非被测行为失败。
+  root.tools.setExecutor({
+    describe: () => ({ schemas: [], knownNames: [] }),
+    execute: async () => ({ results: [], additionalContexts: [], concluded: false }),
   });
   const assembly: any = await root.systemPrompt.assemble({});
   const section = assembly.sections.find((s: any) => s.name === "cohub:schedule");
@@ -78,7 +117,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
   check("settings.delegateRetry.maxRetries=2", parsed.delegateRetry.maxRetries === 2);
   check("settings.delegateRetry.stall 缺省 enabled=false", parsed.delegateRetry.stall.enabled === false);
   const empty = CohubSettingsSchema({});
-  check("空 settings.schedule 缺省齐全", empty.schedule.maxParallelBatch === 3 && empty.schedule.wallClockBudgetMs === 600_000);
+  check("空 settings.schedule 缺省齐全", empty.schedule.maxParallelBatch === 5 && empty.schedule.wallClockBudgetMs === 600_000);
   check("空 settings.delegateRetry 缺省 maxRetries=0", empty.delegateRetry.maxRetries === 0);
 }
 

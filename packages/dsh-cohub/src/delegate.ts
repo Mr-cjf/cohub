@@ -1733,7 +1733,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       // P3-3（N3）：每次调用解析生效配置（settings > config > 保守默认）；RETRYABLE 随 retryableReasons 动态
       const { retry, stall, schedule, budget, background, subagentPresetEnabled } = resolveRuntimeConfig();
       const RETRYABLE = new Set(retry.retryableReasons);
-      ctx.logger?.info?.("[cohub schedule] 生效调度参数：batch=" + (schedule?.maxParallelBatch ?? 3)
+      ctx.logger?.info?.("[cohub schedule] 生效调度参数：batch=" + (schedule?.maxParallelBatch ?? 5)
         + " wallMs=" + (schedule?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS));
 
       // ① 按 skill 名精确匹配技能 + 查找路由配置（共享函数；skill 缺失/空白会兜底 co-fixer 并 warn）
