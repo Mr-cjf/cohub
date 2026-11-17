@@ -2,6 +2,17 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.12.1] - 2026-11-17
+
+### 修复
+
+- **委派工具在 DSH `0.2.2-rc.3` 上直接抛 `TypeError: Cannot read properties of undefined (reading 'id')`**：宿主 `startActivation` 契约在 0.2.2-rc 系列发生迁移，`parent` 由 `request.parent` 迁到 `spec` 顶层。`delegate` / `delegate_batch` 仍按旧位置读取，拿到的 `parent` 为 `undefined`，子代理启动阶段即崩，整次委派失败。现改为**顶层 + `request` 双写**：在 `spec.parent` 总写，且当宿主仍携带旧字段时保持 `request.parent` 同步，同一份代码在 `0.2.2-rc.1` 与 `0.2.2-rc.3` 上都能正常启动子代理。对使用者的影响：在 `0.2.2-rc.3` 宿主上委派不再一调用就崩，升级宿主无需降级插件。
+- **`delegate_batch` 把派发前异常静默吞成「0/N 完成 0.0s」**：整批在派发前就失败时（上述 `startActivation` 抛错、参数或预设装配异常等），返回摘要只报零完成与 `0.0s`，错误本身被丢弃，调用方无从判断是「全部失败」还是「压根没派出去」。现改为把该异常落成一条带原始错误信息的 error 结果条目回显，摘要与实际失败一一对应。对使用者的影响：批量委派失败时能直接看到原因，不需要再去翻日志反推。
+
+### 变更
+
+- **测试类型债清零并纳入门禁主链**：`test/` 的 TypeScript 类型错误由 141 个清零到 0——新增 `test/types/test-stubs.ts` 统一桩工厂（`ToolRunContext` / `SessionId` / `SessionHeader` / `SubagentRun` / `StubFileSystem`），7 个既有测试文件改用工厂，并删掉宿主已不再提供的 `persona` / `toolFilter` 字段；新增 `test:all` 聚合入口。`typecheck:test` 的 `include` 由「只枚举迁移涉及的 7 个文件」扩到 `test/` 全量，以 `allowJs` + `checkJs: false` 处理按设计从构建产物加载的 `../lib/index.js`；`bun run typecheck` 主链由 `src && 0.2` 扩为 `src && 0.2 && test`。对使用者的影响：测试代码与 `src` 同受类型门禁覆盖，契约迁移类回归在类型检查阶段即暴露，不必等到运行期；合并前跑 `typecheck` 即覆盖全链。
+
 ## [0.12.0] - 2026-11-06
 
 ### 新增
