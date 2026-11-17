@@ -2,6 +2,21 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.0] - 2026-11-17
+
+### 新增
+
+- **派发前双写契约自检与 `TypeError` 归因**：新增 `src/contract-probe.ts`。子代理 spawn 之前先在本地校验「双写契约」是否成立——`parent` / `prompt` 须同时写在 `spec` 顶层与 `spec.request`（两代宿主各自只读其中一层），缺字段当场给出可读错误，而不是等宿主在启动阶段抛裸 `TypeError`；若宿主仍先行抛错，则把症状翻译成四段式归因（契约缺失 / 宿主版本漂移 / 插件侧读取位置 / 未知），并完整保留原始 message 不吞栈。该模块**不发起任何探测式调用、不真 spawn**，纯本地静态校验。对使用者的影响：宿主契约再迁移时，失败信息直接指出是哪一段契约没对上，不必再从 `Cannot read properties of undefined (reading 'id')` 反推。**默认常开**：属派发前本地自检、无独立开关，也不产生额外宿主动作与调用。
+- **任务粒度自检运行时化**：新增 `src/granularity.ts`，把技能里「单包粒度上限」的提示词自律落成可执行校验：`delegate_batch` 的每个 task 可选传 `scope: { demands?, domains? }`，当可独立判定诉求 >3 或模块域 >2 时，**该 task 单独**落 error 并回传拆分建议（点名超了哪一项、按上限算需拆成几包），同批其它 task 照常执行、不受牵连；非法值（`NaN` / 负数 / 非整数 / 空串域名）按「未声明」处理，不误伤。对使用者的影响：把多件事塞进一个包会在派发前被拦下并给出拆分方案，而不是让子代理在一轮里做多个决策、失败后无法归因。**默认不校验**：不传 `scope` 时行为与旧版完全一致，需在 `cordis.patch.yml` 的 `cohub.skills` 项里显式传 `scope` 才生效。
+- **task 级进度事件与时间线**：`delegate_batch` 的每个结果条目新增 `startedAt` / `endedAt` / `durationMs` / `runId`，并新增顶层可选 `events` 数组承载同一批 task 级事件；返回文本新增「## task 时间线」段，**排在预算裁剪之后**（先裁剪后渲染，时间线不会被预算裁掉）。`startedAt` 缺失时整组时间字段一并省略，旧调用与测试桩行为零变化。对使用者的影响：批量委派的时间分布可读，长尾 task 与「名为并行实为串行」一眼可见；程序化调用方从 `events` 取结构化事件，无需解析文本。**默认常开**：纯增量字段与新增段落，不改任何既有字段语义。
+- **角色级输出契约**：新增 `src/output-contract.ts`，为 12 个角色各定义一份输出 JSON Schema 子集，分 `off` / `lite` / `strict` 三档：`lite` 注入契约段 + 校验，违约只标记不改写；`strict` 在此基础上对违约重写一次，且**仅当结果 <8000 字符才重试**（避免把长输出整段再喂一遍）。对使用者的影响：需要结构化回收结论时可按路由逐条打开，收到的子代理结果可校验、格式稳定；默认档位不动，无契约的旧用法不受影响。**默认 `off`**（不注入、不校验、不重写）：需在 `cordis.patch.yml` 的 `cohub.skills` 项里为该路由配 `outputContract: lite|strict` 才生效；非法值一律归一到 `off`。
+
+> 上述四项中，粒度自检与输出契约为**默认关闭、需显式配置**：在 `cordis.patch.yml` 的 `cohub.skills` 项里配 `outputContract: lite|strict`，或在调用 `delegate_batch` 时给 task 传 `scope`，对应能力才开始介入；不配置则运行时行为与 0.12.1 保持一致。派发前契约自检与 task 时间线为常开的增量能力，无开关。
+
+### 变更
+
+- **测试门禁扩容**：新增 4 个测试文件（`test/contract-probe.ts` / `test/granularity.ts` / `test/output-contract.ts` / `test/batch-events.ts`）共 262 条断言，`test:all` 由 22 项增至 26 项并全绿；新增 `makeSubagentReceipt` 工厂统一子代理回执桩，替换各测试文件里散落的裸对象构造。对使用者的影响：四项新能力的行为都有回归覆盖，其中「默认 off 时 prompt 与旧版逐字节一致」这一条被单独断言守护，后续改动破坏默认档静默性会被门禁直接挡下，不会悄悄改变既有编排结果。
+
 ## [0.12.1] - 2026-11-17
 
 ### 修复
