@@ -98,6 +98,43 @@ export function makeSubagentRun(
   return { ...base, ...over } as unknown as SubagentRun;
 }
 
+/** startActivation（0.2.1+ 契约）返回值——子运行「收据」桩的结构。
+ *  字段集合与宿主 `SubagentActivation` 的四个成员逐一对应
+ *  （dsh-subagent/lib/types/types.d.ts:40-52：childId / messageId? / result / dispose），
+ *  也与各测试里手写的 receipt 字面量逐字段一致（runtime-0.2.ts:122-127、delegate-p1.ts:71-76）。
+ *  注意 childId / messageId 在这里是**普通 string**：本工厂入参就是 string，不做品牌转换
+ *  （收据只会被塞进各测试的 any 型 `ctx.subagents` 桩，用不上 SessionId / MessageId 品牌）。 */
+export interface SubagentReceiptStub {
+  childId: string;
+  messageId: string;
+  result: Promise<any>;
+  dispose: () => Promise<void>;
+}
+
+/** 造 startActivation 返回的 activation 收据桩（{childId, messageId, result, dispose}）。
+ *  - 只产出宿主 receipt 的这四个字段：不凭空补 pool / releaseSlot / parent / delivery 等
+ *    宿主内部字段，避免桩让被测代码走到另一条分支（同 makeSubagentRun 的"不补字段"约束）；
+ *  - messageId 缺省由 childId 派生（`msg-<childId>`）：确定值、不依赖时钟或计数器，
+ *    类型擦除后结果可复现；
+ *  - dispose 缺省是 **async 空实现**（与 makeSubagentRun 的缺省 dispose 同语义），
+ *    调用方可以 await 而不必判空；over.dispose 可替换为计数/抛错桩。
+ * @param childId 子运行 id（与宿主 receipt.childId 同名同位，保持原样字符串）
+ * @param result 子运行结果 Promise（`{ output, stopReason }` 子集即可）
+ * @param over 只允许覆盖 messageId / dispose 两项（其余字段不接受覆盖，防止桩被塑形成非法收据）
+ */
+export function makeSubagentReceipt(
+  childId: string,
+  result: Promise<any>,
+  over: { messageId?: string; dispose?: () => Promise<void> } = {},
+): SubagentReceiptStub {
+  return {
+    childId,
+    messageId: over.messageId ?? "msg-" + childId,
+    result,
+    dispose: over.dispose ?? (async () => {}),
+  };
+}
+
 /** FileSystem.writeText / patchText / editText / deleteFile / moveFile 的沙箱策略参数类型。
  *  用 `Parameters<>` 从基类签名派生，避免为此 import dsh-sandbox / dsh-fs-patch 的类型。 */
 type SandboxPolicy = Parameters<FileSystem["writeText"]>[4];

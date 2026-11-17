@@ -88,6 +88,19 @@ const SkillRoute = z.object({
   // 不加 .required()：schemastery 中未 required 即可选（缺省时解析结果不含该键）；
   // 不加 .default()：避免官方设置页把默认值强制写回每一条路由。
   reasoningEffort: z.string().description("推理强度（如 low/medium/high；留空则按模型默认档/继承规则）"),
+  // 输出契约启用等级（波2b）：定义在 src/output-contract.ts（12 角色的 JSON Schema 子集）。
+  //
+  // 缺省 off —— 不注入契约段、不校验、不重写，因此默认配置下运行时行为与旧版**完全一致**。
+  //   lite   = 注入契约段 + 校验 + 标记违约（不改写子代理输出）
+  //   strict = 注入 + 校验 + 违约重写一次
+  // 本波只做配置管道（字段 + 透传），注入/校验/重写在波3 接入 delegate。
+  //
+  // 用 z.union 而不是 z.enum：schemastery 的枚举即 union（同 council 的工具模式字段）。
+  // 不加 .default()：未配置的路由不写回该键，避免官方设置页把默认值强制写回每条路由
+  // （与 reasoningEffort 的处理一致）。
+  outputContract: z
+    .union(["off", "lite", "strict"])
+    .description("输出契约等级（off=不注入不校验 / lite=注入+校验+标记违约 / strict=注入+校验+重写一次；留空=off）"),
 });
 
 /** delegate 执行器环境契约注入配置（P1-1）：默认开、可关闭、文本可覆盖 */

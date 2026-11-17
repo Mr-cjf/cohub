@@ -30,6 +30,15 @@ import {
   type ResultBudgetConfig,
 } from "./result-budget.ts";
 import { maybeDeferTodoNudge } from "./todo-nudge.ts";
+import { assertDualActivationSpec, describeActivationContractError } from "./contract-probe.ts";
+import {
+  resolveOutputContract,
+  describeContractForPrompt,
+  validateContractText,
+  formatContractViolation,
+  type OutputContractLevel,
+  type OutputContractSchema,
+} from "./output-contract.ts";
 
 /** 单个 skill 的路由配置（来自组合层 cordis.patch.yml 或 DSH settings 的 cohub.skills） */
 export interface SkillRouteConfig {
@@ -40,6 +49,17 @@ export interface SkillRouteConfig {
   /** 推理强度（DSH ReasoningEffortId，adapter 拥有的不透明字符串：low/medium/high/...）。
    *  合法取值由「该 provider+model 的模型目录」决定；空串/缺省 = 不覆盖。 */
   reasoningEffort?: string;
+  /**
+   * 输出契约启用等级（波2b 新增，缺省 off）。
+   *
+   * 契约本体（12 角色的 JSON Schema 子集）定义在 `src/output-contract.ts`；本字段只承载
+   * 「该路由要不要启用」：off=不注入不校验（默认，行为与旧版一致）／lite=注入+校验+标记违约／
+   * strict=注入+校验+违约重写一次。
+   *
+   * 透传路径：index.ts 的 SkillRoute（z.union 可选字段）→ Config.skills →
+   * {@link resolveSkillAndRoute} 返回的 route 对象上（本波不新增任何消费方，故零行为变化）。
+   */
+  outputContract?: OutputContractLevel;
 }
 
 /** delegate 工具运行时路由源：返回当前生效的 skill 路由表 */
@@ -817,7 +837,7 @@ async function startSubagentRunOnce(
   // 外部 backend 路径 startExternalNamed(:1598) 会把剩余字段 `...request` 透传给 provider.start，
   // 但 assertCapabilities(:3270-3286) 与 provider 均按名取键，未知键无副作用 → 保留双写。
   // spec 上并无 maxDepth / outputSchema 字段，故不凭空加（与改造前一致，走 provider-managed 默认）。
-  const receipt = await subagents.startActivation({
+  const activationSpec = {
     provider,
     label: spec.label,
     prompt,
@@ -833,7 +853,28 @@ async function startSubagentRunOnce(
     },
     ...(signal !== undefined ? { signal } : {}),
     delivery: "caller",
-  });
+  };
+  // A · 派发前契约自检：**在 await 之前**校验自己构造的对象确实双写了
+  // 顶层 parent/prompt 与 request.parent/prompt。这一步只读、不 spawn、零副作用：
+  // 目的不是探测宿主，而是把「我们自己的双写被改坏」在派发前变成可读错误，
+  // 而不是等宿主读到 undefined 抛裸 TypeError（Cannot read properties of undefined (reading 'id')）。
+  assertDualActivationSpec(activationSpec, spec.label);
+  let receipt: any;
+  try {
+    receipt = await subagents.startActivation(activationSpec);
+  } catch (err) {
+    // A · 失败归因增强：宿主若再迁一层/改字段名，仍会抛裸 TypeError。
+    // describeActivationContractError 只对「读 undefined 的 id/parent/prompt」这类特征返回归因文本；
+    // **原始 message 一律保留**（由调用方拼在本条错误尾部）——既有测试把报错原文当契约，
+    // 且吞掉原文会让现场排查失去宿主侧的准确信息。
+    const attribution = describeActivationContractError(err);
+    if (attribution === undefined) throw err;
+    const original = err instanceof Error ? err.message : String(err);
+    const wrapped = new Error(`cohub: startActivation 失败：${original}\n${attribution}`);
+    // 保留 stack 便于定位（原错误对象上的 stack 比包装栈更有用）
+    if (err instanceof Error && typeof err.stack === "string") wrapped.stack = err.stack;
+    throw wrapped;
+  }
   // SubagentStartRequest 已无 toolFilter 字段（0.2.2-rc.1），startActivation 内的
   // composition 也只组装 { agentPreset: request.agentPreset }，没有可透传的裁剪通道；
   // 所以必须由 cohub 自己拿到 childId 后对子 scope 施加 restrict
@@ -1122,6 +1163,25 @@ export function resolveSkillAndRoute(
   // 路由查找使用规范化后的 requested（可能为空），而非 skillName（兜底后）
   const route = (getRoutes() ?? []).find(s => s.name === requested);
   return { skill, route, fallback, ...(note === undefined ? {} : { note }) };
+}
+
+/**
+ * 波3 接入点：把「路由表上的启用等级」与「技能名对应的契约」一起解析出来。
+ *
+ * 本波（2b）只建管道：函数已就绪但**没有调用方**，因此对 delegate 行为零影响。
+ * 波3 的注入点在本文件 `delegate` 工具 execute 内、`resolveSkillAndRoute` 之后 /
+ * spawn prompt 组装之前：拿到 `{ schema, level }`，level !== "off" 且有 schema 时
+ * 用 `describeContractForPrompt(schema)` 追加一段契约说明，子代理返回后再用
+ * `validateAgainstContract` 判定（lite=标记 / strict=重写一次）。
+ *
+ * @param skillName 兜底后的技能名（COHUB_SKILLS[].name）
+ * @param route resolveSkillAndRoute 返回的路由条目（其上的 outputContract 缺省视为 off）
+ */
+export function resolveRouteOutputContract(
+  skillName: string,
+  route: SkillRouteConfig | undefined,
+): { schema?: OutputContractSchema; level: OutputContractLevel } {
+  return resolveOutputContract(skillName, route?.outputContract);
 }
 
 /**
@@ -1627,16 +1687,39 @@ export function resolveContractText(
 }
 
 /**
+ * strict 档违约重写的**成本上限**：仅当首次结果长度 < 该值时才重写一次
+ * （大输出重发等于把成本翻倍，收益远低于让调用方自己看到违约标记）。
+ */
+export const CONTRACT_REWRITE_MAX_CHARS = 8000;
+
+/**
+ * 生成注入子代理 prompt 的「输出契约」段（波3）。level=off 时**根本不会被调用**。
+ *
+ * 插入位置的选择与理由（契约段放在任务正文**之后**）：
+ *   ① 既有的 `--- 你的具体任务 ---` 是「角色指令结束 / 用户任务开始」的分界。契约是**交付格式**
+ *      要求，不是角色设定：放到分界之前会把格式规则混进角色指令，放到分界与正文之间则让同一个
+ *      分界承担两种语义（正文前/后各一段），都会破坏它读起来「上一段是角色，下一段是任务」的直觉。
+ *      放到正文之后再单起一个小标题，既有分隔语义完全不动。
+ *   ② 输出格式约束靠近生成位置越有效（recency）：末尾是模型开始写答案前最后读到的内容。
+ *   ③ 严格前缀性质：level=off 时调用方不传该参数 → 拼接结果与改动前**逐字节**相同。
+ */
+export function buildOutputContractBlock(schema: OutputContractSchema): string {
+  return "\n\n--- 输出契约（必须遵守） ---\n\n" + describeContractForPrompt(schema) + "\n";
+}
+
+/**
  * 构建委派给子代理的完整 prompt。
- * 拼接：skill 的 brief（或 content）+ contractText + 任务分隔 + userPrompt + retryNote。
+ * 拼接：skill 的 brief（或 content）+ contractText + 任务分隔 + userPrompt + retryNote + outputContractText。
  */
 export function buildDelegatePrompt(params: {
   skill: CoHubSkill;
   contractText: string;
   userPrompt: string;
   retryNote?: string;
+  /** 波3：输出契约段（缺省 ""/undefined = 不拼接，与旧版逐字节一致） */
+  outputContractText?: string;
 }): string {
-  return (params.skill.brief || params.skill.content) + params.contractText + "\n\n--- 你的具体任务 ---\n\n" + params.userPrompt + (params.retryNote ?? "");
+  return (params.skill.brief || params.skill.content) + params.contractText + "\n\n--- 你的具体任务 ---\n\n" + params.userPrompt + (params.retryNote ?? "") + (params.outputContractText ?? "");
 }
 
 /**
@@ -1760,6 +1843,18 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       // label 里的 skill 片段：兜底时显式标 (default:co-fixer)，绝不出现 ":undefined"
       const skillTag = formatSkillLabel(skill, skillFallback);
 
+      // ② 输出契约（波3）：按路由启用等级解析该角色的 JSON 契约。
+      //    level=off（默认）时以下全部零开销：不生成文本、不校验、不重写，返回结构也不出现新字段
+      //    → 与改动前逐字节一致。
+      const outputContract = resolveRouteOutputContract(skill.name, route);
+      const contractActive = outputContract.level !== "off" && outputContract.schema !== undefined;
+      const outputContractText = contractActive && outputContract.schema !== undefined
+        ? buildOutputContractBlock(outputContract.schema)
+        : "";
+      // 违约标记（lite 恒置位；strict 仅在重写后仍违约时置位）：delegate 的 output 是 string，
+      // 故标记经可选回调 onDelegateResult 交给程序化调用方（缺省无该能力 → 静默跳过）。
+      const contractState: { violated: boolean } = { violated: false };
+
       // ③ 注入该 skill 的精简指令（brief）+ 用户具体任务（spawn 不继承父上下文，必须自包含）
       const brief = skill.brief?.trim();
       if (!brief) {
@@ -1823,8 +1918,13 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         // （循环头声明值为 null 时，三元判断的真分支类型为 never），对象属性则保持 StallInfo | null。
         const stallState: { last: StallInfo | null } = { last: null };
         let retries = 0;
+        // 波3：契约违约重写的状态（level=off 时 contractActive=false，下面全部分支都不进入；
+        // 循环上界因此恒为 retry.maxRetries，迭代次数与旧版完全一致）。
+        // 只加一次迭代：闭包式计数保证「最多重写一次」，不可能出现第三次派发。
+        let contractExtraAttempts = 0;
+        let contractRewriteNote = "";
 
-        for (let attempt = 0; attempt <= retry.maxRetries; attempt++) {
+        for (let attempt = 0; attempt <= retry.maxRetries + contractExtraAttempts; attempt++) {
           // P4（observer）：本 attempt 的起止时间与 1-based 序号；四条出口（成功/失败/超时/中止）
           // 统一经 reportAttempt 上报，observer 缺省时该函数立即 return（零行为变化）。
           const attemptStartedAt = Date.now();
@@ -1853,7 +1953,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             }
           };
           const stallNote = stallState.last ? "；停滞诊断：" + stallState.last.diagnostics : "";
-          const retryNote = attempt > 0
+          // 波3：契约重写迭代用专属说明（优先于中止重试说明——两者语义不同，不能混读）
+          const retryNote = contractRewriteNote.length > 0 ? contractRewriteNote : attempt > 0
             ? "\n\n[重试 #" + attempt + "] 上一次执行中止，原因：" + lastReason
               + (lastDiagnostic === undefined ? "" : "；诊断：" + lastDiagnostic)
               + "；已完成部分：" + (lastPartial || "（无）") + stallNote
@@ -1864,6 +1965,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             contractText,
             userPrompt: args.prompt,
             retryNote,
+            // off 时为空串 → 与旧版逐字节一致（空串拼接不改变任何字符）
+            outputContractText,
           });
 
           // N2（P3-1）：启用时自建 AbortController 并转发 exec.signal（T3：父中止 → 子中止）；
@@ -2007,10 +2110,36 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           if (outcome?.stopReason === "completed") {
             // P4：成功路径 —— childSessionId 用 run.id（契约上等于子会话 session.id）
             reportAttempt(String(run?.id ?? ""), "completed", "completed");
+            const rawResult = contentText(outcome.output);
+            // 波3 校验点（delegate）：仅 lite | strict 且该角色登记了契约时进入。
+            // 违约标记 contractMark 拼在 budgeted + degradeNotes **之后**（与降级提示同一位置逻辑：
+            // 放进被裁剪的文本里会被 applyResultBudget 切掉，等于标记静默）。
+            let contractMark = "";
+            if (contractActive && outputContract.schema !== undefined) {
+              const check = validateContractText(rawResult, outputContract.schema);
+              if (!check.ok) {
+                if (outputContract.level === "strict"
+                  && contractExtraAttempts === 0
+                  && rawResult.length < CONTRACT_REWRITE_MAX_CHARS
+                  && outerSignal?.aborted !== true) {
+                  // strict：新派发一次（不是续聊）。复用同一 for 循环 → 同一 runAttempts /
+                  // startSubagentRun 通道，guard/abort/超时/看门狗/清理全部沿用既有语义。
+                  contractExtraAttempts = 1;
+                  contractRewriteNote = "\n\n[契约重写] 上次输出未满足以下约束："
+                    + check.errors.join("；") + "。请重新输出一个完整合法的 JSON 对象（不要解释）。";
+                  ctx.logger?.info?.("[cohub contract] " + skill.name + " strict：输出未满足契约，重写一次");
+                  continue;
+                }
+                contractState.violated = true;
+                contractMark = "\n\n" + formatContractViolation(check.errors);
+                ctx.logger?.warn?.("[cohub contract] " + skill.name + " 输出未满足契约（"
+                  + outputContract.level + "）：" + check.errors.join("；"));
+              }
+            }
             // P1-3：结果先经「契约保留 + 预算裁剪 + 落盘定位」再回传，
             // 避免子代理全文永久驻留父会话历史并被每轮重发。
             // 改动 3：按 skill 分档取更小上限（co-planner 硬压到 1500 字符；契约段仍优先保留）。
-            const budgeted = await budgetSubagentResult(ctx, exec, contentText(outcome.output), {
+            const budgeted = await budgetSubagentResult(ctx, exec, rawResult, {
               maxChars: resolveSkillResultMaxChars(budget, skill.name),
               scope: "delegate",
               label: skillTag,
@@ -2019,7 +2148,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             // 降级提示必须拼在 budgeted **之后**（与 delegate_batch 统计行同一位置逻辑）：
             // 放进再被裁剪的文本里就会被 applyResultBudget 切掉，等于又回到静默降级。
             // 无降级时 formatDegradeNotes 返回空串 → 正常路径返回文本逐字不变。
-            return budgeted + formatDegradeNotes(degradeNotes);
+            // 契约标记同理：off / 合规时 contractMark === "" → 逐字不变。
+            return budgeted + formatDegradeNotes(degradeNotes) + contractMark;
           }
           lastReason = String(outcome?.stopReason ?? "unknown");
           lastDiagnostic = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
@@ -2220,6 +2350,14 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
 
       // 前台同步路径：与加入后台模式之前完全一致
       const foregroundText = await runAttempts(exec.signal);
+      // 波3：违约标记。delegate 的 output schema 是 string（render 走 String(value)），
+      // 因此结构化标记只能经**可选**回调外发（与 delegate_batch 的 onBatchEvents 同一风格）：
+      // 宿主不提供该能力/回调抛错都静默跳过；合规或 off 时完全不调用（返回结构无新增字段）。
+      if (contractState.violated) {
+        try {
+          (exec as any)?.onDelegateResult?.({ skill: skill.name, contractViolated: true });
+        } catch { /* 观测失败不影响结果回传 */ }
+      }
       // 委派已拿到结果 → 注入「立刻 todo_write 回写」提醒（fail-soft，宿主不支持就静默跳过）。
       // 上面 jobId 分支不加：那里任务只是排队/启动未完成，提醒语义不成立。
       maybeDeferTodoNudge(exec);
