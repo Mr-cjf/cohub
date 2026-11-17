@@ -15,6 +15,7 @@ import {
   resolveSkillAgentPreset,
   formatSkillLabel,
   formatDegradeNotes,
+  upsertDegradeNote,
   firstLineClamped,
   DEFAULT_FALLBACK_SKILL,
   guardDelegationDepth,
@@ -457,7 +458,7 @@ export function createDelegateBatchTool(
           const taskNotes: DegradeNote[] = [];
           // ① skill 名未命中 / skill 缺失兜底：resolveSkillAndRoute 已把原因写进 note，
           //    这里登记一条，确保「skill 拼错」这类静默降级出现在 batch 返回文本里。
-          //    （upsertDegradeNote 未导出，且每任务只登记一条，直接 push 等价。）
+          //    （upsertDegradeNote 现已由 delegate.ts 导出；每任务只登记一条，直接 push 等价。）
           if (skillNote !== undefined) {
             taskNotes.push({
               id: "skill",
@@ -507,7 +508,15 @@ export function createDelegateBatchTool(
             // buildAgentOptions 可能 await 路由解析（外部 provider 查询）：必须放在 try 内。
             // 否则它抛的错会被外层 Promise.allSettled 收成 rejected，收集阶段再静默 continue，
             // 整批只剩「0/N 完成 0.0s」——看不到任何原因（本函数修的就是这个静默失败）。
-            const agentOptions = await buildAgentOptions(route, ctx, skill.name);
+            // 降级收集：路由三处 fail-soft（provider 未注册 / model 回退 / 强度不支持）
+            // 只登记进**本任务的** taskNotes —— 每 task 一个数组，绝不跨 task 串味；
+            // 随后经 degradeField 进该 task 结果条目的 degrade 字段，并在批级降级段合并渲染。
+            const agentOptions = await buildAgentOptions(
+              route,
+              ctx,
+              skill.name,
+              (note) => upsertDegradeNote(taskNotes, note),
+            );
             // 派发工厂：首次派发与 strict 契约重写**共用同一通道**（同一 startSubagentRun 入参形状、
             // 同一 guard/preset/toolFilter/degradeNotes 槽），重写不会绕开任何既有机制。
             const spawnAgain = async (text: string, spawnSignal: AbortSignal): Promise<any> =>

@@ -402,8 +402,11 @@ export interface SpawnRunSpec {
 
 /** 一条降级提示（结构化，便于单条/多条合并成一行，不分散在多处拼字符串）。 */
 export interface DegradeNote {
-  /** 降级环节标识（去重键：同一环节多次重试只保留最后一次） */
-  id: "preset" | "toolfilter" | "skill";
+  /** 降级环节标识（去重键：同一环节多次重试只保留最后一次）
+   *  - preset / toolfilter / skill：spawn 与技能解析的 fail-soft；
+   *  - route-provider / route-model / route-effort：**路由配置没生效**的三处静默降级
+   *    （见 {@link buildAgentOptions} 的 onDegrade）。 */
+  id: "preset" | "toolfilter" | "skill" | "route-provider" | "route-model" | "route-effort";
   /** 简短标题，如「子代理 preset 未生效」 */
   what: string;
   /** 后果说明，如「已降级为继承父 preset」 */
@@ -481,11 +484,43 @@ export function formatDegradeNotes(notes: readonly DegradeNote[] | undefined): s
  * 为什么覆盖而不是累加：spawn 的 fail-soft 会重试多次，同一个环节的降级会重复出现；
  * 累加只会让返回文本变长、信号变糊。notes 为 undefined（调用方不要诊断）时静默跳过。
  */
-function upsertDegradeNote(notes: DegradeNote[] | undefined, note: DegradeNote): void {
+export function upsertDegradeNote(notes: DegradeNote[] | undefined, note: DegradeNote): void {
   if (notes === undefined) return;
   const index = notes.findIndex(n => n.id === note.id);
   if (index >= 0) notes[index] = note;
   else notes.push(note);
+}
+
+/**
+ * 路由降级通知（三处 fail-soft 共用的出口）。
+ *
+ * **onDegrade 缺省时完全不产生动作**：不改返回值、不发日志、不登记 note
+ * （因此旧调用点 / 旧测试看到的返回文本与行为逐字不变）。
+ * 回调自身抛错也吞掉——观测能力不该让整条路由失败（与 batch 的 onBatchEvents 同一纪律）。
+ */
+function notifyRouteDegrade(
+  onDegrade: ((note: DegradeNote) => void) | undefined,
+  note: DegradeNote,
+): void {
+  if (onDegrade === undefined) return;
+  try {
+    onDegrade(note);
+  } catch {
+    /* 观测失败不影响路由结果 */
+  }
+}
+
+/** 可用 provider 列表的短文本（最多 8 个，超出以 `/…` 收尾）：降级提示里的可操作信息。 */
+function describeAvailableProviders(available: ReadonlySet<string>): string {
+  const ids = [...available].filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (ids.length === 0) return "provider 注册表为空";
+  return ids.slice(0, 8).join("/") + (ids.length > 8 ? "/…" : "");
+}
+
+/** 模型支持的推理强度档位文本（空目录时如实说明「一个档位都没暴露」）。 */
+function describeSupportedEfforts(efforts: readonly string[] | undefined): string {
+  if (efforts === undefined || efforts.length === 0) return "该模型未暴露任何强度档位";
+  return efforts.join("/");
 }
 
 /**
@@ -1259,10 +1294,19 @@ export function skillTierDefaults(skillName: string | undefined): Record<string,
   }
 }
 
+/**
+ * 把 skill 路由配置翻译成 spawn 的 agentOptions（共享给 delegate / delegate_batch）。
+ *
+ * onDegrade（可选）：三处 **fail-soft 静默降级**的观测出口——用户配的 provider / model /
+ * 推理强度没生效时，把「配了什么、实际用了什么、为什么」结构化成一条 {@link DegradeNote}
+ * 交给调用方（delegate 侧进返回文本末尾，batch 侧进该 task 的 degrade 字段）。
+ * **不传时完全无副作用**（返回值、日志、返回文本均与改动前逐字一致）。
+ */
 export async function buildAgentOptions(
   route: SkillRouteConfig | undefined,
   ctx: any,
   skillName?: string,
+  onDegrade?: (note: DegradeNote) => void,
 ): Promise<Record<string, unknown> | undefined> {
   const tier = skillTierDefaults(skillName);
   if (!route) {
@@ -1285,7 +1329,7 @@ export async function buildAgentOptions(
     return Object.keys(merged).length > 0 ? merged : undefined;
   }
 
-  const available = new Set(ctx.llm.listProviders().map((p: any) => p.id));
+  const available = new Set<string>(ctx.llm.listProviders().map((p: any) => p.id));
   if (!available.has(route.provider)) {
     if (effort) {
       ctx.logger?.warn?.(
@@ -1293,6 +1337,15 @@ export async function buildAgentOptions(
         + '" 当前不可用，推理强度 "' + effort + '" 一并忽略（完全继承父会话）',
       );
     }
+    // 静默降级点①：provider 不在注册表 → 返回 undefined 等于**整条路由作废**。
+    // 调用方原先只看到「跑出来的模型不是我要的」，因此这里写全可操作信息。
+    notifyRouteDegrade(onDegrade, {
+      id: "route-provider",
+      what: "路由 provider 未注册",
+      effect: "该 skill 的 provider/model 全部未生效，子代理继承父会话模型",
+      reason: '配置的 provider "' + route.provider
+        + '" 未注册（可用：' + describeAvailableProviders(available) + "）",
+    });
     return undefined;
   }
 
@@ -1307,7 +1360,17 @@ export async function buildAgentOptions(
         '[cohub route] ' + route.name + ' 未配置 model，回退为 provider "'
         + route.provider + '" 的首个模型 "' + fallback + '"',
       );
+      // 静默降级点②：用户没配 model → 实际用的是目录首个模型（多半不是用户预期的那个）
+      notifyRouteDegrade(onDegrade, {
+        id: "route-model",
+        what: "路由未配置 model",
+        effect: "该 skill 实际使用回退模型",
+        reason: 'provider "' + route.provider + '" 未配置 model，已回退到该目录首个模型 "'
+          + fallback + '"',
+      });
     } else {
+      // 连回退模型都解析不到：只有 warn（与改动前逐字一致）——这条不是「用户配了但没生效」，
+      // 而是「provider 目录本身不可读」，报不进 provider/model/effort 三类的可操作提示。
       ctx.logger?.warn?.(
         '[cohub route] ' + route.name + ' 未配置 model，且无法解析 provider "'
         + route.provider + '" 的可用模型；将继承父会话模型（可能因模型不属于该 provider 而失败）',
@@ -1321,12 +1384,29 @@ export async function buildAgentOptions(
   if (effectiveEffort) {
     const eff = effectiveEffort;
     // 预校验只在 provider+model 都确定时进行（model 可能是上面解析出的回退模型）
-    const supported = await isReasoningEffortSupported(route.provider, options.model as string | undefined, eff, ctx);
-    if (supported === false) {
+    const support = await resolveReasoningEffortSupport(
+      route.provider,
+      options.model as string | undefined,
+      eff,
+      ctx,
+    );
+    if (support.supported === false) {
       ctx.logger?.warn?.(
         '[cohub route] ' + route.name + ' 的模型 "' + route.provider + '/' + String(options.model)
         + '" 不支持推理强度 "' + eff + '"，已忽略该强度（按模型默认档执行）',
       );
+      // 静默降级点③：强度被丢弃 → 实际按模型默认档跑（用户以为配了 max）。
+      // 仅在「模型给出了支持清单、而配置的档位不在其中」时提示：这种才有可操作信息
+      //（换档位 / 换模型）；模型完全不暴露档位（efforts 空）时保持旧行为，只有 warn。
+      if ((support.efforts?.length ?? 0) > 0) {
+        notifyRouteDegrade(onDegrade, {
+          id: "route-effort",
+          what: "推理强度未生效",
+          effect: "该强度已丢弃，子代理按模型默认档执行",
+          reason: '配置的强度 "' + eff + '" 不被模型 "' + route.provider + '/' + String(options.model)
+            + '" 支持（支持：' + describeSupportedEfforts(support.efforts) + "）",
+        });
+      }
     } else {
       options.reasoningEffort = eff;
     }
@@ -1610,27 +1690,31 @@ export async function budgetSubagentResult(
 
 /**
  * 查询某 provider+model 的模型目录，判断该推理强度是否被支持。
- * @returns true 支持 / false 明确不支持 / undefined 无法判定（放行，不改变行为）
+ * @returns supported: true 支持 / false 明确不支持 / undefined 无法判定（放行，不改变行为）；
+ *          efforts：目录里声明的档位 id（供降级提示写清「支持：…」；拿不到时为 undefined）
  *
  * 只读查询；resolveModelInfo 缺失（老宿主 / 测试 stub）或抛错都返回 undefined，
  * 让调用方维持「照传」的既有行为，而不是因查询失败把用户的配置丢掉。
  */
-async function isReasoningEffortSupported(
+async function resolveReasoningEffortSupport(
   provider: string,
   model: string | undefined,
   effort: string,
   ctx: any,
-): Promise<boolean | undefined> {
-  if (!model) return undefined; // 继承父模型时无法在本层判定
+): Promise<{ supported: boolean | undefined; efforts?: string[] }> {
+  if (!model) return { supported: undefined }; // 继承父模型时无法在本层判定
   const resolve = ctx?.llm?.resolveModelInfo;
-  if (typeof resolve !== 'function') return undefined;
+  if (typeof resolve !== 'function') return { supported: undefined };
   try {
     const info = await resolve.call(ctx.llm, provider, model);
     const efforts = info?.reasoning?.efforts;
-    if (!Array.isArray(efforts) || efforts.length === 0) return false; // 该模型不暴露任何档位
-    return efforts.some((e: any) => e && e.id === effort);
+    if (!Array.isArray(efforts) || efforts.length === 0) return { supported: false, efforts: [] }; // 该模型不暴露任何档位
+    const ids = efforts
+      .map((e: any) => (e && typeof e.id === 'string' ? e.id : ''))
+      .filter((id: string) => id.length > 0);
+    return { supported: ids.includes(effort), efforts: ids };
   } catch {
-    return undefined;
+    return { supported: undefined };
   }
 }
 
@@ -1861,18 +1945,26 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         ctx.logger?.warn?.('delegate: skill "' + skillTag + '" 缺少 brief，回退完整 content');
       }
 
+      // 降级原因收集槽：preset / toolFilter / **路由** 的 fail-soft 各登记一条，最终由
+      // runAttempts 在 result-budget 裁剪**之后**拼到返回文本末尾（当前进程不落盘日志，
+      // 只打 warn 等于静默失败 —— 今天为此时踩坑：preset 未声明 / toolFilter 失效都看不见）。
+      // 必须在 buildAgentOptions **之前**声明：路由三处降级经 onDegrade 直接回填这里。
+      const degradeNotes: DegradeNote[] = [];
+
       // ④ 构造 agentOptions（共享函数；provider 未配 model 时解析该 provider 的默认模型；
       //    P1-2：路由未显式配置的字段由 skill 分层默认值补，用户配置永远优先）
-      const agentOptions = await buildAgentOptions(route, ctx, skill.name);
+      //    路由降级（provider 未注册 / model 回退 / 强度不支持）经 onDegrade 进 degradeNotes，
+      //    再由 formatDegradeNotes 渲染进返回文本——「配了却没生效」不再静默。
+      const agentOptions = await buildAgentOptions(
+        route,
+        ctx,
+        skill.name,
+        (note) => upsertDegradeNote(degradeNotes, note),
+      );
 
       // ④b P1-1 子代理工具表裁剪：按规范化后的 skill 名查 deny 表（开关默认开；
       //     构造失败已在 resolveSkillToolFilter 内 fail-soft 成 undefined = 全量工具）
       const toolFilter = resolveSkillToolFilter(skill.name, config.toolFilter?.enabled ?? true, ctx.logger);
-
-      // 降级原因收集槽：preset / toolFilter 的 fail-soft 各登记一条，最终由
-      // runAttempts 在 result-budget 裁剪**之后**拼到返回文本末尾（当前进程不落盘日志，
-      // 只打 warn 等于静默失败 —— 今天为此时踩坑：preset 未声明 / toolFilter 失效都看不见）。
-      const degradeNotes: DegradeNote[] = [];
 
       // ①b skill 名未匹配 / skill 缺失兜底：resolveSkillAndRoute 已把原因写进 note，
       //     这里登记一条，确保「skill 拼错」这类静默降级经 formatDegradeNotes 出现在返回文本里。
