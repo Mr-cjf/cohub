@@ -24,16 +24,24 @@ function makeExec() {
   return { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal };
 }
 
-/** 把 0.2.1 activation spec 还原成逻辑 request（persona 前置块剥离），供各用例的 startImpl 复用 */
+/** 把 0.2.1 activation spec 还原成逻辑 request（persona 前置块剥离），供各用例的 startImpl 复用。
+ *  入参形状按宿主两版契约兼容：0.2.2-rc.3 顶层 parent/prompt（宿主锚点
+ *  dsh-subagent/lib/index.js:3019-3025），rc.1 只读 spec.request.*；顶层优先、request 兜底。 */
 function toLogicalRequest(spec: any) {
-  const prompt: any[] = Array.isArray(spec?.request?.prompt) ? spec.request.prompt : [];
+  // 防回归断言：真实宿主 rc.3 只读顶层，顶层缺 parent/prompt 会让所有委派在 spawn 前 TypeError
+  if (!spec?.parent || !spec?.prompt) {
+    throw new Error("startActivation spec 必须双写顶层 parent/prompt（0.2.2-rc.3 只读 spec.parent）");
+  }
+  const req = spec?.request ?? spec;
+  const prompt: any[] = Array.isArray(spec?.prompt) ? spec.prompt : Array.isArray(req?.prompt) ? req.prompt : [];
   const headIsPersona = prompt.length > 1 && prompt[0]?.type === "text"
     && String(prompt[0]?.text ?? "").includes("你是被委派的专职代理");
+  const agentOptions = spec?.agentOptions ?? req?.agentOptions;
   return {
     label: spec?.label,
     prompt: headIsPersona ? prompt.slice(1) : prompt,
-    parent: spec?.request?.parent,
-    ...(spec?.request?.agentOptions !== undefined ? { agentOptions: spec.request.agentOptions } : {}),
+    parent: spec?.parent ?? req?.parent,
+    ...(agentOptions !== undefined ? { agentOptions } : {}),
     signal: spec?.signal,
     delivery: spec?.delivery,
     provider: spec?.provider,

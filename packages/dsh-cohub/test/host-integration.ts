@@ -365,13 +365,25 @@ async function registerParentAgent(root: any, id: string) {
   await new Promise(r => setImmediate(r));
 
   // ① 正常路径（0.2.2-rc.1 唯一真实入口是 startActivation；返回 { childId, result, dispose }）
-  const receipt = await root.subagents.startActivation({
+  // 本层桩模拟 0.2.2-rc.3 的扁平 spec 契约：parent/prompt 在 spec 顶层（宿主锚点
+  // dsh-subagent/lib/index.js:3019-3025 读 spec.parent.id），同时双写 request.* 兼容 rc.1。
+  const startActivationSpec = (input: {
+    provider: string; label: string; prompt: any[]; parent: any; persona?: string; signal?: AbortSignal;
+  }) => {
+    const { signal, ...flat } = input;
+    const spec: any = { ...flat, signal: signal ?? new AbortController().signal, delivery: "caller", request: flat };
+    // 防回归断言：rc.3 宿主只读顶层，缺顶层 parent/prompt 会在 spawn 前 TypeError
+    if (!spec.parent || !spec.prompt) {
+      throw new Error("startActivation spec 必须双写顶层 parent/prompt（0.2.2-rc.3 只读 spec.parent）");
+    }
+    return spec;
+  };
+  const receipt = await root.subagents.startActivation(startActivationSpec({
     provider: "ctrl",
     label: "t-normal",
-    request: { prompt: [{ type: "text", text: "正常任务" }], parent },
-    signal: new AbortController().signal,
-    delivery: "caller",
-  });
+    prompt: [{ type: "text", text: "正常任务" }],
+    parent,
+  }));
   check("startActivation 返回子运行（childId）", !!receipt?.childId);
   const result = await receipt.result;
   check("result.stopReason=completed", result?.stopReason === "completed");
@@ -391,13 +403,12 @@ async function registerParentAgent(root: any, id: string) {
   await new Promise(r => setImmediate(r));
   let startErr: any = null;
   try {
-    await root.subagents.startActivation({
+    await root.subagents.startActivation(startActivationSpec({
       provider: "failing",
       label: "t-fail",
-      request: { prompt: [{ type: "text", text: "x" }], parent },
-      signal: new AbortController().signal,
-      delivery: "caller",
-    });
+      prompt: [{ type: "text", text: "x" }],
+      parent,
+    }));
   } catch (e) { startErr = e; }
   check("start 失败抛错（无 run）", startErr !== null && String(startErr?.message ?? startErr).includes("ctrl-start-failed"));
 
@@ -412,13 +423,13 @@ async function registerParentAgent(root: any, id: string) {
   await new Promise(r => setImmediate(r));
   let capErr: any = null;
   try {
-    await root.subagents.startActivation({
+    await root.subagents.startActivation(startActivationSpec({
       provider: "no-cap",
       label: "t-cap",
-      request: { prompt: [{ type: "text", text: "x" }], parent, persona: "p" },
-      signal: new AbortController().signal,
-      delivery: "caller",
-    });
+      prompt: [{ type: "text", text: "x" }],
+      parent,
+      persona: "p",
+    }));
   } catch (e) { capErr = e; }
   check("缺失 capability 被真实拒绝（fail loud）", capErr !== null && String(capErr?.code ?? capErr?.message ?? "").length > 0);
 
@@ -437,13 +448,13 @@ async function registerParentAgent(root: any, id: string) {
   ac.abort();
   let abortErr: any = null;
   try {
-    await root.subagents.startActivation({
+    await root.subagents.startActivation(startActivationSpec({
       provider: "ctrl2",
       label: "t-abort",
-      request: { prompt: [{ type: "text", text: "x" }], parent },
+      prompt: [{ type: "text", text: "x" }],
+      parent,
       signal: ac.signal,
-      delivery: "caller",
-    });
+    }));
   } catch (e) { abortErr = e; }
   check("pre-aborted signal 下拒绝建立子运行（provider 未被调用、无 run）",
     abortErr !== null && preStarted === 0 && (abortErr?.name === "AbortError" || abortErr?.code === 20 || /abort/i.test(String(abortErr?.message ?? ""))));
@@ -483,13 +494,13 @@ async function registerParentAgent(root: any, id: string) {
   // 清空此前 ctrl 正常路径产生的生命周期边，只保留本条 mid 激活的 start/end
   events.length = 0;
   eventRunIds.length = 0;
-  const midReceipt = await root.subagents.startActivation({
+  const midReceipt = await root.subagents.startActivation(startActivationSpec({
     provider: "mid",
     label: "t-mid-abort",
-    request: { prompt: [{ type: "text", text: "长任务" }], parent },
+    prompt: [{ type: "text", text: "长任务" }],
+    parent,
     signal: new AbortController().signal,
-    delivery: "caller",
-  });
+  }));
   check("mid-flight: 已发布子运行（provider.start 已发生）", !!midReceipt?.childId && midStarted === 1);
   check("mid-flight: interrupt 前 result 仍 pending（模型可控等待中）", !midSettled);
   root.subagents.interrupt(midReceipt.childId, { kind: "user", parentSessionId: parent.id });

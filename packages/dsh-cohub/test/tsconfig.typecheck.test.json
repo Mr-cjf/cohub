@@ -1,0 +1,17 @@
+{
+  // 本次 0.2.2-rc.3 契约迁移（spec.parent → spec 顶层 + request 双写）涉及的测试文件。
+  // 只枚举这 7 个文件：test/ 下其余历史测试文件存在既有类型问题，待清理后并入。
+  // 该门禁当前基线为 141 个既有测试类型错误（ToolRunContext 桩缺字段、SessionId 品牌、SessionHeader 缺字段等），
+  // 故未并入 typecheck 主链（主链只串 typecheck:src && typecheck:0.2），待清理后并入。
+  // 用法：bun run typecheck:test
+  "extends": "./tsconfig.runtime-0.2.json",
+  "include": [
+    "delegate-p1.ts",
+    "env-sig-p3.ts",
+    "runtime-0.2.ts",
+    "stall-p3.ts",
+    "host-integration.ts",
+    "schedule-p3.ts",
+    "unit.ts"
+  ]
+}

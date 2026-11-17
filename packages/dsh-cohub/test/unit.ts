@@ -113,7 +113,14 @@ const fakeCtx = {
   subagents: {
     // 0.2.1 契约：startActivation(spec)（无 start）；prompt 首块为 persona 前置，任务块紧随其后
     async startActivation(spec: any) {
-      const blocks: any[] = Array.isArray(spec?.request?.prompt) ? spec.request.prompt : [];
+      // 入参形状双版兼容：0.2.2-rc.3 从 spec 顶层读 prompt（宿主锚点 dsh-subagent/lib/index.js:3019-3025），
+      // rc.1 只读 spec.request.*；顶层优先、request 兜底。
+      // 防回归断言：本桩走 delegate 生产通道（src/delegate.ts 顶层双写），顶层缺 prompt 说明宿主契约又变了
+      if (!spec?.prompt) {
+        throw new Error('startActivation spec 必须双写顶层 prompt（0.2.2-rc.3 只读 spec.prompt）');
+      }
+      const req = spec?.request ?? spec;
+      const blocks: any[] = Array.isArray(spec?.prompt) ? spec.prompt : Array.isArray(req?.prompt) ? req.prompt : [];
       // 跳过前置的 persona 块，取任务 prompt
       const taskBlock = blocks.length > 1 && String(blocks[0]?.text ?? '').includes('你是被委派的专职代理')
         ? blocks[1]
@@ -310,12 +317,17 @@ const cCtx: any = {
   logger: { info: () => {}, warn: () => {} },
   subagents: {
     async startActivation(spec: any) {
+      // 刻意模拟 0.2.1 老宿主形状：仅 startActivation、无 start，请求体挂在 spec.request.*。
+      // 这里只做双形状兼容读取（顶层优先、request 兜底），不加顶层硬断言——
+      // 本用例测的正是“旧契约兼容路径”仍可用，不应因宿主再演进就误报。
+      const req = spec?.request ?? spec;
+      const route = spec?.agentOptions ?? req?.agentOptions;
       cSpecs.push(spec);
       return {
         childId: 'c-' + cSpecs.length,
         messageId: 'cm-' + cSpecs.length,
         result: Promise.resolve({
-          output: [{ type: 'text', text: `0.2.1 councillor：同意（${spec?.request?.agentOptions?.model}）` }],
+          output: [{ type: 'text', text: `0.2.1 councillor：同意（${route?.model}）` }],
           stopReason: 'completed',
         }),
         async dispose() {},
@@ -336,8 +348,8 @@ const okCouncil21 = cSpecs.length === 2
   && cSpecs.every(s => s?.delivery === 'caller')
   && cSpecs.every(s => s?.provider === 'spawn')
   && cSpecs.every(s => s?.request?.persona === undefined)
-  && cSpecs[0]?.request?.agentOptions?.model === 'm1'
-  && cSpecs[1]?.request?.agentOptions?.model === 'm2'
+  && (cSpecs[0]?.agentOptions ?? cSpecs[0]?.request?.agentOptions)?.model === 'm1'
+  && (cSpecs[1]?.agentOptions ?? cSpecs[1]?.request?.agentOptions)?.model === 'm2'
   && String(out21).includes('Council: 2/2 councillors responded');
 console.log('council 走 0.2.1 startActivation（delivery=caller / 无 persona 字段 / 模型路由）:', okCouncil21 ? 'PASS' : 'FAIL');
 

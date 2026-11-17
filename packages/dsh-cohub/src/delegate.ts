@@ -804,9 +804,27 @@ async function startSubagentRunOnce(
   const prompt = spec.persona !== undefined
     ? [{ type: "text", text: spec.persona }, ...spec.prompt]
     : spec.prompt;
+  // 双写兼容两版宿主（rc.3 读 spec 顶层、rc.1 读 spec.request）：
+  //   - DSH 0.2.2-rc.3 的 startActivation(spec) 从 **spec 顶层** 读 parent / prompt /
+  //     agentPreset / agentOptions / maxDepth / outputSchema（app.asar 内
+  //     dsh-subagent/lib/index.js:3019-3026，其中 :3025 直接读 spec.parent.id）；
+  //   - 0.2.2-rc.1 仍从 **spec.request.*** 读（node_modules/@deepseek-ai/dsh-subagent/
+  //     lib/index.js:3060 读 spec.request.parent.id，且 rc.3 无 request 兼容分支）；
+  //   → 同一份数据两处都放，任一版本都能取到 parent/prompt，否则 rc.3 会在 spawn 前
+  //     抛 TypeError: Cannot read properties of undefined (reading 'id')。
+  // 副作用已评估：rc.3 进程内 spawn（spawn-in-process 提供 prepareContinuable → startLocal）
+  // 只按名取 spec 字段（startLocalNamed:1493-1558），多余的 request 键被忽略、不会下发子代理；
+  // 外部 backend 路径 startExternalNamed(:1598) 会把剩余字段 `...request` 透传给 provider.start，
+  // 但 assertCapabilities(:3270-3286) 与 provider 均按名取键，未知键无副作用 → 保留双写。
+  // spec 上并无 maxDepth / outputSchema 字段，故不凭空加（与改造前一致，走 provider-managed 默认）。
   const receipt = await subagents.startActivation({
     provider,
     label: spec.label,
+    prompt,
+    parent: spec.parent,
+    ...(spec.agentPreset !== undefined ? { agentPreset: spec.agentPreset } : {}),
+    ...(spec.agentOptions !== undefined ? { agentOptions: spec.agentOptions } : {}),
+    // 旧形状（0.2.2-rc.1 宿主读取）：与上面顶层的同一份数据
     request: {
       prompt,
       parent: spec.parent,

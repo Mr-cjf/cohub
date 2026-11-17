@@ -31,13 +31,21 @@ function makeStallCtx(startImpl: (req: any, ctx: any) => any) {
       // 0.2.1 契约：startActivation(spec) → { childId, result, dispose }。
       // 故意不提供 start，确保任何残留 ctx.subagents.start(...) 都会像生产环境一样抛错。
       async startActivation(spec: any) {
-        const prompt: any[] = Array.isArray(spec?.request?.prompt) ? spec.request.prompt : [];
+        // 入参形状双版兼容：0.2.2-rc.3 顶层 parent/prompt（宿主锚点 dsh-subagent/lib/index.js:3019-3025），
+        // rc.1 只读 spec.request.*；顶层优先、request 兜底。
+        // 防回归断言：真实宿主 rc.3 只读顶层，顶层缺 parent/prompt 必崩在 spawn 前
+        if (!spec?.parent || !spec?.prompt) {
+          throw new Error("startActivation spec 必须双写顶层 parent/prompt（0.2.2-rc.3 只读 spec.parent）");
+        }
+        const req = spec?.request ?? spec;
+        const prompt: any[] = Array.isArray(spec?.prompt) ? spec.prompt : Array.isArray(req?.prompt) ? req.prompt : [];
         const headIsPersona = prompt.length > 1 && prompt[0]?.type === "text" && String(prompt[0]?.text ?? "").includes("你是被委派的专职代理");
+        const agentOptions = spec?.agentOptions ?? req?.agentOptions;
         const run = await startImpl({
           label: spec?.label,
           prompt: headIsPersona ? prompt.slice(1) : prompt,
-          parent: spec?.request?.parent,
-          ...(spec?.request?.agentOptions !== undefined ? { agentOptions: spec.request.agentOptions } : {}),
+          parent: spec?.parent ?? req?.parent,
+          ...(agentOptions !== undefined ? { agentOptions } : {}),
           signal: spec?.signal,
           delivery: spec?.delivery,
           provider: spec?.provider,

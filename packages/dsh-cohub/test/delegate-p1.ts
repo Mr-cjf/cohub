@@ -23,15 +23,24 @@ interface MakeCtxOptions {
   rawRequests?: any[];
 }
 
-/** 0.2.1 路径下把 persona 从 prompt 首块剥离，还原成「逻辑 request」交给各用例的 startImpl */
+/** 0.2.1 路径下把 persona 从 prompt 首块剥离，还原成「逻辑 request」交给各用例的 startImpl。
+ *  入参形状按宿主两版契约兼容：0.2.2-rc.3 把 parent/prompt 迁到 spec 顶层
+ *  （宿主锚点 dsh-subagent/lib/index.js:3019-3025 只读 spec.parent.id），rc.1 只读 spec.request.*，
+ *  故「顶层优先、request 兜底」。 */
 function toLogicalRequest(spec: any) {
-  const prompt: any[] = Array.isArray(spec?.request?.prompt) ? spec.request.prompt : [];
+  // 防回归断言：真实宿主 rc.3 只读顶层，顶层缺 parent/prompt 会让所有委派在 spawn 前 TypeError
+  if (!spec?.parent || !spec?.prompt) {
+    throw new Error("startActivation spec 必须双写顶层 parent/prompt（0.2.2-rc.3 只读 spec.parent）");
+  }
+  const req = spec?.request ?? spec;
+  const prompt: any[] = Array.isArray(spec?.prompt) ? spec.prompt : Array.isArray(req?.prompt) ? req.prompt : [];
   const headIsPersona = prompt.length > 1 && prompt[0]?.type === "text" && prompt[0]?.text === DELEGATE_PERSONA;
+  const agentOptions = spec?.agentOptions ?? req?.agentOptions;
   return {
     label: spec?.label,
     prompt: headIsPersona ? prompt.slice(1) : prompt,
-    parent: spec?.request?.parent,
-    ...(spec?.request?.agentOptions !== undefined ? { agentOptions: spec.request.agentOptions } : {}),
+    parent: spec?.parent ?? req?.parent,
+    ...(agentOptions !== undefined ? { agentOptions } : {}),
     signal: spec?.signal,
     delivery: spec?.delivery,
     provider: spec?.provider,
@@ -416,8 +425,9 @@ function check(name: string, cond: boolean) {
     restrictCalls.length === 1
     && restrictCalls[0]?.deny?.includes("subagent_fork") === true
     && restrictCalls[0]?.deny?.includes("write") !== true);
-  check("persona 前置为 prompt 首个 text 块", spec?.request?.prompt?.[0]?.type === "text" && spec?.request?.prompt?.[0]?.text === DELEGATE_PERSONA);
-  check("任务 prompt 顺延为第二块", spec?.request?.prompt?.[1]?.type === "text" && spec.request.prompt[1].text.includes("--- 你的具体任务 ---"));
+  // prompt 位置做「顶层优先、request 兜底」断言：rc.3 宿主只读顶层 prompt，不能只认 request
+  check("persona 前置为 prompt 首个 text 块", (spec?.prompt ?? spec?.request?.prompt)?.[0]?.type === "text" && (spec?.prompt ?? spec?.request?.prompt)?.[0]?.text === DELEGATE_PERSONA);
+  check("任务 prompt 顺延为第二块", (spec?.prompt ?? spec?.request?.prompt)?.[1]?.type === "text" && String((spec?.prompt ?? spec?.request?.prompt)?.[1]?.text ?? "").includes("--- 你的具体任务 ---"));
   check("agentOptions 落到 request 内", spec?.request?.agentOptions?.provider === "deepseek-official");
 }
 

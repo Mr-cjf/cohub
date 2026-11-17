@@ -94,12 +94,19 @@ function check(name: string, cond: boolean) {
       // 0.2.1 契约：startActivation(spec)（无 start），persona 已在 prompt 首块
       async startActivation(spec: any) {
         spawnCount++;
-        const prompt: any[] = Array.isArray(spec?.request?.prompt) ? spec.request.prompt : [];
+        // 入参形状双版兼容：0.2.2-rc.3 顶层 parent/prompt（宿主锚点 dsh-subagent/lib/index.js:3019-3025），
+        // rc.1 只读 spec.request.*；顶层优先、request 兜底。
+        // 防回归断言：真实宿主 rc.3 只读顶层，顶层缺 parent/prompt 必崩在 spawn 前
+        if (!spec?.parent || !spec?.prompt) {
+          throw new Error("startActivation spec 必须双写顶层 parent/prompt（0.2.2-rc.3 只读 spec.parent）");
+        }
+        const flat = spec?.request ?? spec;
+        const prompt: any[] = Array.isArray(spec?.prompt) ? spec.prompt : Array.isArray(flat?.prompt) ? flat.prompt : [];
         const req = {
           label: spec?.label,
           prompt,
-          parent: spec?.request?.parent,
-          agentOptions: spec?.request?.agentOptions,
+          parent: spec?.parent ?? flat?.parent,
+          agentOptions: spec?.agentOptions ?? flat?.agentOptions,
           signal: spec?.signal,
           delivery: spec?.delivery,
         };
@@ -200,7 +207,8 @@ function check(name: string, cond: boolean) {
   check("delegate_batch 每个 spec 都传 delivery=caller", specs.every(s => s?.delivery === "caller"));
   check("delegate_batch spec.provider=spawn", specs.every(s => s?.provider === "spawn"));
   check("delegate_batch persona 前置到 prompt 首块",
-    specs.every(s => String(s?.request?.prompt?.[0]?.text ?? "").includes("你是被委派的专职代理")));
+    // 顶层优先、request 兜底：rc.3 只读顶层 prompt，宽松断言防止把旧契约固化成绿灯
+    specs.every(s => String((s?.prompt ?? s?.request?.prompt)?.[0]?.text ?? "").includes("你是被委派的专职代理")));
   check("delegate_batch 两个任务都返回结果",
     JSON.stringify(out).includes("batch-ok-1") && JSON.stringify(out).includes("batch-ok-2"));
 }

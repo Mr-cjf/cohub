@@ -164,7 +164,13 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
       async startActivation(spec: any) {
         spawnCount++;
         const runId = "child-" + spawnCount;
-        const req = { signal: spec?.signal, prompt: spec?.request?.prompt };
+        // 入参形状双版兼容：0.2.2-rc.3 从 spec 顶层读 prompt（宿主锚点 dsh-subagent/lib/index.js:3019-3025），
+        // rc.1 只读 spec.request.*；顶层优先、request 兜底。
+        // 防回归断言：真实宿主 rc.3 只读顶层，顶层缺 prompt 会让停滞探测拿到空 prompt → 用例假绿
+        if (!spec?.prompt) {
+          throw new Error("startActivation spec 必须双写顶层 prompt（0.2.2-rc.3 只读 spec.prompt）");
+        }
+        const req = { signal: spec?.signal ?? spec?.request?.signal, prompt: spec?.prompt ?? spec?.request?.prompt };
         if (spawnCount === 1) {
           for (let i = 0; i < 3; i++) {
             stallCtx._emit(runId, { type: "tool/call", data: { name: "run_code", arguments: "x" } });

@@ -271,7 +271,6 @@ export function createDelegateBatchTool(
             contractText,
             userPrompt: task.prompt,
           });
-          const agentOptions = await buildAgentOptions(route, ctx, skill.name);
           // P1-1：按角色裁剪子代理工具表（deny 减法；构造失败已 fail-soft 成全量工具）
           const toolFilter = resolveSkillToolFilter(skill.name, toolFilterEnabled, ctx.logger);
           // 子代理独立精简 preset：每个 task 按各自的 skill 解析（undefined = 继承父 preset）
@@ -291,6 +290,10 @@ export function createDelegateBatchTool(
           }
 
           try {
+            // buildAgentOptions 可能 await 路由解析（外部 provider 查询）：必须放在 try 内。
+            // 否则它抛的错会被外层 Promise.allSettled 收成 rejected，收集阶段再静默 continue，
+            // 整批只剩「0/N 完成 0.0s」——看不到任何原因（本函数修的就是这个静默失败）。
+            const agentOptions = await buildAgentOptions(route, ctx, skill.name);
             const run = await startSubagentRun(ctx, DEFAULT_SPAWN_TRANSPORT, {
               label: `delegate_batch:${taskId}:${skillTag}`,
               prompt: [{ type: "text", text: promptText }],
@@ -329,9 +332,25 @@ export function createDelegateBatchTool(
       };
 
       try {
-        for (const s of starts) {
+        // 索引循环（不用 starts.entries()）：与 normalized 一一对应，落 error 条目时要拿 taskId
+        for (let index = 0; index < starts.length; index += 1) {
+          const s = starts[index];
+          if (s === undefined) continue;
           if (s.status === "rejected") {
-            // 理论上不会到这里（内部 catch 已处理），防御性跳过
+            // 派发前异常（skill 解析 / buildAgentOptions / 其它 await）会被外层 allSettled 收成
+            // rejected；原实现只 continue → 该 task 在输出里彻底消失，整批只剩「0/N 完成 0.0s」。
+            // 这里改为落一条 error 结果，把原因（error.message）回显到输出，绝不静默。
+            const seed = normalized[index];
+            const rejectedId = seed?.taskId ?? `task-${index}`;
+            const rejectedNotes: DegradeNote[] = [];
+            perTaskNotes.push({ taskId: rejectedId, notes: rejectedNotes });
+            results.push({
+              id: rejectedId,
+              skill: seed?.requestedSkill ?? DEFAULT_FALLBACK_SKILL,
+              status: "error",
+              error: s.reason instanceof Error ? s.reason.message : String(s.reason),
+              ...degradeField(rejectedNotes),
+            });
             continue;
           }
           const val = s.value as any;
