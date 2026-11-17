@@ -14,6 +14,7 @@ import SessionProjectionRegistry from "@deepseek-ai/dsh-session-projection";
 import { Session } from "@deepseek-ai/dsh-session";
 import { normalize, resolve as resolvePath } from "node:path";
 import * as cohub from "../lib/index.js";
+import { makeToolRunContext, makeSessionHeader, makeSessionId, makeSubagentRun, makeStubFs } from "./types/test-stubs.ts";
 
 // 0.2.2-rc.1 服务注入图（同 test/host-integration.ts:29-38）：
 //   SubagentRuntime.inject = ["workingDirectory","sessionProjections"]，
@@ -24,17 +25,9 @@ import * as cohub from "../lib/index.js";
 // fs → workingDirectory → agents → subagents → sessionProjections。
 // MemoryFs 是测试边界（同 host-integration.ts）：dsh-fs 真实后端不在本包 node_modules，
 // 只需 fs.resolve + fs.stat 让 WorkingDirectoryService.ensure() 返回 cwd。
-class MemoryFs extends FileSystem {
-  async resolve(path: string, options?: { cwd?: string }) {
-    return normalize(resolvePath(options?.cwd ?? process.cwd(), path));
-  }
-  async stat() {
-    return { type: "directory" } as const;
-  }
-  processPath(target: string) {
-    return target;
-  }
-}
+// C5：FileSystem 的 16 个抽象成员由 test/types/test-stubs.ts 的 StubFileSystem 统一实现
+// （内存真实读写），未知路径的 stat 仍返回 directory（取 cwd 语义不变）。
+class MemoryFs extends makeStubFs() {}
 
 const root = new Context();
 root.plugin(systemPrompt);
@@ -55,7 +48,7 @@ await new Promise(r => setImmediate(r)); // cordis 插件挂载为异步微任�
 async function registerParentAgent(ctx: any, id: string) {
   const agent: any = {
     id,
-    session: Session.create(id),
+    session: Session.create(makeSessionId(id)),
     ctx: { fiber: { assertActive() {} }, on() {}, effect() {} },
     inject() {},
   };
@@ -138,7 +131,7 @@ const fakeCtx = {
 const delegateTool = createDelegateTool(fakeCtx, () => []);
 await delegateTool.execute(
   { skill: 'co-fixer', prompt: '请修改 src/foo.ts 的拼写错误' },
-  { agent: { id: 'parent', session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal },
+  makeToolRunContext({ agent: { id: 'parent', session: { header: makeSessionHeader({ delegationDepth: 0 }) } }, signal: new AbortController().signal }),
 );
 const okDelegate = capturedPrompt.includes(fixer.brief)
   && capturedPrompt.includes('--- 你的具体任务 ---')
@@ -273,17 +266,15 @@ const councilParent = await registerParentAgent(root, 'council-parent');
 const started: any[] = [];
 root.subagents.registerProvider({
   name: 'fake-council',
-  capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
-  start(request: any) {
+  capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, agentPreset: true },
+  // 宿主 SubagentProvider.inheritsParentContext 是必填 boolean；原先未写=undefined 等价 false，补上不改变行为
+  inheritsParentContext: false,
+  async start(request: any) {
     started.push({ model: request.agentOptions, prompt: request.prompt[0].text, parentId: request.parent.id });
-    return {
-      id: 'child-' + request.agentOptions.model,
-      result: Promise.resolve({
-        output: [{ type: 'text', text: `councillor 回复：同意（${request.agentOptions.model}）` }],
-        stopReason: 'completed',
-      }),
-      dispose() {},
-    };
+    return makeSubagentRun('child-' + request.agentOptions.model, Promise.resolve({
+      output: [{ type: 'text', text: `councillor 回复：同意（${request.agentOptions.model}）` }],
+      stopReason: 'completed',
+    }));
   },
 });
 
@@ -296,7 +287,7 @@ const tool = lib.createCouncilTool({
   councilProvider: 'fake-council',
 }, root);
 
-const out = await tool.execute({ prompt: '要不要重构？' }, { agent: councilParent, signal: new AbortController().signal });
+const out = await tool.execute({ prompt: '要不要重构？' }, makeToolRunContext({ agent: councilParent, signal: new AbortController().signal }));
 const okRouting = started.length === 2
   && started[0].model.provider === 'p1' && started[0].model.model === 'm1'
   && started[1].model.provider === 'p2' && started[1].model.model === 'm2'
@@ -343,7 +334,7 @@ const tool21 = lib.createCouncilTool({
   councilTimeoutMs: 5000,
   councilProvider: 'spawn',
 }, cCtx);
-const out21 = await tool21.execute({ prompt: '要不要重构？' }, { agent: { id: 'council-parent' }, signal: new AbortController().signal });
+const out21 = await tool21.execute({ prompt: '要不要重构？' }, makeToolRunContext({ agent: { id: 'council-parent' }, signal: new AbortController().signal }));
 const okCouncil21 = cSpecs.length === 2
   && cSpecs.every(s => s?.delivery === 'caller')
   && cSpecs.every(s => s?.provider === 'spawn')

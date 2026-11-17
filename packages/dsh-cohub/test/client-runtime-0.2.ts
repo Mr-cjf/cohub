@@ -100,7 +100,8 @@ let captured: { id?: string; factory?: (require: (id: string) => unknown) => any
   };
   new Function(src)();
   check("产物经 window.__ModuleLoader__.load 注册", captured !== null);
-  check("module id = dsh-cohub", captured?.id === "dsh-cohub");
+  // 注意：captured 只在 __ModuleLoader__.load 闭包里被赋值，CFA 会把此处收窄成 null
+  check("module id = dsh-cohub", (captured as { id?: string } | null)?.id === "dsh-cohub");
 
   // 客户端 bundle 只允许 require("react")：设置页是手写 createElement，不引官方 primitives
   // （官方 dsh-client-ui-primitives 没有 Select/Dropdown，本页不需要它）。

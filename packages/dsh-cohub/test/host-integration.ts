@@ -39,6 +39,7 @@ import WorkingDirectory from "@deepseek-ai/dsh-working-directory";
 import AgentRegistry from "@deepseek-ai/dsh-agent";
 import { Session } from "@deepseek-ai/dsh-session";
 import { normalize, resolve as resolvePath } from "node:path";
+import { makeToolRunContext, makeSessionId, makeSubagentRun, makeStubFs } from "./types/test-stubs.ts";
 
 /**
  * 最小 fs 后端（测试边界，明确标注）：dsh-fs 的 FileSystem 是抽象 seam，
@@ -47,17 +48,10 @@ import { normalize, resolve as resolvePath } from "node:path";
  * WorkingDirectoryService.ensure() 走通（它要 fs.resolve + fs.stat 才能返回 cwd）。
  * 不读写真实文件、不触达沙箱策略——与「真实 fs 后端」的差别仅此三点。
  */
-class MemoryFs extends FileSystem {
-  async resolve(path: string, options?: { cwd?: string }) {
-    return normalize(resolvePath(options?.cwd ?? process.cwd(), path));
-  }
-  async stat() {
-    return { type: "directory" } as const;
-  }
-  processPath(target: string) {
-    return target;
-  }
-}
+// C5：FileSystem 的 16 个抽象成员由 test/types/test-stubs.ts 的 StubFileSystem 统一实现
+// （内存真实读写）。未知路径的 stat 仍返回 directory，故 WorkingDirectoryService.ensure()
+// 取 cwd 的语义与改造前逐字段一致。
+class MemoryFs extends makeStubFs() {}
 import ConfigEditor from "@deepseek-ai/dsh-config-editor";
 import SettingsForms from "@deepseek-ai/dsh-settings";
 import { mountRootInclude, evaluatePluginCompatibility, getDshRuntimeVersion } from "@deepseek-ai/dsh-app-boot";
@@ -146,7 +140,7 @@ async function buildHost() {
  */
 async function registerParentAgent(root: any, id: string) {
   const agents = root.get("agents");
-  const session = Session.create(id);
+  const session = Session.create(makeSessionId(id));
   const agent: any = {
     id,
     session,
@@ -168,7 +162,9 @@ async function registerParentAgent(root: any, id: string) {
   const entry = [...root.loader.entries()].find(e => e.options.id === "cohub");
   check("cohub 行真实挂载（fiber active）", entry?.fiber?.state === 2);
   check("entry.fiber.runtime.Config = 本包 Config", !!(entry?.fiber?.runtime?.Config));
-  const cfg = entry?.fiber?.effectiveConfig;
+  // C7：entries().find 的结果需显式收窄；C8：effectiveConfig 是 unknown，桩内按 any 读字段
+  if (!entry) throw new Error("host 层 1：cohub entry 未挂载（loader.entries() 无 id=cohub）");
+  const cfg: any = entry.fiber?.effectiveConfig;
   // cordis 4.1.0 双观测点（都真实，互不替代）：
   //   entry.fiber.config          —— 本次已解析的普通值（cfg.skills 是普通 Array）；
   //   entry.fiber.effectiveConfig —— apply() 实际收到的**那一份**已解析 config
@@ -197,7 +193,7 @@ async function registerParentAgent(root: any, id: string) {
   check("volatile 提交后 schedule.get() batch=5", cfg?.schedule?.get?.()?.maxParallelBatch === 5);
   check("volatile 提交后 schedule.get() wall=111000", cfg?.schedule?.get?.()?.wallClockBudgetMs === 111_000);
   check("volatile 提交后 delegateRetry.get() maxRetries=1", cfg?.delegateRetry?.get?.()?.maxRetries === 1);
-  root.stop?.();
+  await root.fiber.dispose();
 }
 
 // ── 层 2：真实已注册 delegate 工具，entry.update 后下一 execute 见新值 ──
@@ -215,15 +211,11 @@ async function registerParentAgent(root: any, id: string) {
     // agentPreset: true 是必需的——0.2.2-rc.1 的 assertCapabilities 对「请求带 agentPreset 但
     // provider 未声明该能力」会直接拒绝（dsh-subagent lib/index.js:3327），测试 provider 必须
     // 如实声明，否则 delegate 会走 preset fail-soft 降级（那是环境缺陷，不是被测语义）。
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: true, agentPreset: true },
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, agentPreset: true },
     inheritsParentContext: false,
-    start(request: any) {
+    async start(request: any) {
       calls.push({ label: request.label, agentOptions: request.agentOptions, promptHead: String(request.prompt?.[0]?.text ?? "").slice(0, 30), aborted: request.signal?.aborted === true });
-      return {
-        id: "child-" + calls.length,
-        result: Promise.resolve({ output: [{ type: "text", text: "ok-child" }], stopReason: "completed" }),
-        dispose() {},
-      };
+      return makeSubagentRun("child-" + calls.length, Promise.resolve({ output: [{ type: "text", text: "ok-child" }], stopReason: "completed" }));
     },
   });
   await mountRootInclude(root, cordisPath, [], undefined, "host");
@@ -233,12 +225,14 @@ async function registerParentAgent(root: any, id: string) {
   // （dsh-subagent lib/index.js:3060），传一个临时对象会被 UNAUTHORIZED 拒绝。
   const parentAgent = await registerParentAgent(root, "parent-1");
   const entry = [...root.loader.entries()].find(e => e.options.id === "cohub");
+  if (!entry) throw new Error("host 层 2：cohub entry 未挂载");
   const delegate = root.tools.get("delegate");
   check("delegate 工具已注册（tools.get）", !!delegate);
+  if (!delegate) throw new Error("delegate 工具未注册（tools.get 返回 undefined）");
 
   const out1 = await delegate.execute(
     { skill: "co-fixer", prompt: "任务甲" },
-    { agent: parentAgent, signal: new AbortController().signal },
+    makeToolRunContext({ agent: parentAgent, signal: new AbortController().signal }),
   );
   // 子代理真实输出必须原样回传；其后的 `[...]` 降级提示是本测试 provider 的既有边界：
   // in-memory provider（external、无 prepareContinuable）不会在 ctx.agents 里留下子 Agent，
@@ -257,10 +251,10 @@ async function registerParentAgent(root: any, id: string) {
     skills: [{ name: "co-fixer", provider: "p1", model: "m1" }],
     schedule: { maxParallelBatch: 9, wallClockBudgetMs: 123 },
   } });
-  check("提交后 schedule.get().batch=9", entry.fiber?.effectiveConfig?.schedule?.get?.()?.maxParallelBatch === 9);
+  check("提交后 schedule.get().batch=9", (entry.fiber?.effectiveConfig as any)?.schedule?.get?.()?.maxParallelBatch === 9);
   await delegate.execute(
     { skill: "co-fixer", prompt: "任务乙" },
-    { agent: parentAgent, signal: new AbortController().signal },
+    makeToolRunContext({ agent: parentAgent, signal: new AbortController().signal }),
   );
   check("更新后下一 execute 仍正常（spawn 第二次）", calls.length === 2);
   // delegate 的 resolveRuntimeConfig 读取 settingsNow.schedule（getSettings() = currentSettings()），
@@ -278,13 +272,13 @@ async function registerParentAgent(root: any, id: string) {
   } });
   await delegate.execute(
     { skill: "co-fixer", prompt: "任务丙" },
-    { agent: parentAgent, signal: new AbortController().signal },
+    makeToolRunContext({ agent: parentAgent, signal: new AbortController().signal }),
   );
   check("提交 reasoningEffort 后下一 execute 转发 agentOptions.reasoningEffort",
     calls[2]?.agentOptions?.reasoningEffort === "low");
   check("转发时不含 provider/model 键（保持继承）",
     !("provider" in (calls[2]?.agentOptions ?? {})) && !("model" in (calls[2]?.agentOptions ?? {})));
-  root.stop?.();
+  await root.fiber.dispose();
 }
 
 // ── 层 3：真实 SettingsForms.describe() 投影 volatile 表单 schema/value 可读 ──
@@ -294,9 +288,12 @@ async function registerParentAgent(root: any, id: string) {
   await mountRootInclude(root, cordisPath, [], undefined, "host");
   await root.loader.await();
   const entry = [...root.loader.entries()].find(e => e.options.id === "cohub");
+  if (!entry) throw new Error("host 层 3：cohub entry 未挂载");
   const forms = root.settings.describe();
   check("describe() 返回非空", forms.length >= 1);
   const row = forms.find(f => f.ns === "cohub");
+  // C8 同类：settings.describe() 的 value 投影是 {} 类型，桩内按 any 读字段
+  const rowValue: any = row?.value;
   check("描述行 ns=cohub", row?.ns === "cohub");
   check("applies=live", row?.applies === "live");
   check("表单 value 含 volatile 字段（skills）", Object.keys(row?.value ?? {}).includes("skills"));
@@ -304,8 +301,8 @@ async function registerParentAgent(root: any, id: string) {
   check("表单 value 含 volatile 字段（delegateRetry）", Object.keys(row?.value ?? {}).includes("delegateRetry"));
   check("schema 可读（schemastery 序列化节点）", !!row?.schema && typeof row.schema === "object");
   // value 投影真实 fiber 的 volatile 引用（apply 侧持有的那一份）：读 effectiveConfig。<field>.get()
-  check("value.skills 与 config.skills.get() 一致", JSON.stringify(row?.value?.skills) === JSON.stringify(entry.fiber?.effectiveConfig?.skills?.get?.()));
-  check("value.schedule 与 config.schedule.get() 一致", JSON.stringify(row?.value?.schedule) === JSON.stringify(entry.fiber?.effectiveConfig?.schedule?.get?.()));
+  check("value.skills 与 config.skills.get() 一致", JSON.stringify(rowValue?.skills) === JSON.stringify((entry.fiber?.effectiveConfig as any)?.skills?.get?.()));
+  check("value.schedule 与 config.schedule.get() 一致", JSON.stringify(rowValue?.schedule) === JSON.stringify((entry.fiber?.effectiveConfig as any)?.schedule?.get?.()));
   // 旧 settings.yaml 迁移不触发：临时 home 无 settings.yaml，importLegacyDocument 直接 return
   check("未触发旧 settings.yaml 迁移（home 无该文件且未被创建）", !existsSync(join(home, "settings.yaml")));
   // 官方设置页按序列化 schema 生成控件：schema 里必须有 reasoningEffort 才会出现可编辑字段
@@ -317,10 +314,10 @@ async function registerParentAgent(root: any, id: string) {
     skills: [{ name: "co-oracle", provider: "p1", model: "m1", reasoningEffort: "high" }],
   } });
   const rowAfter = root.settings.describe().find(f => f.ns === "cohub");
-  check("提交后 describe() 的 value 带 reasoningEffort", rowAfter?.value?.skills?.[0]?.reasoningEffort === "high");
+  check("提交后 describe() 的 value 带 reasoningEffort", (rowAfter?.value as any)?.skills?.[0]?.reasoningEffort === "high");
   check("提交后 config.skills.get() 也带 reasoningEffort（同一引用）",
-    entry.fiber?.effectiveConfig?.skills?.get?.()[0]?.reasoningEffort === "high");
-  root.stop?.();
+    (entry.fiber?.effectiveConfig as any)?.skills?.get?.()[0]?.reasoningEffort === "high");
+  await root.fiber.dispose();
 }
 
 // ── 层 4：真实 subagents 服务传输（正常 / 失败 / AbortSignal / result / dispose）──
@@ -352,14 +349,12 @@ async function registerParentAgent(root: any, id: string) {
   let disposed = 0;
   root.subagents.registerProvider({
     name: "ctrl",
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: true },
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, agentPreset: true },
     inheritsParentContext: false,
-    start() {
-      return {
-        id: "ctrl-child",
-        result: Promise.resolve({ output: [{ type: "text", text: "ctrl-ok" }], stopReason: "completed" }),
-        dispose() { disposed++; },
-      };
+    async start() {
+      return makeSubagentRun("ctrl-child", Promise.resolve({ output: [{ type: "text", text: "ctrl-ok" }], stopReason: "completed" }), {
+        dispose: async () => { disposed++; },
+      });
     },
   });
   await new Promise(r => setImmediate(r));
@@ -387,7 +382,7 @@ async function registerParentAgent(root: any, id: string) {
   check("startActivation 返回子运行（childId）", !!receipt?.childId);
   const result = await receipt.result;
   check("result.stopReason=completed", result?.stopReason === "completed");
-  check("result.output 内容正确", String(result?.output?.[0]?.text) === "ctrl-ok");
+  check("result.output 内容正确", String((result?.output?.[0] as any)?.text) === "ctrl-ok");
   check("dispose 可调用", typeof receipt.dispose === "function");
   await receipt.dispose();
   check("dispose 已执行", disposed === 1);
@@ -439,9 +434,9 @@ async function registerParentAgent(root: any, id: string) {
   let preStarted = 0;
   root.subagents.registerProvider({
     name: "ctrl2",
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: true },
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, agentPreset: true },
     inheritsParentContext: false,
-    start() { preStarted++; return { id: "ctrl2-child", result: Promise.resolve({ output: [], stopReason: "completed" }), dispose() {} }; },
+    async start() { preStarted++; return makeSubagentRun("ctrl2-child", Promise.resolve({ output: [], stopReason: "completed" })); },
   });
   await new Promise(r => setImmediate(r));
   const ac = new AbortController();
@@ -470,9 +465,9 @@ async function registerParentAgent(root: any, id: string) {
   let midSignalAborted = false;
   root.subagents.registerProvider({
     name: "mid",
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: true },
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, agentPreset: true },
     inheritsParentContext: false,
-    start(request: any) {
+    async start(request: any) {
       midStarted++;
       let resolveResult: (r: any) => void = () => {};
       const result = new Promise<any>(r => { resolveResult = r; });
@@ -483,11 +478,9 @@ async function registerParentAgent(root: any, id: string) {
         resolveResult({ output: [], stopReason: "aborted" });
       };
       request.signal.addEventListener("abort", onAbort, { once: true });
-      return {
-        id: "mid-child",
-        result,
-        dispose() { midDisposed++; request.signal.removeEventListener("abort", onAbort); },
-      };
+      return makeSubagentRun("mid-child", result, {
+        dispose: async () => { midDisposed++; request.signal.removeEventListener("abort", onAbort); },
+      });
     },
   });
   await new Promise(r => setImmediate(r));
@@ -514,7 +507,7 @@ async function registerParentAgent(root: any, id: string) {
     // 故按「计数 + stopReason」核对，而不是拼接 receipt.childId。
     eventRunIds.length === 1 && events.includes("start:" + eventRunIds[0])
     && events.includes("end:" + eventRunIds[0] + ":aborted"));
-  root.stop?.();
+  await root.fiber.dispose();
 }
 
 // ── 层 5：appboot preflight 实际执行官方 compatibility helper（peer 核验，无 allowversion）──
@@ -571,9 +564,9 @@ async function registerParentAgent(root: any, id: string) {
   // 父 signal abort 时由真实 signal 事件驱动 settle 为 stopReason=aborted。
   root.subagents.registerProvider({
     name: "spawn",
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, persona: true },
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, agentPreset: true },
     inheritsParentContext: false,
-    start(request: any) {
+    async start(request: any) {
       delStarted++;
       let resolveResult: (r: any) => void = () => {};
       const result = new Promise<any>(r => { resolveResult = r; });
@@ -583,11 +576,9 @@ async function registerParentAgent(root: any, id: string) {
         resolveResult({ output: [], stopReason: "aborted" });
       };
       request.signal.addEventListener("abort", onAbort, { once: true });
-      return {
-        id: "delegate-mid",
-        result,
-        dispose() { delDisposed++; request.signal.removeEventListener("abort", onAbort); },
-      };
+      return makeSubagentRun("delegate-mid", result, {
+        dispose: async () => { delDisposed++; request.signal.removeEventListener("abort", onAbort); },
+      });
     },
   });
   await mountRootInclude(root, cordisPath, [], undefined, "host");
@@ -597,11 +588,12 @@ async function registerParentAgent(root: any, id: string) {
   const parentAgent = await registerParentAgent(root, "parent-delegate");
   const delegate = root.tools.get("delegate");
   check("delegate 工具已注册（取消链前置）", !!delegate);
+  if (!delegate) throw new Error("delegate 工具未注册（取消链用例前置）");
 
   const parentAc = new AbortController();
   const execPromise = delegate.execute(
     { skill: "co-fixer", prompt: "长任务" },
-    { agent: parentAgent, signal: parentAc.signal },
+    makeToolRunContext({ agent: parentAgent, signal: parentAc.signal }),
   ).then(
     (v: any) => ({ ok: true, value: v }),
     (e: any) => ({ ok: false, error: e }),
@@ -617,7 +609,7 @@ async function registerParentAgent(root: any, id: string) {
   check("delegate 取消链: 结构化 cause.stopReason=aborted", execOutcome?.ok === false && execOutcome?.error?.cause?.stopReason === "aborted");
   check("delegate 取消链: 错误消息含 aborted", execOutcome?.ok === false && String(execOutcome?.error?.message ?? "").includes("aborted"));
   check("delegate 取消链: run.dispose 已调用（资源清理）", delDisposed === 1);
-  root.stop?.();
+  await root.fiber.dispose();
 }
 
 console.log("");

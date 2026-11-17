@@ -13,6 +13,7 @@ import {
 } from "../src/env-signatures.ts";
 import { createDelegateTool } from "../src/delegate.ts";
 import { normalizeErrorSignature } from "../src/error-signature.mjs";
+import { makeToolRunContext, makeSessionHeader } from "./types/test-stubs.ts";
 
 const DELEGATE_DEFAULT_MARKER = "--- 执行器环境契约（通用原则 + 探测式自适应） ---";
 const VERIFIED_MARKER = "--- 执行器环境契约（本环境已验证） ---";
@@ -21,7 +22,10 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 function makeExec() {
   // delegationDepth: 0 = 主代理（depth guard fail-closed 后，桩必须显式声明身份）
-  return { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal };
+  return makeToolRunContext({
+    agent: { id: "parent-1", session: { header: makeSessionHeader({ delegationDepth: 0 }) } },
+    signal: new AbortController().signal,
+  });
 }
 
 /** 把 0.2.1 activation spec 还原成逻辑 request（persona 前置块剥离），供各用例的 startImpl 复用。

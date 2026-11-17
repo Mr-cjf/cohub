@@ -1,17 +1,35 @@
 {
-  // 本次 0.2.2-rc.3 契约迁移（spec.parent → spec 顶层 + request 双写）涉及的测试文件。
-  // 只枚举这 7 个文件：test/ 下其余历史测试文件存在既有类型问题，待清理后并入。
-  // 该门禁当前基线为 141 个既有测试类型错误（ToolRunContext 桩缺字段、SessionId 品牌、SessionHeader 缺字段等），
-  // 故未并入 typecheck 主链（主链只串 typecheck:src && typecheck:0.2），待清理后并入。
-  // 用法：bun run typecheck:test
+  // test/ 全域类型门禁（已全量覆盖本目录下的测试文件，并由 bun run typecheck 主链调用）。
+  //
+  // 覆盖范围：test/*.ts（全部测试文件）+ test/types/*.ts（桩工厂与被引用的类型夹具）。
+  // 基准目录是本文件所在的 test/，因此 "*.ts" 即 test/ 下一层全部测试文件；
+  // 写成 "test/**/*.ts" 会零匹配（相对基准重复了目录名）。
+  //
+  // 早期本门禁只枚举迁移涉及的文件（其余测试文件存在既有类型问题，待清理后并入）；
+  // 这些既有问题（MemoryFs 未实现 FileSystem 的 16 个抽象成员 / ../lib/index.js 缺
+  // 声明文件 / entry·delegate possibly-undefined / effectiveConfig 为 unknown /
+  // cordis 4.x Context 无 stop·dispose / ContentBlock 联合类型无 .text /
+  // dialog 桩缺 agents 字段）已全部清理，故改为全量覆盖并并入 typecheck 主链。
+  //
+  // 关于 ../lib/index.js：测试按设计从**构建产物**取值（lib/ 是 bun build 产物，不带
+  // .d.ts）。这里用 allowJs + checkJs:false 让 TS 把该产物当作「可解析的 JS 模块」处理：
+  //   - 不再报 TS7016（Cannot find declaration file / implicitly any）；
+  //   - 不生成任何 .d.ts（不引入 build 步骤），也不改测试的 import 说明符
+  //     （运行时仍真实加载 lib/ 产物，测试语义零漂移）；
+  //   - checkJs:false 表示不检查产物内部（产物本身已由 bun run typecheck:src 覆盖 src
+  //     源类型 + bun run build 覆盖构建）。
+  // 注：不能用 compilerOptions.paths 把 "../lib/index.js" 映射到 ../src/index.ts——
+  // TS 的 paths 只作用于**非相对**说明符，相对说明符不走 paths（本轮已实测确认）。
+  // strict 系列保持不变（strict: true 继承自 tsconfig.runtime-0.2.json）。
+  //
+  // 用法：bun run typecheck:test、bun run test:all
   "extends": "./tsconfig.runtime-0.2.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false
+  },
   "include": [
-    "delegate-p1.ts",
-    "env-sig-p3.ts",
-    "runtime-0.2.ts",
-    "stall-p3.ts",
-    "host-integration.ts",
-    "schedule-p3.ts",
-    "unit.ts"
+    "*.ts",
+    "types/*.ts"
   ]
 }

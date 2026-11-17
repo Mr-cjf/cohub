@@ -3,6 +3,7 @@
 //       delegate 路由不回归（agentOptions 覆盖 / provider 不可用继承父模型）。
 // 用法：bun run test/delegate-p1.ts（或 node test/delegate-p1.ts，node >= 24 类型剥离）
 import { createDelegateTool, DELEGATE_PERSONA } from "../src/delegate.ts";
+import { makeToolRunContext, makeSessionHeader } from "./types/test-stubs.ts";
 
 /** delegate 注入的特有标记：技能内容里 P0 已有「## 执行器环境契约」段落，故用带围栏的「--- … ---」区分 */
 const DELEGATE_CONTRACT_MARKER = "--- 执行器环境契约（通用原则 + 探测式自适应） ---";
@@ -104,7 +105,10 @@ function makeCtx(
 
 function makeExec() {
   // delegationDepth: 0 = 主代理（depth guard fail-closed 后，桩必须显式声明身份）
-  return { agent: { id: "parent-1", session: { header: { delegationDepth: 0 } } }, signal: new AbortController().signal };
+  return makeToolRunContext({
+    agent: { id: "parent-1", session: { header: makeSessionHeader({ delegationDepth: 0 }) } },
+    signal: new AbortController().signal,
+  });
 }
 
 let pass = 0;
@@ -397,7 +401,8 @@ function check(name: string, cond: boolean) {
     spawnCount++;
     return { id: "child-42", result: Promise.resolve({ output: [{ type: "text", text: "0.2.1 完成" }], stopReason: "completed" }), dispose() {} };
   };
-  const ctx = makeCtx(start, [{ id: "deepseek-official" }], undefined, undefined, { flavor: "0.2.1", rawSpecs });
+  // C10：makeCtx 的返回类型未声明 agents 字段；桩在同一用例内补 ctx.agents，故此处显式放宽为 any
+  const ctx: any = makeCtx(start, [{ id: "deepseek-official" }], undefined, undefined, { flavor: "0.2.1", rawSpecs });
   // P1-1 补偿通道（0.2.2-rc.1）：toolFilter 已从 SubagentStartRequest 移除，runtime 也不消费，
   // 故 cohub 在 childId 发布后对子 scope 调 tools.restrict(filter)。桩里给出子代理 scope，
   // 断言「裁剪真的被施加」而不是断言 request 携带一个会被静默丢弃的字段。

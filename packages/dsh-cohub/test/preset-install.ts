@@ -8,7 +8,10 @@
 // 用法：bun run build && node test/preset-install.ts（node >= 24）
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { installShippedPresets, removeInstallRecord, hashTree } from "../lib/index.js";
+// lib/ 是 bun 产物（无 .d.ts）。allowJs 的 JS 推断对这几个 API 过窄（如 never[] / 缺 degraded），
+// 故在**产物边界**按 any 使用；这些 API 的类型正确性由 bun run typecheck:src（src 源）覆盖。
+import * as libBuild from "../lib/index.js";
+const { installShippedPresets, removeInstallRecord, hashTree }: any = libBuild;
 
 let pass = 0;
 let fail = 0;
@@ -16,7 +19,7 @@ function check(name: string, cond: boolean) {
   console.log(`  ${name}: ${cond ? "PASS" : "FAIL"}`);
   if (cond) pass++; else fail++;
 }
-const read = (p) => readFileSync(p, "utf8");
+const read = (p: string) => readFileSync(p, "utf8");
 
 const sandbox = join(import.meta.dirname, "..", ".tmp", "preset-install-fixture");
 const shipped = join(sandbox, "shipped");
