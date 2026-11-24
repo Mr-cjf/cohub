@@ -18,6 +18,16 @@
 // > DEFAULT_ENV_CONTRACT（探针式）；use="off" 不读不写；读写失败静默降级，行为不劣化。
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
+import {
+  presetForTier,
+  resolveSkillSnapshot,
+  resolveTier,
+  TIER_TOOLS,
+  TIER_TO_PRESET,
+  type CustomRoleConfig,
+  type ResolvedRole,
+  type SkillSnapshot,
+} from "./roles.ts";
 import { EnvSignatureLearner, envFingerprint, normalizeErrorSignature, pickEnvContractText, readEnvSignatures, writeEnvSignatures, type EnvContractFacts, type EnvFingerprint, type EnvSignaturesConfig } from "./env-signatures.ts";
 import { contentText } from "./text-utils.ts";
 import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
@@ -137,6 +147,11 @@ export interface DelegateConfig {
   delegateSubagentPreset?: {
     enabled?: boolean;
   };
+  /** 用户自定义团队角色（Config.customRoles 透传）：与内置角色走同一条解析路径——
+   *  技能查表、档位 → preset、工具裁剪、提示词注入全部一致。缺省 = 仅内置角色。 */
+  customRoles?: readonly CustomRoleConfig[];
+  /** 被禁用的角色名（可选配置渠道）：命中时错误文案区分「存在但被禁用」与「不存在」。 */
+  disabledSkills?: readonly string[];
   /** 后台 job 模式（background delegate）：默认关闭 → 完全保持前台同步行为。
    *  开启后 delegate 把这次运行注册为 DSH 后台 job 并立即返回 jobId，
    *  主代理用 job_output 取结果（或等完成时自动唤醒），等待期间可并行推进其他工作。
@@ -201,32 +216,10 @@ export interface SubagentRunHandle {
 // taskboard_* 以及本部署未挂载的工具一律不写；平台条件与 preset 的 disabled
 // 表达式保持一致（tool-bash 仅非 win32 / tool-pwsh 仅 win32），否则换个平台
 // 就是「未知名字 → 整个委派失败」。
-
-/** 本平台实际挂载的 shell 工具名（preset 里 tool-bash 与 tool-pwsh 互斥挂载） */
-const SHELL_TOOL = process.platform === "win32" ? "pwsh" : "bash";
-
-/** 只读类代理：写入 / 执行 / 再委派全部裁掉（read、grep、glob、web、read_image 保留） */
-const READ_ONLY_DENY: readonly string[] = [
-  "write",
-  "edit",
-  SHELL_TOOL,
-  "create_worktree",
-  "workflow",
-  "delegate",
-  "delegate_batch",
-  "subagent",
-  "subagent_fork",
-];
-
-/** 写类代理：能干活的工具都留，只裁「再往下委派」与建工作树（避免无限套娃） */
-const WRITE_DENY: readonly string[] = [
-  "create_worktree",
-  "workflow",
-  "delegate",
-  "delegate_batch",
-  "subagent",
-  "subagent_fork",
-];
+//
+// 档位化（批次 2）：三张手写表（只读 / 写类 / 通用）已上提到 roles.ts 的 TIER_TOOLS，
+// 本文件只保留「未知名字」的兜底表。裁剪由 skill 名经 resolveTier → TIER_TOOLS[tier] 派生，
+// 内置角色与自定义角色同一条路径。
 
 /** 通用裁剪（所有角色都加）：与本职无关的交互 / 目标循环 / 多媒体工具 */
 const UNIVERSAL_DENY: readonly string[] = [
@@ -238,13 +231,17 @@ const UNIVERSAL_DENY: readonly string[] = [
   "video_search",
 ];
 
-const READ_ONLY_SKILLS = new Set([
-  "co-explorer", "co-oracle", "co-planner", "co-council",
-  "co-observer", "co-librarian",
-  "co-rule-user", "co-rule-project", "co-rule-app",
-]);
-
-const WRITE_SKILLS = new Set(["co-fixer", "co-designer", "co-cordis"]);
+/**
+ * 档位映射缺失时的降级方向：只读族 → readonly preset，写类族 → write preset。
+ *
+ * 约束（任务要求）：preset 缺失时**不得静默换成权限更大的 preset**。读写类档位本身已含
+ * 写权限，落到 write preset 不扩大；只读族（ro / ro-net）必须落到 readonly，绝不落到 write。
+ */
+function fallbackPresetForTier(tier: string): string {
+  return tier === "rw" || tier === "rw-shell" || tier === "cordis"
+    ? SUBAGENT_WRITE_PRESET
+    : SUBAGENT_READONLY_PRESET;
+}
 
 /**
  * 未提供 skill（缺字段 / 空串 / 纯空白）时的兜底代理名。
@@ -259,18 +256,24 @@ export const DEFAULT_FALLBACK_SKILL = "co-fixer";
 /**
  * 按 skill 名解析子代理工具裁剪 filter（deny 减法）。
  *
+ * 档位化：base 表不再按「只读 / 写类」两个手写 Set 查，而是
+ * `resolveTier(skillName, customRoles)` → `TIER_TOOLS[tier]`（唯一映射源 roles.ts）。
+ * 未知名字（不在内置表也不在自定义表）仍只裁通用项——宁可少裁，不可炸链。
+ *
  * fail-soft：任何构造异常都退回 undefined（= 全量工具，与改造前行为一致），
  * 只留一行 warn——裁剪是省 token 的优化，绝不能成为委派失败的来源。
  *
- * @param skillName - 规范化后的 skill 名（如 co-fixer）。
+ * @param skillName - 规范化后的 skill 名（如 co-fixer / 自定义角色名）。
  * @param enabled - 总开关（Config.toolFilter.enabled，默认 true）。
  * @param logger - 可选日志器（仅用于 warn）。
+ * @param customRoles - 自定义角色表（其 tier 覆盖内置）；缺省 = 仅内置角色。
  * @returns filter；undefined 表示不裁剪。
  */
 export function resolveSkillToolFilter(
   skillName: string | undefined,
   enabled = true,
   logger?: { warn?: (...args: unknown[]) => void },
+  customRoles?: readonly CustomRoleConfig[],
 ): { deny: string[] } | undefined {
   if (!enabled) return undefined;
   try {
@@ -278,11 +281,8 @@ export function resolveSkillToolFilter(
     // co-orchestrator 本身是委派发起方，被委派时保留全部工具；名字不在已知表里
     // （拼错 / 新增 skill）时只裁通用项——宁可少裁，不可炸链。
     if (key === "co-orchestrator") return undefined;
-    const base = READ_ONLY_SKILLS.has(key)
-      ? READ_ONLY_DENY
-      : WRITE_SKILLS.has(key)
-        ? WRITE_DENY
-        : UNIVERSAL_DENY;
+    const tier = resolveTier(key, customRoles);
+    const base = tier === null ? UNIVERSAL_DENY : TIER_TOOLS[tier].deny;
     const deny = [...new Set<string>([...base, ...UNIVERSAL_DENY])];
     return deny.length > 0 ? { deny } : undefined;
   } catch (error) {
@@ -313,33 +313,43 @@ export const SUBAGENT_WRITE_PRESET = "cohub-subagent-write";
  * 按 skill 名解析子代理应挂载的独立 preset id。
  *
  * 语义（fail-soft 优先）：
- *   - 空/未传 skill → write preset（等价兜底 co-fixer：漏传 skill 的委派多为实施类任务；
- *     若返回 undefined 会退化成「继承父 preset」，把父的纯调度 persona 白烧一遍）
- *   - 只读类（explorer/librarian/observer/oracle/planner/council/rule-*）→ readonly preset
- *   - 实施类（fixer/designer/cordis）→ write preset
- *   - 任何未命中的名字（拼错 / 新增 skill 未登记）→ write preset，**与
- *     {@link resolveSkillAndRoute} 的兜底角色 co-fixer 保持一致**。此前返回 undefined
- *     会让子代理继承父会话 preset（co-orchestrator 全量工具面，含 delegate/write/pwsh），
- *     既与已兜底的「实施类」角色自相矛盾，也把父的纯调度 persona 白烧一遍。
- *   - co-orchestrator → undefined（= 继承父 preset）
+ *   - co-orchestrator → undefined（= 继承父 preset，它本身是委派发起方）
+ *   - 其余名字 → `presetForTier(resolveTier(name, customRoles))`
+ *   - 空/未传 skill 或名字未知 → write preset（等价兜底 co-fixer：漏传 skill 的委派多为
+ *     实施类任务；若返回 undefined 会退化成「继承父 preset」，把父的纯调度 persona 白烧一遍）
+ *   - 档位存在但 preset 映射缺失 → {@link fallbackPresetForTier} 按权限族降级 + warn，
+ *     **绝不静默换成权限更大的 preset**（只读族不会落到 write）。
  *
- * 为什么 co-orchestrator 返回 undefined：它本身是委派发起方，被委派时仍需完整工具面。
+ * 档位化后内置角色的 preset 变化（有意的能力升级，见 roles.ts 的档位表）：
+ *   co-librarian ro → cohub-subagent-readonly-net；co-fixer rw-shell → cohub-subagent-write-shell；
+ *   co-cordis cordis → cohub-cordis。其余 9 个内置角色与接线前逐字一致。
  *
- * @param skillName - 规范化后的 skill 名（如 co-fixer）。
+ * @param skillName - 规范化后的 skill 名（如 co-fixer / 自定义角色名）。
  * @param enabled - 总开关（Config.delegateSubagentPreset.enabled，默认 true）。
+ * @param customRoles - 自定义角色表（其 tier 覆盖内置）；缺省 = 仅内置角色。
+ * @param logger - 可选日志器（仅用于 preset 缺失的 warn）。
  * @returns preset id；undefined 表示不指定（继承父）。
  */
-export function resolveSkillAgentPreset(skillName: string | undefined, enabled = true): string | undefined {
+export function resolveSkillAgentPreset(
+  skillName: string | undefined,
+  enabled = true,
+  customRoles?: readonly CustomRoleConfig[],
+  logger?: { warn?: (...args: unknown[]) => void },
+): string | undefined {
   if (!enabled) return undefined;
   const key = (skillName ?? "").trim();
   if (key === "co-orchestrator") return undefined;
-  // 空/纯空白 = 未提供 skill → 与 DEFAULT_FALLBACK_SKILL 对齐（实施类 preset）
-  if (key.length === 0) return SUBAGENT_WRITE_PRESET;
-  if (READ_ONLY_SKILLS.has(key)) return SUBAGENT_READONLY_PRESET;
-  if (WRITE_SKILLS.has(key)) return SUBAGENT_WRITE_PRESET;
-  // 未命中的名字（拼错 / 新增未登记）：兜底走实施类 write preset，与 co-fixer 兜底一致。
-  // 绝不返回 undefined —— 那会让子代理继承父 preset（orchestrator 全量工具面）。
-  return SUBAGENT_WRITE_PRESET;
+  const tier = resolveTier(key, customRoles);
+  // 空/纯空白 / 未登记的名字：与 DEFAULT_FALLBACK_SKILL 对齐（实施类 preset）
+  if (tier === null) return SUBAGENT_WRITE_PRESET;
+  const mapped = TIER_TO_PRESET[tier];
+  if (typeof mapped !== "string" || mapped.length === 0) {
+    const fallback = fallbackPresetForTier(tier);
+    logger?.warn?.("[cohub preset] 档位 \"" + tier + "\"（skill=" + key + "）没有对应的子代理 preset，"
+      + "已降级为 " + fallback + "（不扩大权限）");
+    return fallback;
+  }
+  return presetForTier(tier);
 }
 
 /**
@@ -1151,8 +1161,8 @@ class StallWatchdog {
 }
 
 /**
- * 按 skill 名精确匹配 COHUB_SKILLS；缺失或未知时兜底 co-fixer 并 warn。
- * 同时查找该 skill 的路由配置（找不到返回 undefined）。
+ * 按 skill 名在**统一技能快照**（内置 COHUB_SKILLS ∪ config.customRoles）里匹配；
+ * 缺失 / 未知 / 已禁用时兜底 co-fixer 并 warn。同时查找该 skill 的路由配置。
  *
  * 规范化：先 trim，空串/纯空白一律视为「未提供」。此前 `requestedSkill || "co-fixer"`
  * 只挡得住空串，挡不住 `"   "`（truthy → 走 unknown skill 分支），也让空缺的 skill
@@ -1161,16 +1171,28 @@ class StallWatchdog {
  * 注意：路由查找使用规范化后的 requested（可能为空），而非兜底后的 skill 名 ——
  * 兜底来的 co-fixer 不该冒领用户在路由表里为 co-fixer 配置的 provider/model。
  *
+ * 错误文案区分两种失败（自定义角色接线后才有意义）：
+ *   - 名字不存在（拼错 / 未登记）→「未匹配任何角色」；
+ *   - 名字存在但被 config.disabledSkills 禁用 →「存在但已被禁用，请改配置而非改名」。
+ *
+ * @param snapshot - 统一技能快照（缺省 = 仅内置角色；由调用方按当前 config 构造以支持热改）。
  * @returns fallback=true 表示 skill 缺失/空白、已兜底到 {@link DEFAULT_FALLBACK_SKILL}；
- *          note 为可选降级说明（skill 名未匹配 / skill 缺失兜底 / preset 随之回退），
- *          由调用方推进 degradeNotes，最终出现在工具返回文本里。
+ *          role 为命中的参数化角色（含 tier / builtin，供 preset 与提示词注入使用）；
+ *          note 为可选降级说明，由调用方推进 degradeNotes，最终出现在工具返回文本里。
  */
 export function resolveSkillAndRoute(
   requestedSkill: string,
   getRoutes: SkillRouteSource,
   ctx: any,
   logger?: any,
-): { skill: CoHubSkill; route: SkillRouteConfig | undefined; fallback: boolean; note?: string } {
+  snapshot?: SkillSnapshot,
+): {
+  skill: CoHubSkill;
+  role: ResolvedRole | undefined;
+  route: SkillRouteConfig | undefined;
+  fallback: boolean;
+  note?: string;
+} {
   const requested = (typeof requestedSkill === "string" ? requestedSkill : "").trim();
   const skillName = requested || DEFAULT_FALLBACK_SKILL;
   const fallback = requested.length === 0;
@@ -1178,15 +1200,33 @@ export function resolveSkillAndRoute(
   // 原始名字来自模型输入，可能超长、带换行或带 `]`，原样拼接会破坏返回文本的
   // `[...]` 单行结构，并能绕过结果预算；归一后长度有界、恒为单行。
   const echoName = firstLineClamped(skillName, SKILL_NAME_ECHO_MAX) || "unknown";
-  let skill = COHUB_SKILLS.find(s => s.name === skillName);
+  const snap = snapshot ?? resolveSkillSnapshot();
+  const lookup = snap.resolve(skillName);
+  let role = lookup.ok ? lookup.role : undefined;
+  // 失败原因单独取出（TS 无法从 role === undefined 反向收窄 lookup，故用局部常量表达）
+  const missReason: "unknown" | "disabled" = lookup.ok ? "unknown" : lookup.reason;
   let note: string | undefined;
-  if (!skill) {
-    (logger ?? ctx.logger)?.warn?.('delegate: unknown skill "' + skillName + '", falling back to co-fixer');
-    skill = COHUB_SKILLS.find(s => s.name === DEFAULT_FALLBACK_SKILL)!;
+  if (role === undefined) {
+    const reason = missReason;
+    (logger ?? ctx.logger)?.warn?.('delegate: ' + (reason === "disabled" ? "disabled" : "unknown")
+      + ' skill "' + skillName + '", falling back to co-fixer');
+    // 兜底角色同样经快照解析（若它被自定义覆盖，仍按用户配置执行）；快照里彻底没有才回到内置常量
+    const fallbackLookup = snap.resolve(DEFAULT_FALLBACK_SKILL);
+    role = fallbackLookup.ok
+      ? fallbackLookup.role
+      : {
+        skill: COHUB_SKILLS.find(s => s.name === DEFAULT_FALLBACK_SKILL)!,
+        tier: resolveTier(DEFAULT_FALLBACK_SKILL),
+        builtin: true,
+      };
     // 拼错 / 未登记的 skill 名：角色与 preset 一起落到 co-fixer（实施类 write preset），
     // 原因必须回到返回文本，否则调用方只会看到「跑出一个 co-fixer」而不知道是自己写错了名字。
-    note = '传入的 skill 名 "' + echoName + '" 未匹配任何 co-* 代理，已兜底为 '
-      + DEFAULT_FALLBACK_SKILL + "，子代理 preset 同步回退为实施类 " + SUBAGENT_WRITE_PRESET;
+    note = reason === "disabled"
+      ? '传入的 skill 名 "' + echoName + '" 存在但已被禁用（config.disabledSkills），已兜底为 '
+        + DEFAULT_FALLBACK_SKILL + "，子代理 preset 同步回退为实施类 " + SUBAGENT_WRITE_PRESET
+        + "；如需使用请从禁用清单中移除，而不是改名"
+      : '传入的 skill 名 "' + echoName + '" 未匹配任何角色（内置 13 个 + config.customRoles），已兜底为 '
+        + DEFAULT_FALLBACK_SKILL + "，子代理 preset 同步回退为实施类 " + SUBAGENT_WRITE_PRESET;
   } else if (fallback) {
     (logger ?? ctx.logger)?.warn?.(
       "delegate: skill 未提供（缺字段/空串/纯空白），已兜底为 " + DEFAULT_FALLBACK_SKILL
@@ -1197,7 +1237,7 @@ export function resolveSkillAndRoute(
   }
   // 路由查找使用规范化后的 requested（可能为空），而非 skillName（兜底后）
   const route = (getRoutes() ?? []).find(s => s.name === requested);
-  return { skill, route, fallback, ...(note === undefined ? {} : { note }) };
+  return { skill: role.skill, role, route, fallback, ...(note === undefined ? {} : { note }) };
 }
 
 /**
@@ -1793,17 +1833,25 @@ export function buildOutputContractBlock(schema: OutputContractSchema): string {
 
 /**
  * 构建委派给子代理的完整 prompt。
- * 拼接：skill 的 brief（或 content）+ contractText + 任务分隔 + userPrompt + retryNote + outputContractText。
+ * 拼接：角色指令（内置 = skill.brief 或 content / 自定义 = 其 prompt）+ contractText
+ *       + 任务分隔 + userPrompt + retryNote + outputContractText。
+ *
+ * 自定义角色的指令来源（批次 2）：其 `prompt` 字段即角色指令，**优先于** skill.brief
+ * 作为 brief 注入；内置角色不传 customPrompt → 走 `brief || content`，拼接结果逐字节不变。
  */
 export function buildDelegatePrompt(params: {
   skill: CoHubSkill;
+  /** 自定义角色的角色指令（config.customRoles[].prompt）；缺省 = 用 skill.brief || skill.content */
+  customPrompt?: string;
   contractText: string;
   userPrompt: string;
   retryNote?: string;
   /** 波3：输出契约段（缺省 ""/undefined = 不拼接，与旧版逐字节一致） */
   outputContractText?: string;
 }): string {
-  return (params.skill.brief || params.skill.content) + params.contractText + "\n\n--- 你的具体任务 ---\n\n" + params.userPrompt + (params.retryNote ?? "") + (params.outputContractText ?? "");
+  const custom = (params.customPrompt ?? "").trim();
+  const roleText = custom.length > 0 ? params.customPrompt! : (params.skill.brief || params.skill.content);
+  return roleText + params.contractText + "\n\n--- 你的具体任务 ---\n\n" + params.userPrompt + (params.retryNote ?? "") + (params.outputContractText ?? "");
 }
 
 /**
@@ -1921,9 +1969,14 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       ctx.logger?.info?.("[cohub schedule] 生效调度参数：batch=" + (schedule?.maxParallelBatch ?? 5)
         + " wallMs=" + (schedule?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS));
 
-      // ① 按 skill 名精确匹配技能 + 查找路由配置（共享函数；skill 缺失/空白会兜底 co-fixer 并 warn）
-      const { skill, route, fallback: skillFallback, note: skillNote } =
-        resolveSkillAndRoute(args.skill, getRoutes, ctx);
+      // ① 按 skill 名在**统一技能快照**（内置 ∪ config.customRoles）里匹配 + 查找路由配置。
+      //    快照每次 execute 重建：customRoles 是 volatile 配置，热改后下一次派发即生效。
+      const skillSnapshot = resolveSkillSnapshot({
+        customRoles: config.customRoles,
+        disabledSkills: config.disabledSkills,
+      });
+      const { skill, role: skillRole, route, fallback: skillFallback, note: skillNote } =
+        resolveSkillAndRoute(args.skill, getRoutes, ctx, ctx.logger, skillSnapshot);
       // label 里的 skill 片段：兜底时显式标 (default:co-fixer)，绝不出现 ":undefined"
       const skillTag = formatSkillLabel(skill, skillFallback);
 
@@ -1962,9 +2015,14 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         (note) => upsertDegradeNote(degradeNotes, note),
       );
 
-      // ④b P1-1 子代理工具表裁剪：按规范化后的 skill 名查 deny 表（开关默认开；
+      // ④b P1-1 子代理工具表裁剪：skill 名 → resolveTier → TIER_TOOLS[tier] 的 deny（开关默认开；
       //     构造失败已在 resolveSkillToolFilter 内 fail-soft 成 undefined = 全量工具）
-      const toolFilter = resolveSkillToolFilter(skill.name, config.toolFilter?.enabled ?? true, ctx.logger);
+      const toolFilter = resolveSkillToolFilter(
+        skill.name,
+        config.toolFilter?.enabled ?? true,
+        ctx.logger,
+        config.customRoles,
+      );
 
       // ①b skill 名未匹配 / skill 缺失兜底：resolveSkillAndRoute 已把原因写进 note，
       //     这里登记一条，确保「skill 拼错」这类静默降级经 formatDegradeNotes 出现在返回文本里。
@@ -1977,9 +2035,16 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         });
       }
 
-      // ④c 子代理独立精简 preset（按 skill 映射 readonly / write）：undefined = 继承父 preset。
-      //     preset 缺失 / 挂载失败由 startSubagentRun 的 fail-soft 重试兜底（去掉 id 再试一次）。
-      const agentPreset = resolveSkillAgentPreset(skill.name, subagentPresetEnabled);
+      // ④c 子代理独立精简 preset（按档位映射 readonly / readonly-net / write / write-shell / cordis）：
+      //     undefined = 继承父 preset（仅 co-orchestrator 与关闭开关时）。
+      //     preset 缺失 / 挂载失败由 startSubagentRun 的 fail-soft 重试兜底（去掉 id 再试一次）；
+      //     档位本身没有 preset 映射时按权限族降级并 warn（见 resolveSkillAgentPreset）。
+      const agentPreset = resolveSkillAgentPreset(
+        skill.name,
+        subagentPresetEnabled,
+        config.customRoles,
+        ctx.logger,
+      );
 
       // ⑤ 执行器环境契约注入（共享函数）：指纹只算一次，契约解析与随后的学习者共用
       const fp = envFingerprint();
@@ -2054,6 +2119,10 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             : "";
           const promptText = buildDelegatePrompt({
             skill,
+            // 自定义角色：注入其 prompt 作为角色指令（brief）；内置角色不传 → 逐字不变
+            ...(skillRole !== undefined && !skillRole.builtin && skillRole.skill.brief.length > 0
+              ? { customPrompt: skillRole.skill.brief }
+              : {}),
             contractText,
             userPrompt: args.prompt,
             retryNote,

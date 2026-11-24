@@ -11,7 +11,11 @@
 //
 // 约束：本文件是**纯数据 + 纯函数**，不含日志、不读配置、不依赖 cordis 上下文；
 // 平台相关的 shell 工具名在模块加载时求值一次（与原 delegate.ts 的 SHELL_TOOL 一致）。
-// 本批只建表与单测，delegate.ts / delegate_batch.ts 的接线留到下一批。
+//
+// 批次 2（本批）：delegate.ts / delegate_batch.ts 接线——技能查表改为「内置 ∪ 自定义」
+// 的统一快照 {@link resolveSkillSnapshot}，工具裁剪与 preset 都经 resolveTier / TIER_TOOLS
+// / presetForTier 派生，内置角色与自定义角色走同一条路径。
+import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
 
 /** 工具档位：子代理能碰到的工具面分级 */
 export type Tier = "ro" | "ro-net" | "rw" | "rw-shell" | "cordis";
@@ -129,8 +133,15 @@ export const TIER_TOOLS: Readonly<Record<Tier, TierTools>> = {
   // ro-net 的工具面与 ro 相同：联网能力由 preset（cohub-subagent-readonly-net 挂 web 工具）提供，
   // 裁剪表只做减法，无需再 deny 网络工具。
   "ro-net": { deny: [...READ_ONLY_DENY, ...UNIVERSAL_DENY] },
-  // rw 没有 shell：把本平台 shell 工具一并裁掉，与 rw-shell 的唯一数据差异就在这里。
-  rw: { deny: [...WRITE_DENY, SHELL_TOOL, ...UNIVERSAL_DENY] },
+  // rw 与 rw-shell 的**裁剪表相同**，差异只在 preset（cohub-subagent-write 的 preset 声明里
+  // 本来就没有挂 shell，见 presets/profile-patch-presets.yml）。
+  //
+  // 为什么不在这里 deny shell（批次 2 修正）：接线前 delegate.ts 的旧表把 co-designer / co-fixer /
+  // co-cordis 统一归入 WRITE_SKILLS → base = WRITE_DENY（**不含** SHELL_TOOL）。若 rw 档 deny 里
+  // 加上 shell，co-designer 的最终 deny 列表就会比改动前多一项（违反「内置角色工具集逐字不变」）。
+  // 按任务约束「以现有行为为基准修正 roles.ts」，这里以旧表为准：rw 不裁 shell，真正的「无 shell」
+  // 由 preset 层（cohub-subagent-write 不挂 tool-bash / tool-pwsh）保证，与接线前完全一致。
+  rw: { deny: [...WRITE_DENY, ...UNIVERSAL_DENY] },
   "rw-shell": { deny: [...WRITE_DENY, ...UNIVERSAL_DENY] },
   // cordis 与 rw-shell 工具面一致，差异在 preset（插件重建 / 安装链路）。
   cordis: { deny: [...WRITE_DENY, ...UNIVERSAL_DENY] },
@@ -188,4 +199,128 @@ export function resolveTier(
 export function presetForTier(tier: Tier): string {
   const preset = TIER_TO_PRESET[tier];
   return typeof preset === "string" && preset.length > 0 ? preset : TIER_TO_PRESET["rw-shell"];
+}
+
+// ── 统一技能快照（内置 ∪ 自定义角色，同一解析路径） ─────────────────────────
+//
+// 接线前：delegate.ts 只查 COHUB_SKILLS（内置 13 个），delegate_batch.ts 的白名单再从它派生；
+// config.customRoles 在配置层存在却无法被 delegate({ skill }) 引用。本批把两者折算成同一份
+// 快照：自定义角色被包装成与内置同形的 CoHubSkill（brief = 其 prompt），从而复用同一条
+// 「解析 → 档位 → preset → 工具裁剪 → 提示词注入」链路，不新增分支。
+
+/** 自定义角色运行时配置（Config.customRoles 的元素；schema 已保证 name/description/prompt/tier 必填） */
+export interface CustomRoleConfig extends RoleSpec {
+  /** 一句话职责（进技能目录 / 工具 description；缺省用兜底文案） */
+  readonly description?: string;
+  /** 该角色的任务指令：作为子代理 brief 注入（替代内置技能的 brief） */
+  readonly prompt?: string;
+}
+
+/** 解析后的角色快照条目 */
+export interface ResolvedRole {
+  /** 统一形状的技能（自定义角色由 prompt 构造，与内置角色同走 buildDelegatePrompt） */
+  readonly skill: CoHubSkill;
+  /** 档位；null = 无法由档位决定（co-orchestrator 主代理 / 名字本身不在表内） */
+  readonly tier: Tier | null;
+  /** true = 内置角色（提示词取 skill.brief）；false = 自定义角色（提示词取其 prompt） */
+  readonly builtin: boolean;
+}
+
+/** 技能查找结果：命中 / 不存在 / 存在但被禁用（错误文案必须能区分后两者） */
+export type SkillLookup =
+  | { readonly ok: true; readonly role: ResolvedRole }
+  | { readonly ok: false; readonly reason: "unknown" | "disabled" };
+
+/** 快照的输入配置（只读最小集合；缺省即「仅内置角色、无禁用」） */
+export interface SkillSnapshotConfig {
+  /** 用户自定义角色表 */
+  readonly customRoles?: readonly CustomRoleConfig[];
+  /** 被禁用的角色名（配置层渠道；缺省 = 无禁用） */
+  readonly disabledSkills?: readonly string[];
+}
+
+/** 统一技能快照：一次解析，派发层各处共用同一份名单与档位 */
+export interface SkillSnapshot {
+  /** 全部角色（内置在前、顺序与 COHUB_SKILLS 一致；自定义在后；同名覆盖原位） */
+  readonly roles: readonly ResolvedRole[];
+  /** 全部角色名（用于错误文案与工具 description） */
+  readonly names: readonly string[];
+  /** 按名查找：区分 unknown / disabled */
+  resolve(roleName: string | undefined): SkillLookup;
+}
+
+/** 自定义角色被包装成 CoHubSkill 时写入的 source 标记（便于事后排查来源） */
+export const CUSTOM_ROLE_SOURCE = "dsh-cohub:customRole";
+
+/**
+ * 构造统一技能快照：**内置 COHUB_SKILLS ∪ config.customRoles**。
+ *
+ * 语义：
+ *   - 内置角色：skill 原样取 COHUB_SKILLS（brief/content 逐字不变），tier 取内置档位表，
+ *     co-orchestrator 不在档位表内 → tier=null（派发层据此短路为「继承父」）。
+ *   - 自定义角色：包装成同形 CoHubSkill（brief = prompt，content = prompt），tier 取其自身
+ *     tier；与内置角色同名时**原位覆盖**（保留内置的 content 作为 prompt 缺省兜底），
+ *     因此「自定义覆盖内置」与「自定义新增」走同一分支。
+ *   - 禁用：config.disabledSkills 里的名字在 resolve() 里返回 reason="disabled"，
+ *     与「根本不存在」（reason="unknown"）分开，错误文案才能提示用户改配置而非改名字。
+ *
+ * @param config - 运行时配置（可缺省；缺省 = 仅内置角色、无禁用）
+ * @returns 不可变快照（每次调用新建；配置热改后重新构造即可生效）
+ */
+export function resolveSkillSnapshot(config?: SkillSnapshotConfig): SkillSnapshot {
+  const roles: ResolvedRole[] = COHUB_SKILLS.map((skill) => ({
+    skill,
+    tier: BUILTIN_ROLE_TIERS[skill.name] ?? null,
+    builtin: true,
+  }));
+  const position = new Map<string, number>(roles.map((role, index) => [role.skill.name, index]));
+
+  for (const raw of config?.customRoles ?? []) {
+    const name = (raw?.name ?? "").trim();
+    if (name.length === 0) continue;
+    const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
+    const description = typeof raw.description === "string" && raw.description.trim().length > 0
+      ? raw.description
+      : "用户自定义角色 " + name;
+    const tier = isTier(raw.tier) ? raw.tier : BUILTIN_ROLE_TIERS[name] ?? null;
+    const at = position.get(name);
+    if (at === undefined) {
+      position.set(name, roles.length);
+      roles.push({
+        skill: { name, description, brief: prompt, source: CUSTOM_ROLE_SOURCE, content: prompt },
+        tier,
+        builtin: false,
+      });
+    } else {
+      const prev = roles[at]!;
+      // 同名覆盖：用户给的 prompt 为空时回落内置 brief/content，绝不把角色指令清空
+      roles[at] = {
+        skill: {
+          ...prev.skill,
+          description,
+          brief: prompt.length > 0 ? prompt : prev.skill.brief,
+          content: prompt.length > 0 ? prompt : prev.skill.content,
+        },
+        tier,
+        builtin: false,
+      };
+    }
+  }
+
+  const disabled = new Set<string>(
+    (config?.disabledSkills ?? []).map((name) => (name ?? "").trim()).filter((name) => name.length > 0),
+  );
+  const byName = new Map<string, ResolvedRole>(roles.map((role) => [role.skill.name, role]));
+
+  return {
+    roles,
+    names: roles.map((role) => role.skill.name),
+    resolve(roleName: string | undefined): SkillLookup {
+      const key = (roleName ?? "").trim();
+      if (key.length === 0) return { ok: false, reason: "unknown" };
+      if (disabled.has(key)) return { ok: false, reason: "disabled" };
+      const role = byName.get(key);
+      return role === undefined ? { ok: false, reason: "unknown" } : { ok: true, role };
+    },
+  };
 }

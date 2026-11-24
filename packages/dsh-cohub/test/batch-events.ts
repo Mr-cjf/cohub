@@ -190,7 +190,11 @@ const ROW_RE = /^- \[([^\]]+)\] (completed|failed|error) · 耗时 (\d+)ms(?: ·
   check("失败 task 也有 endedAt/durationMs",
     typeof badEntry?.endedAt === "number" && typeof badEntry?.durationMs === "number"
     && badEntry.endedAt >= 0 && badEntry.durationMs >= 0);
-  check("失败 task 的 error 给出合法名单", String(badEntry?.error ?? "").includes("合法值："));
+  // 批次 2 起错误文案改为「不存在 / 已被禁用」二义区分，并回显**运行时**可用角色名单
+  // （内置 13 + config.customRoles），因此这里断言的是「名单仍在文案里」。
+  check("失败 task 的 error 给出合法名单",
+    String(badEntry?.error ?? "").includes("可用角色：")
+    && String(badEntry?.error ?? "").includes("co-fixer"));
   check("成功 task 状态 completed 且正文完整",
     okEntry?.status === "completed" && String(okEntry?.result ?? "").includes("成功任务的结果正文"));
   check("成功 task 的时间字段未被失败 task 污染",

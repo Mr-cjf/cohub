@@ -34,6 +34,7 @@ import {
 import { applyResultBudget, approxTokens, resolveResultBudget, resolveSkillResultMaxChars } from "./result-budget.ts";
 import { validateContractText, formatContractViolation } from "./output-contract.ts";
 import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
+import { resolveSkillSnapshot, type SkillSnapshot } from "./roles.ts";
 import { contentText } from "./text-utils.ts";
 import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 import { maybeDeferTodoNudge } from "./todo-nudge.ts";
@@ -51,30 +52,44 @@ import { describeActivationContractError } from "./contract-probe.ts";
 const BATCH_TASK_ID_ECHO_MAX = 40;
 
 /**
- * 合法 skill 名单（唯一权威来源：skills.ts 的 COHUB_SKILLS 运行时值）。
- * 用于两处：① parameters 里 skill.description 的可读名单；② 派发前的白名单校验。
- * 从 COHUB_SKILLS 派生而非另抄一份，避免名单漂移（新增技能后自动生效）。
+ * **内置**角色的静态名单（唯一权威来源：skills.ts 的 COHUB_SKILLS 运行时值）。
+ * 仍用于 parameters 里 skill.description 的可读名单（schema 是静态的，装不下运行时自定义角色）。
+ *
+ * 派发前的**白名单校验**已改为运行时统一快照（内置 ∪ config.customRoles，见
+ * {@link assertKnownSkill}）——自定义角色因此可被 delegate_batch 引用，与 delegate 一致。
  */
 const KNOWN_SKILL_NAMES: readonly string[] = COHUB_SKILLS.map(s => s.name);
 
-/** 名单的「13 选 1」单行文案（description 与错误文案共用，保证两处逐字一致） */
+/** 内置名单的「13 选 1」单行文案（schema description 用） */
 const SKILL_NAMES_TEXT = KNOWN_SKILL_NAMES.join(", ");
 
-/** 合法名单的短名文案（错误文案用 ` / ` 分隔，便于阅读） */
-const SKILL_NAMES_SHORT_TEXT = KNOWN_SKILL_NAMES.join(" / ");
-
 /**
- * 白名单校验：非空 skill 必须在 KNOWN_SKILL_NAMES 内。
- * 空串/缺失一律放行（由调用方的既有兜底逻辑处理，保持 :184-196 行为不变）。
+ * 白名单校验：非空 skill 必须在**运行时快照**（内置 ∪ config.customRoles）内，且未被禁用。
+ * 空串/缺失一律放行（由调用方的既有兜底逻辑处理，保持 :382-394 行为不变）。
  * 命中返回 { ok: true }；未命中返回带「正确写法」的错误文案，由调用方转成该 task 的 error 结果。
+ *
+ * 错误文案区分两种失败（接线自定义角色后才可能出现第二种）：
+ *   - 不存在（拼错 / 未登记）→ 回显**当前**可用角色全名单（含自定义角色）；
+ *   - 存在但被 config.disabledSkills 禁用 → 明确提示「改配置而非改名」。
+ *
+ * 导出仅为单测（test/roles-dispatch.ts）覆盖批量路径的白名单判据；运行时只在本文件内调用。
  */
-function assertKnownSkill(raw: string): { ok: true } | { ok: false; error: string } {
+export function assertKnownSkill(raw: string, snapshot: SkillSnapshot): { ok: true } | { ok: false; error: string } {
   if (raw.length === 0) return { ok: true };
-  if (KNOWN_SKILL_NAMES.includes(raw)) return { ok: true };
+  const lookup = snapshot.resolve(raw);
+  if (lookup.ok) return { ok: true };
+  const names = snapshot.names.join(" / ");
+  if (lookup.reason === "disabled") {
+    return {
+      ok: false,
+      error: `skill 名 "${raw}" 存在但已被禁用（config.disabledSkills），当前不可派发；`
+        + `如需使用请将其从禁用清单中移除，而不是改名。可用角色：${names}`,
+    };
+  }
   return {
     ok: false,
-    error: `skill 名 "${raw}" 无效。合法值：${SKILL_NAMES_SHORT_TEXT}`
-      + `（co-orchestrator 为主代理，通常委派用其余 ${KNOWN_SKILL_NAMES.length - 1} 个）`,
+    error: `skill 名 "${raw}" 不存在。可用角色：${names}`
+      + `（co-orchestrator 为主代理，通常委派用其余 ${snapshot.names.length - 1} 个）`,
   };
 }
 
@@ -360,6 +375,12 @@ export function createDelegateBatchTool(
       }
 
       const { wallClockBudgetMs, maxParallelBatch, budget, toolFilterEnabled, presetEnabled } = resolveRuntimeConfig();
+      // 统一技能快照（内置 ∪ config.customRoles）：白名单、技能解析、档位裁剪、preset、提示词
+      // 全部经这一份名单，与 delegate 单发路径同一条解析链。每批重建 → customRoles 热改即生效。
+      const skillSnapshot = resolveSkillSnapshot({
+        customRoles: config.customRoles,
+        disabledSkills: config.disabledSkills,
+      });
       const tasks = args.tasks ?? [];
 
       if (tasks.length === 0) {
@@ -417,11 +438,11 @@ export function createDelegateBatchTool(
           const startedAt = Date.now();
           const taskEvents = batchEvents[index];
           pushBatchEvent(taskEvents, { taskId, phase: "started", at: startedAt });
-          // 白名单校验（第三道防线）：非空 skill 必须在 COHUB_SKILLS 名单内。
+          // 白名单校验（第三道防线）：非空 skill 必须在**运行时快照**（内置 ∪ config.customRoles）内。
           // 不合法时**只让该 task 失败**（返回 skillError，由收集阶段转成 status:"error"），
           // 绝不抛全局异常——同批其它 task 照常派发，不被一个写错的 skill 名拖垮。
-          // 空串/缺失仍走上方的兜底（:184-196 不变），这里只拦「非空但不合法」。
-          const skillCheck = assertKnownSkill(requestedSkill);
+          // 空串/缺失仍走上方的兜底（:382-394 不变），这里只拦「非空但不合法 / 已禁用」。
+          const skillCheck = assertKnownSkill(requestedSkill, skillSnapshot);
           if (!skillCheck.ok) {
             ctx.logger?.warn?.(
               "[cohub delegate_batch] task \"" + taskId + "\" 的 skill 名 \"" + requestedSkill
@@ -451,7 +472,8 @@ export function createDelegateBatchTool(
               startError: undefined, skillError: undefined, scopeError: scopeCheck.error,
             };
           }
-          const { skill, route, note: skillNote } = resolveSkillAndRoute(requestedSkill, getRoutes, ctx, ctx.logger);
+          const { skill, role: skillRole, route, note: skillNote } =
+            resolveSkillAndRoute(requestedSkill, getRoutes, ctx, ctx.logger, skillSnapshot);
           // 降级原因收集槽：**每个 task 独立一个数组**（对应 delegate 的单次 execute）。
           // 若整批共用一个数组，同一 id（如 "skill"）的 note 会被后一个 task 覆盖，
           // 前面任务的降级就再也回不到返回文本里了。
@@ -480,16 +502,20 @@ export function createDelegateBatchTool(
           // rewriteNote 仅在 strict 重写时传入，正常路径为 undefined → 拼接结果不变。
           const buildPrompt = (rewriteNote?: string): string => buildDelegatePrompt({
             skill,
+            // 自定义角色：注入其 prompt 作为角色指令（brief）；内置角色不传 → 逐字不变
+            ...(skillRole !== undefined && !skillRole.builtin && skillRole.skill.brief.length > 0
+              ? { customPrompt: skillRole.skill.brief }
+              : {}),
             contractText,
             userPrompt: task.prompt,
             ...(rewriteNote === undefined ? {} : { retryNote: rewriteNote }),
             outputContractText,
           });
           const promptText = buildPrompt();
-          // P1-1：按角色裁剪子代理工具表（deny 减法；构造失败已 fail-soft 成全量工具）
-          const toolFilter = resolveSkillToolFilter(skill.name, toolFilterEnabled, ctx.logger);
-          // 子代理独立精简 preset：每个 task 按各自的 skill 解析（undefined = 继承父 preset）
-          const agentPreset = resolveSkillAgentPreset(skill.name, presetEnabled);
+          // P1-1：按角色档位裁剪子代理工具表（resolveTier → TIER_TOOLS；构造失败已 fail-soft 成全量工具）
+          const toolFilter = resolveSkillToolFilter(skill.name, toolFilterEnabled, ctx.logger, config.customRoles);
+          // 子代理独立精简 preset：每个 task 按各自的 skill 档位解析（undefined = 继承父 preset）
+          const agentPreset = resolveSkillAgentPreset(skill.name, presetEnabled, config.customRoles, ctx.logger);
 
           // 每个 task 独立的 AbortController
           const ac = new AbortController();

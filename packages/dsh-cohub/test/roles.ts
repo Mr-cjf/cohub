@@ -119,8 +119,15 @@ check("写类档位保留 write / edit，仅裁再委派与工作树",
   ["write", "edit"].every((tool) => !TIER_TOOLS["rw-shell"].deny.includes(tool))
   && ["delegate", "delegate_batch", "subagent", "subagent_fork", "create_worktree", "workflow"]
     .every((tool) => TIER_TOOLS["rw-shell"].deny.includes(tool)));
-check("rw 无 shell：deny 含本平台 shell 工具", TIER_TOOLS.rw.deny.includes(SHELL_TOOL));
-check("rw-shell / cordis 不裁 shell", !TIER_TOOLS["rw-shell"].deny.includes(SHELL_TOOL)
+// 批次 2 修正：rw 档不裁 shell —— 以接线前 delegate.ts 的 WRITE_DENY 为基准（co-designer 旧行为
+// 的 deny 列表里没有 shell），「无 shell」由 preset 层保证。因此这里断言的是「rw 与 rw-shell
+// 裁剪表相同、差异只在 preset」。
+check("rw 与 rw-shell 裁剪表相同（无 shell 由 preset 层保证，差异只在 preset）",
+  JSON.stringify(TIER_TOOLS.rw.deny) === JSON.stringify(TIER_TOOLS["rw-shell"].deny)
+  && presetForTier("rw") !== presetForTier("rw-shell"));
+check("rw / rw-shell / cordis 都不裁 shell（以旧 WRITE_DENY 为基准）",
+  !TIER_TOOLS.rw.deny.includes(SHELL_TOOL)
+  && !TIER_TOOLS["rw-shell"].deny.includes(SHELL_TOOL)
   && !TIER_TOOLS.cordis.deny.includes(SHELL_TOOL));
 check("通用裁剪对所有档位生效（ask_user_question / weather）",
   ALL_TIERS.every((tier) => TIER_TOOLS[tier].deny.includes("ask_user_question")
