@@ -231,8 +231,8 @@ jobs:
                 printf -- '- 本包为 private，不发布到 npm；安装方式：`%s`\n' "$INSTALL_CMD"
               else
                 printf -- '- `%s@%s`：https://www.npmjs.com/package/%s/v/%s\n' "$PKG" "$VERSION" "$PKG" "$VERSION"
+                printf -- '- 安装：`%s`\n' "$INSTALL_CMD"
               fi
-              printf -- '- 安装：`%s`\n' "$INSTALL_CMD"
               printf -- '- 必须重启 %s 后才会加载新版本。\n' "$PLATFORM"
               printf -- '- 仅本包发版，其他包版本不变。\n'
             } >> "$NOTES_FILE"
