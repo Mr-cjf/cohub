@@ -1,0 +1,2 @@
+name: CoHub 子代理·只读+联网（cohub-subagent-readonly-net）
+description: cohub 编排体系的联网只读子代理专用 preset：co-librarian / co-observer / co-planner / co-council 使用；在 readonly 基础上接通外网抓取（web 检索类工具可用），仍无写盘、无 Shell、无委派类工具。

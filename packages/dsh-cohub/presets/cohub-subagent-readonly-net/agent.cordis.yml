@@ -1,0 +1,87 @@
+# cohub-subagent-readonly-net —— cohub 编排体系的**只读 + 联网**子代理专用 agent preset。
+#
+# 定位：与 cohub-subagent-readonly 同构，唯一实质差别是 **tool-web 的 fetch 开关**。
+#   - readonly      ：`tool-web { fetch: false }` → 工具表里有 web 行，但页面抓取被关掉；
+#   - readonly-net  ：`tool-web { fetch: true }`  → 真正能联网抓取/检索（co-librarian、
+#                     co-observer 的研究型任务必需），仍然无写盘、无 Shell。
+#
+# 隔离边界（与 readonly 完全一致，请勿放开）：
+#   · tool-fs 显式 `write: false` / `edit: false` —— @deepseek-ai/dsh-tool-fs 的 apply()
+#     在两者皆 false 时根本不注册 write / edit 工具（连 FsSandboxController 都不构造）；
+#   · Shell 工具行（tool-pwsh / tool-bash）整行不挂 —— 联网能力不等于能执行命令；
+#   · delegation / delegation-subagents / tool-subagent* / tool-workflow / tool-goal /
+#     tool-ask-user / tool-jobs / tool-cordis / mcp-github 一律不挂，断掉「子代理再套娃」。
+#
+# 工具行集合严格抄自 presets/cohub-subagent-readonly/agent.cordis.yml，未引入任何新插件名。
+
+# ── 身份（精简：子代理不需要调度纪律，技能指令已由任务书 brief 注入）──────────
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    # 字段名必须是 prefix（required）/ suffix；旧版 text 字段会让整行挂载失败。
+    prefix: |-
+      你是 cohub 编排体系的专职子代理——只负责完成当前这一件具体任务。
+      不要试图调度、委派或拆分给其他代理；你的技能指令已由任务书注入，不要调用 skill 工具加载 co-orchestrator。
+      事实与证据优先：结论前置，证据用 path:line 形式。
+
+# ── 技能 ────────────────────────────────────────────────────────────────
+# 保留 tool-skill：子代理偶尔需要读自己的技能正文（成本 1 个工具）。
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+# ── 任务面板 ────────────────────────────────────────────────────────────
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+# ── 文件（只读）/ 搜索 / 外网（联网）──────────────────────────────────────
+# write / edit 显式关掉 —— 与 readonly 版一致，这是只读保证的硬边界。
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+  config:
+    write: false
+    edit: false
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ★ 与 readonly 的唯一差异：fetch 打开（readonly 为 false）。
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: true
+
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+
+# 不挂（与 readonly / write 版一致）：delegation / delegation-subagents / tool-subagent* /
+# tool-workflow / tool-goal / tool-ask-user / tool-jobs / tool-cordis / mcp-github。
+# 不挂 shell：联网代理不需要执行命令（真正的只读保证）。
+
+# ── 上下文压缩（参数照 co-orchestrator 现有值）─────────────────────────────
+# 注意：不要在 preset 里再挂 spill-local / spill-policy —— host bundle 已挂且已生效，
+# 双层裁剪会让落盘的原文不可恢复（详见 co-orchestrator/agent.cordis.yml 注释）。
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+      config:
+        thresholdRatio: 0.5
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024

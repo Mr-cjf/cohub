@@ -95,7 +95,11 @@ for (const name of presetNames) {
   // ③ shell 工具行（平台门控）：实施类 preset 必须有；只读子代理 preset 按设计
   //    **不得**挂 shell（cohub-subagent-readonly 的真只读保证靠「不注册 write/edit +
   //    不挂 shell」，见 delegate.ts 的 resolveSkillAgentPreset）。
-  const wantsShell = !name.endsWith("-readonly");
+  // 用 includes 而非 endsWith：档位后缀可能是 -readonly / -readonly-net /
+  // -write / -write-shell（见 presets/ 下的子代理档位），按「名字里含 readonly」
+  // 判定只读族，避免 -readonly-net 被误判成实施类而要求挂 shell。
+  const isReadonlyFamily = name.includes("-readonly");
+  const wantsShell = !isReadonlyFamily;
   check(
     wantsShell ? "含 shell 工具行（tool-bash 或 tool-pwsh）" : "只读 preset 不挂 shell 工具行（真只读）",
     wantsShell
@@ -104,7 +108,7 @@ for (const name of presetNames) {
   );
   // ③b 子代理 preset 的硬隔离断言：只读版关 write/edit，两个版本都不挂委派类工具行
   if (name.startsWith("cohub-subagent-")) {
-    if (name.endsWith("-readonly")) {
+    if (isReadonlyFamily) {
       const fs = byId.get("tool-fs") ?? "";
       check("只读 preset 的 tool-fs 关闭 write/edit", /write:\s*false/.test(fs) && /edit:\s*false/.test(fs));
     }

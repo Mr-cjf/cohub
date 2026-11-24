@@ -1,0 +1,99 @@
+# cohub-subagent-write-shell —— cohub 编排体系的**读写 + Shell** 子代理专用 agent preset。
+#
+# 定位（事实核对后再落地，勿凭印象改）：既有的 cohub-subagent-write **已经挂了**
+# tool-bash / tool-pwsh 两行（见 presets/cohub-subagent-write/agent.cordis.yml 第 55-61 行），
+# 所以「多挂 shell」在它身上无从再挂一遍。本 preset 因此取 write 的**上限能力**：
+#   · tool-fs 全开（read / readImage / write / edit，默认即全开，故不写 config）；
+#   · Shell 两行保留写 co-orchestrator 相同的平台互斥门控（win32 → pwsh，其余 → bash）；
+#   · ★ 相对 write 的唯一增量：tool-web 的 `fetch: true`（write 版为 `fetch: false`），
+#     让实施类代理在需要时可抓取外部文档/报错页，而不必借道父会话。
+#
+# 与 cohub-subagent-write 的差异矩阵：
+#   tool-fs    write=true / edit=true                  （相同）
+#   tool-web   fetch=true                              （write 为 false）★
+#   tool-bash  disabled: platform === 'win32'          （相同）
+#   tool-pwsh  disabled: platform !== 'win32'          （相同）
+#
+# 隔离边界（与 readonly / write 完全一致，请勿放开）：delegation /
+# delegation-subagents / tool-subagent / tool-subagent-fork / tool-workflow /
+# tool-goal / tool-ask-user / tool-jobs / tool-cordis / mcp-github 一律不挂 ——
+# 从工具表层面断掉「子代理再往下套娃」的可能。
+#
+# 机制依据：DSH 0.2.1 SubagentStartRequest.agentPreset 是一等字段，child 创建时
+# presets.mount(childCtx, id) 硬切换组合，不再继承父 preset 的 persona 与工具表。
+# 工具行集合严格抄自 presets/cohub-subagent-write/agent.cordis.yml，未引入新插件名。
+
+# ── 身份（精简）─────────────────────────────────────────────────────────
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    # 字段名必须是 prefix（required）/ suffix；旧版 text 字段会让整行挂载失败。
+    prefix: |-
+      你是 cohub 编排体系的专职子代理——只负责完成当前这一件具体任务。
+      不要试图调度、委派或拆分给其他代理；你的技能指令已由任务书注入，不要调用 skill 工具加载 co-orchestrator。
+      事实与证据优先：结论前置，证据用 path:line 形式。
+
+# ── 技能 ────────────────────────────────────────────────────────────────
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+# ── 任务面板 ────────────────────────────────────────────────────────────
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+# ── 文件（读写）/ 搜索 / 外网（联网）──────────────────────────────────────
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ★ 相对 cohub-subagent-write 的唯一差异：fetch 打开（write 为 false）。
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: true
+
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+
+# ── Shell（平台互斥，写法照 co-orchestrator）──────────────────────────────
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+# 不挂（见文件头）：delegation / delegation-subagents / tool-subagent* /
+# tool-workflow / tool-goal / tool-ask-user / tool-jobs / tool-cordis / mcp-github。
+
+# ── 上下文压缩（参数照 co-orchestrator 现有值）─────────────────────────────
+# 注意：不要在 preset 里再挂 spill-local / spill-policy —— host bundle 已挂且已生效，
+# 双层裁剪会让落盘的原文不可恢复（详见 co-orchestrator/agent.cordis.yml 注释）。
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+      config:
+        thresholdRatio: 0.5
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
