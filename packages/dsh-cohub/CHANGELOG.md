@@ -2,6 +2,12 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.2] - 2026-11-24
+
+### 变更
+
+- **orchestrator 技能：delegate_batch 增加「skill 首键」构造约束**：每个 task 按 `skill` → `id` → `prompt` 顺序写，闭合前默数三键，防止长 prompt 挤掉必填键导致整批校验失败。
+
 ## [0.13.1] - 2026-11-17
 
 ### 修复
