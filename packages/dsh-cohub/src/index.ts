@@ -15,6 +15,7 @@ import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
 import { applyPresetPatchDeclarations, copyTree, installShippedPresets, resolveProfilePatchPath } from "./preset-install";
 import { CHINESE_LANGUAGE_INSTRUCTION } from "./chinese";
 import { COHUB_SKILLS } from "./skills";
+import { CUSTOM_ROLE_POLL_MS, createCustomSkillRegistry } from "./custom-skills.ts";
 import { createCouncilTool } from "./council";
 import { createDelegateTool } from "./delegate";
 import { createDelegateBatchTool } from "./delegate_batch.ts";
@@ -396,9 +397,33 @@ export function apply(ctx: any, config: any) {
   // ② 13 技能（12 专职代理 + orchestrator）→ runtime skills
   //    主代理用 skill 工具按需加载，再通过 subagent 委派（DSH 原生），
   //    运行时技能目录中即出现 co-explorer / co-fixer / co-council 等条目。
+  //    内置技能为生成物（COHUB_SKILLS），此处原样注册、不做任何改写。
   for (const skill of COHUB_SKILLS) {
     ctx.skills.register(skill);
   }
+
+  // ②b 用户自定义角色（Config.customRoles）→ 同构 runtime skill（内置 ∪ 自定义）
+  //    · 转换：name = 角色名，description = 角色职责，正文 = prompt，metadata.tier = 档位；
+  //      tier 的正源仍是 roles.ts 的 resolveTier（派发层直读 config，保持「唯一映射源」），
+  //      metadata.tier 只用于技能目录展示 / 运维排查。
+  //    · 冲突与脏值全部在运行时兜底：与内置重名 → 跳过并 warn；自定义之间重名 → 保留第一条并 warn；
+  //      tier 非法 → 跳过并 warn。任何一条都不抛错，插件启动不受用户配置质量影响。
+  //    · 热生效：customRoles 是 volatile 字段（Loader 就地提交同一引用），Volatile 只暴露 get()
+  //      且宿主无配置变更回调，因此用「轮询对账 + 差量同步」——注销被删/被改的旧技能、注册新增技能。
+  //    effect 返回 dispose：插件卸载时停轮询并注销全部自定义技能。
+  ctx.effect(() => {
+    const customRoleSkills = createCustomSkillRegistry({
+      skills: ctx.skills,
+      // volatile 降级（旧 schemastery）时字段是普通数组，两种形状都读
+      getRoles: () => (typeof config.customRoles?.get === "function" ? config.customRoles.get() : config.customRoles),
+      logger: ctx.logger,
+    });
+    const stopPolling = customRoleSkills.start(CUSTOM_ROLE_POLL_MS);
+    return () => {
+      stopPolling();
+      customRoleSkills.dispose();
+    };
+  }, "cohub.customRoles()");
 
   // ③ 内置 agent preset（co-orchestrator / cohub-cordis）安装、升级与孤儿清理
   //    installPresets=false 时不触碰用户 preset root（B：给部署/用户一个干净出口）
