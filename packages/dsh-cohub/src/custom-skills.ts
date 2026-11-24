@@ -41,12 +41,23 @@ export interface CustomSkillRegistration {
   readonly metadata: Readonly<Record<string, unknown>>;
 }
 
+/** 跳过原因的结构化分类（供可 grep 的可观测日志使用） */
+export type CustomSkillSkipReason = "invalid-name" | "builtin-conflict" | "duplicate" | "invalid-tier";
+
+/** 一条被跳过角色的结构化记录（name 为空串表示「缺少角色名」） */
+export interface CustomSkillSkip {
+  readonly name: string;
+  readonly reason: CustomSkillSkipReason;
+}
+
 /** 一轮规划的完整结果 */
 export interface CustomSkillPlan {
   /** 通过校验、可注册的技能（顺序 = 配置顺序） */
   readonly registrations: readonly CustomSkillRegistration[];
   /** 跳过原因（已含被跳过的角色名），供调用方 warn */
   readonly warnings: readonly string[];
+  /** 与 warnings 一一对应的结构化跳过记录，供调用方打 reason=<enum> 日志 */
+  readonly skips: readonly CustomSkillSkip[];
 }
 
 /** 内置技能名（重名检查的基准，取自生成物而非写死） */
@@ -72,6 +83,7 @@ export function planCustomSkills(
 ): CustomSkillPlan {
   const registrations: CustomSkillRegistration[] = [];
   const warnings: string[] = [];
+  const skips: CustomSkillSkip[] = [];
   const builtin = new Set(builtinNames);
   const seen = new Set<string>();
 
@@ -81,24 +93,29 @@ export function planCustomSkills(
 
     if (name.length === 0) {
       warnings.push(`cohub: ${where} 缺少角色名，已跳过`);
+      skips.push({ name, reason: "invalid-name" });
       continue;
     }
     if (!NAME_PATTERN.test(name)) {
       warnings.push(`cohub: ${where} 角色名不是 kebab-case（只允许 a-z0-9 与单个连字符），已跳过`);
+      skips.push({ name, reason: "invalid-name" });
       continue;
     }
     if (builtin.has(name)) {
       warnings.push(`cohub: ${where} 与内置角色重名，已跳过（内置角色优先）`);
+      skips.push({ name, reason: "builtin-conflict" });
       continue;
     }
     if (seen.has(name)) {
       warnings.push(`cohub: ${where} 与此前自定义角色重名，已跳过（保留第一条）`);
+      skips.push({ name, reason: "duplicate" });
       continue;
     }
     if (!isTier(role?.tier)) {
       warnings.push(
         `cohub: ${where} tier 非法（${String(role?.tier)}），已跳过；合法值：ro / ro-net / rw / rw-shell / cordis`,
       );
+      skips.push({ name, reason: "invalid-tier" });
       continue;
     }
 
@@ -113,7 +130,7 @@ export function planCustomSkills(
     });
   }
 
-  return { registrations, warnings };
+  return { registrations, warnings, skips };
 }
 
 /** 一条技能的内容签名：内容不变就不重注册（差量同步的判据） */
@@ -186,18 +203,38 @@ export function createCustomSkillRegistry(options: CustomSkillRegistryOptions): 
     logger?.warn?.(message);
   }
 
+  /** 已输出过的跳过日志（去重：与 warnings 同理，轮询每轮重算规划不得重复刷屏） */
+  const skipLogged = new Set<string>();
+
+  function logSkips(skips: readonly CustomSkillSkip[]): void {
+    for (const skip of skips) {
+      const key = `${skip.reason}\u0000${skip.name}`;
+      if (skipLogged.has(key)) continue;
+      skipLogged.add(key);
+      const shown = skip.name.length > 0 ? skip.name : "<empty>";
+      logger?.info?.(`[cohub/custom-role] skipped name=${shown} reason=${skip.reason}`);
+    }
+  }
+
   function sync(): void {
     if (disposed) return;
 
     const plan = planCustomSkills(getRoles(), builtinNames);
     // 告警与「技能集合是否变化」解耦：退出再登录同一角色时不重复刷屏
     for (const message of plan.warnings) warnOnce(message);
+    // 可观测性：跳过原因的结构化日志（只打一次，不改变跳过行为）
+    logSkips(plan.skips);
 
     const signature = plan.registrations.map(fingerprint).join("\u0001");
     if (signature === lastSignature) return; // 快路径：无变化
     lastSignature = signature;
 
     const next = new Map(plan.registrations.map((skill) => [skill.name, skill] as const));
+    let added = 0;
+    let removed = 0;
+    let updated = 0;
+    /** 本轮因内容变化被注销、待重建的角色名（这些属于 updated，不计 added） */
+    const rebuilt = new Set<string>();
 
     // ① 差量注销：删除的 + 内容改动的
     for (const [name, entry] of [...active]) {
@@ -205,6 +242,13 @@ export function createCustomSkillRegistry(options: CustomSkillRegistryOptions): 
       if (upcoming !== undefined && fingerprint(upcoming) === entry.print) continue; // 不变 → 保留
       try {
         entry.dispose();
+        logger?.info?.(`[cohub/custom-role] disposed name=${name}`);
+        if (upcoming !== undefined) {
+          updated += 1;
+          rebuilt.add(name);
+        } else {
+          removed += 1;
+        }
       } catch (error) {
         logger?.warn?.(`cohub: 注销自定义角色技能 ${name} 失败（忽略）`, error);
       }
@@ -220,11 +264,19 @@ export function createCustomSkillRegistry(options: CustomSkillRegistryOptions): 
           dispose: typeof off === "function" ? off : () => { /* 宿主无 disposer：退化为不可注销 */ },
           print: fingerprint(skill),
         });
+        // 可观测性：注册成功的证据（tier 便于核对 metadata 映射）
+        logger?.info?.(
+          `[cohub/custom-role] registered name=${skill.name} tier=${String(skill.metadata[CUSTOM_SKILL_TIER_KEY])}`,
+        );
+        if (!rebuilt.has(skill.name)) added += 1;
       } catch (error) {
         // 单条注册失败不得拖垮整批（更不得拖垮插件）
         logger?.warn?.(`cohub: 注册自定义角色技能 ${skill.name} 失败（跳过）`, error);
       }
     }
+
+    // 可观测性：一次快照变化（一轮对账的差量结果），供外部核对「是否真的同步了」
+    logger?.info?.(`[cohub/custom-role] sync changed added=${added} removed=${removed} updated=${updated}`);
 
     if (plan.registrations.length > 0) {
       logger?.info?.(
@@ -238,6 +290,8 @@ export function createCustomSkillRegistry(options: CustomSkillRegistryOptions): 
     active: () => [...active.keys()],
     start(intervalMs = CUSTOM_ROLE_POLL_MS) {
       sync(); // 挂载即注册，不等第一个 tick
+      // 可观测性：对账器已挂载（区分「没有变化」与「根本没在轮询」）
+      logger?.info?.(`[cohub/custom-role] watcher started interval=${intervalMs}`);
       if (timer !== null || intervalMs <= 0) return () => { /* 未启动 */ };
       timer = setTimer(() => {
         try {
@@ -265,6 +319,7 @@ export function createCustomSkillRegistry(options: CustomSkillRegistryOptions): 
       for (const [name, entry] of active) {
         try {
           entry.dispose();
+          logger?.info?.(`[cohub/custom-role] disposed name=${name}`);
         } catch {
           logger?.warn?.(`cohub: 卸载时注销自定义角色技能 ${name} 失败（忽略）`);
         }
