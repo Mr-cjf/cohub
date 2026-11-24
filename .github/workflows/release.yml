@@ -63,10 +63,31 @@ jobs:
             TAG="$REF_NAME"
           fi
 
+          # 每包附带：发布平台名（尾块文案用）、安装命令模板（@@VER@@ 稍后替换为真实版本）、是否发布到 npm。
+          # 安装命令均取自对应 packages/<pkg>/README.md，改 README 时请同步这里。
           case "$TAG" in
-            dsh-v*)      PKG="dsh-cohub";            MANIFEST="packages/dsh-cohub/package.json" ;;
-            opencode-v*) PKG="oh-my-opencode-cohub"; MANIFEST="packages/oh-my-opencode-cohub/package.json" ;;
-            codex-v*)    PKG="oh-my-codex-cohub";    MANIFEST="packages/oh-my-codex-cohub/package.json" ;;
+            dsh-v*)
+              PKG="dsh-cohub"
+              MANIFEST="packages/dsh-cohub/package.json"
+              PLATFORM="DSH"
+              INSTALL_TPL="dsh plugin --profile web add dsh-cohub@@VER@@"
+              IS_PRIVATE=false
+              ;;
+            opencode-v*)
+              PKG="oh-my-opencode-cohub"
+              MANIFEST="packages/oh-my-opencode-cohub/package.json"
+              PLATFORM="opencode"
+              INSTALL_TPL="opencode plugin oh-my-opencode-cohub@@VER@@ --global --force"
+              IS_PRIVATE=false
+              ;;
+            codex-v*)
+              PKG="oh-my-codex-cohub"
+              MANIFEST="packages/oh-my-codex-cohub/package.json"
+              PLATFORM="Codex"
+              # 私有包不发 npm：走仓库内 marketplace 安装，版本由 marketplace 条目决定
+              INSTALL_TPL="codex plugin marketplace add . && codex plugin add oh-my-codex-cohub@cohub"
+              IS_PRIVATE=true
+              ;;
             *)
               echo "::error::无法识别的 tag 前缀: $TAG（期望 dsh-v* / opencode-v* / codex-v*）"
               exit 1
@@ -107,6 +128,9 @@ jobs:
             *-*) PRERELEASE=true ;;
           esac
 
+          # 安装命令只在这里定型，避免模板占位符泄漏到 Release 正文
+          INSTALL_CMD="${INSTALL_TPL/@@VER@@/$VERSION}"
+
           if [ "$EVENT_NAME" = "push" ]; then
             if [ "$PRERELEASE" = "true" ]; then LATEST=false; else LATEST=true; fi
           else
@@ -125,9 +149,13 @@ jobs:
             echo "manifest=$MANIFEST"
             echo "prerelease=$PRERELEASE"
             echo "latest=$LATEST"
+            echo "platform=$PLATFORM"
+            echo "install_cmd=$INSTALL_CMD"
+            echo "is_private=$IS_PRIVATE"
           } >> "$GITHUB_OUTPUT"
 
-          echo "解析结果: tag=$TAG package=$PKG version=$VERSION manifest=$MANIFEST prerelease=$PRERELEASE latest=$LATEST"
+          echo "解析结果: tag=$TAG package=$PKG version=$VERSION manifest=$MANIFEST prerelease=$PRERELEASE latest=$LATEST private=$IS_PRIVATE"
+          echo "安装命令: $INSTALL_CMD"
 
       - name: 创建 GitHub Release（幂等）
         env:
@@ -138,6 +166,9 @@ jobs:
           MANIFEST: ${{ steps.meta.outputs.manifest }}
           PRERELEASE: ${{ steps.meta.outputs.prerelease }}
           LATEST: ${{ steps.meta.outputs.latest }}
+          PLATFORM: ${{ steps.meta.outputs.platform }}
+          INSTALL_CMD: ${{ steps.meta.outputs.install_cmd }}
+          IS_PRIVATE: ${{ steps.meta.outputs.is_private }}
         run: |
           set -euo pipefail
           TITLE="${PKG} ${VERSION}"
@@ -188,6 +219,26 @@ jobs:
             NOTES_SOURCE=changelog
           fi
           echo "::notice::notes source=$NOTES_SOURCE"
+
+          # 尾块：CHANGELOG 段落之后固定追加「发布说明」，补 CHANGELOG 段本身没有的安装入口与发版范围。
+          # 只在 notes 来自 CHANGELOG 时追加；--generate-notes 回退分支的正文由 GitHub 生成，不追加。
+          # 自验脚本按下面两行标记整段提取执行，改逻辑时请保留标记。
+          # BEGIN release-notes-tail
+          if [ "$NOTES_SOURCE" = "changelog" ]; then
+            {
+              printf '\n\n---\n\n## 发布说明\n\n'
+              if [ "$IS_PRIVATE" = "true" ]; then
+                printf -- '- 本包为 private，不发布到 npm；安装方式：`%s`\n' "$INSTALL_CMD"
+              else
+                printf -- '- `%s@%s`：https://www.npmjs.com/package/%s/v/%s\n' "$PKG" "$VERSION" "$PKG" "$VERSION"
+              fi
+              printf -- '- 安装：`%s`\n' "$INSTALL_CMD"
+              printf -- '- 必须重启 %s 后才会加载新版本。\n' "$PLATFORM"
+              printf -- '- 仅本包发版，其他包版本不变。\n'
+            } >> "$NOTES_FILE"
+          fi
+          # END release-notes-tail
+          echo "::notice::notes tail=$([ "$NOTES_SOURCE" = "changelog" ] && echo appended || echo skipped)"
 
           # 显式声明：预发布永不设为 Latest
           if [ "$NOTES_SOURCE" = "changelog" ]; then
