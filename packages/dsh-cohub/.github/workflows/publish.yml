@@ -4,14 +4,17 @@
 #
 # 本文件位于子包内，GitHub Actions 只加载仓库根 .github/workflows/ 目录，
 # 因此本文件自创建以来从未被 GitHub Actions 加载执行，当前不生效。
+# 真实发布流在根 .github/workflows/publish.yml。
 #
 # 自 monorepo 改造后，dsh-cohub 的发布工作流已迁移至仓库根：
 #   .github/workflows/publish.yml（唯一生效的发布流水线）
 #
 # 本包对应的 tag 前缀：dsh-v*
 # 手动触发方式：推送 dsh-v* 格式的 tag（如 dsh-v1.0.0），
-# 或在 GitHub Actions 页面用 workflow_dispatch 选择本包（dsh-cohub），
-# 根级工作流已为三个包（oh-my-opencode-cohub / dsh-cohub / cohub）都支持。
+# 或在 GitHub Actions 页面用 workflow_dispatch 选择本包（dsh-cohub）。
+# 根级工作流只覆盖两个走 npm 的包：oh-my-opencode-cohub / dsh-cohub；
+# oh-my-codex-cohub 的 package.json 为 private:true，不走 npm 发布，
+# 因此根级 publish.yml 中没有它的 job。
 #
 # 保留此文件是为了记录历史配置，便于回溯：原工作流定义包括
 # checkout@v4 / setup-node@v4 (node 24) / setup-bun@v2 (1.2.x) / npm ci /

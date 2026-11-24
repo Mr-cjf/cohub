@@ -63,9 +63,13 @@ npm 侧 Trusted Publisher 配置中的 workflow filename 参数只填 `publish.y
    ```bash
    git tag -a "dsh-vX.Y.Z" -m "release X.Y.Z" <main-SHA>      # dsh-cohub
    git tag -a "opencode-vX.Y.Z" -m "release X.Y.Z" <main-SHA> # oh-my-opencode-cohub
-   git push --follow-tags
+   # 精确推送单个 tag：--follow-tags 会连带推送其他本地 tag，破坏三套前缀独立发版
+   git push origin "refs/tags/dsh-vX.Y.Z"      # 或 "refs/tags/opencode-vX.Y.Z"
+   # codex 同理：git push origin "refs/tags/codex-vX.Y.Z"
    ```
 8. **CI 自动构建 + 发布** — 根 workflow 以 OIDC 身份 `npm publish --provenance`，可在 GitHub Actions 页面观察进度。**不要在本地运行 `npm publish`**。
+
+   Release 由 CI 用内置 `github.token` 创建（`.github/workflows/release.yml`），**本地不需要 `gh` 登录**；本机 `gh` 未配置不再阻塞发版，只影响本地手动验证（`gh release view` 之类）。
 
 > ⚠️ **为什么禁止 `npm version`**：它会自己改版本号、自己 commit、自己打 **lightweight** tag，并触发 `preversion` / `version` / `postversion` lifecycle，与我们「docs/chore 分提交 + annotated tag 带 message + tag 打在已核实的 main SHA 上」的手控流程直接冲突。版本号一律手改。
 
@@ -191,7 +195,8 @@ npm 侧的 workflow filename 参数填 `publish.yml`（不含 `.github/workflows
 | gh CLI | ❌ 未登录 |
 | 默认浏览器 | Firefox |
 
-- `gh` CLI 未登录意味着不能使用 `gh release create` 等命令在本地创建 GitHub Release——但不影响 `npm trust` 和 `npm publish`，这两者直接与 npm registry 交互。
+- Release 由 CI 用内置 `github.token` 创建（`.github/workflows/release.yml`），**本地不需要 `gh` 登录**；`gh` 未配置不再阻塞发版，只影响本地手动验证（`gh release view` / `gh release create` 这类命令仍需单独登录）。
+- `gh` 未登录也不影响 `npm trust` 和 `npm publish`，这两者直接与 npm registry 交互。
 - 本机 `%USERPROFILE%\.npmrc` 备份在 `C:\Users\14023\.npmrc.bak-20260916`（2024-08-14 旧 token 已过期时做的安全备份）。
 
 ## 失败教训：浏览器自动化为何不可行
@@ -242,6 +247,7 @@ npm trust github <包名> --repo Mr-cjf/cohub --file publish.yml --allow-publish
 | 文件 | 说明 |
 |------|------|
 | `.github/workflows/publish.yml` | 根级发布流水线（唯一生效） |
+| `.github/workflows/release.yml` | tag 推送后自动创建 GitHub Release（与 npm 发布独立） |
 | `packages/oh-my-opencode-cohub/.github/workflows/publish.yml` | 已改写为说明性注释（不生效） |
 | `packages/dsh-cohub/.github/workflows/publish.yml` | 已改写为说明性注释（不生效） |
 | `packages/*/CHANGELOG.md` | 各包的变更日志 |

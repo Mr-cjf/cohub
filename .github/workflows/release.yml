@@ -1,0 +1,175 @@
+# 独立的 GitHub Release 工作流：tag 推送或手动 dispatch 后创建 Release。
+# 与 publish.yml（npm OIDC 发布）互不影响，二者由同一批 tag 触发，各自幂等。
+# 认证只用内置 github.token（仅本 job 内提升 contents: write），无需 NPM_TOKEN 或任何密钥。
+
+name: Release
+
+on:
+  push:
+    tags:
+      - dsh-v*
+      - opencode-v*
+      - codex-v*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的已存在 tag，例如 dsh-v0.13.1'
+        type: string
+        required: true
+      make_latest:
+        description: '是否标记为该仓库的最新发布（预发布版本会强制为 false）'
+        type: boolean
+        default: false
+
+# 默认最小权限，只在 release job 内覆盖为 contents: write
+permissions:
+  contents: read
+
+# 同一 tag 串行执行且不取消进行中的任务，避免并发创建重复 Release
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 创建 GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 检出仓库（--generate-notes 需要完整历史与 tag）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: 解析 tag 与包元数据
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          MAKE_LATEST: ${{ inputs.make_latest }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # 所有外部输入只经 env 进入 shell，不拼进脚本、不 eval
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then
+            if [ "$EVENT_NAME" != "push" ]; then
+              echo "::error::手动触发必须提供 tag 输入"
+              exit 1
+            fi
+            TAG="$REF_NAME"
+          fi
+
+          case "$TAG" in
+            dsh-v*)      PKG="dsh-cohub";            MANIFEST="packages/dsh-cohub/package.json" ;;
+            opencode-v*) PKG="oh-my-opencode-cohub"; MANIFEST="packages/oh-my-opencode-cohub/package.json" ;;
+            codex-v*)    PKG="oh-my-codex-cohub";    MANIFEST="packages/oh-my-codex-cohub/package.json" ;;
+            *)
+              echo "::error::无法识别的 tag 前缀: $TAG（期望 dsh-v* / opencode-v* / codex-v*）"
+              exit 1
+              ;;
+          esac
+
+          VERSION="${TAG#*-v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::tag $TAG 的版本段 '$VERSION' 不是合法 SemVer"
+            exit 1
+          fi
+
+          # dispatch 场景本地可能没有该 tag，先同步远端 tag 引用（失败不阻断，最终由 rev-parse 守门）
+          # fetch 只是二次保险：把 stderr 带进 warning 便于诊断网络/权限问题，失败不中止脚本
+          FETCH_ERR=$(git fetch --tags --force origin 2>&1 >/dev/null) || echo "::warning::fetch tags failed, fallback to checkout tags: $FETCH_ERR"
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::tag $TAG 在仓库中不存在"
+            exit 1
+          fi
+
+          # 版本一律读 tag 快照内的清单，不读工作区文件：dispatch 补建历史 tag 时工作区是
+          # 默认分支 HEAD，用工作区文件会让除最新版外所有 tag 的等值校验必然失败。
+          if ! git cat-file -e "$TAG:$MANIFEST" 2>/dev/null; then
+            echo "::error::tag $TAG 内不存在该 manifest 路径: $MANIFEST"
+            exit 1
+          fi
+          MANIFEST_VERSION=$(git show "$TAG:$MANIFEST" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).version)))') || {
+            echo "::error::无法解析 $MANIFEST@$TAG 的 version 字段（该 tag 快照内清单损坏或缺少 version）"
+            exit 1
+          }
+          if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
+            echo "::error::版本不一致: tag=$TAG（$VERSION）≠ $MANIFEST@$TAG 快照版本=$MANIFEST_VERSION"
+            exit 1
+          fi
+
+          PRERELEASE=false
+          case "$VERSION" in
+            *-*) PRERELEASE=true ;;
+          esac
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            if [ "$PRERELEASE" = "true" ]; then LATEST=false; else LATEST=true; fi
+          else
+            case "${MAKE_LATEST:-false}" in
+              true|True|TRUE) LATEST=true ;;
+              *) LATEST=false ;;
+            esac
+            # 预发布永不标记为 latest
+            if [ "$PRERELEASE" = "true" ]; then LATEST=false; fi
+          fi
+
+          {
+            echo "tag=$TAG"
+            echo "package=$PKG"
+            echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
+            echo "latest=$LATEST"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "解析结果: tag=$TAG package=$PKG version=$VERSION prerelease=$PRERELEASE latest=$LATEST"
+
+      - name: 创建 GitHub Release（幂等）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          PKG: ${{ steps.meta.outputs.package }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          LATEST: ${{ steps.meta.outputs.latest }}
+        run: |
+          set -euo pipefail
+          TITLE="${PKG} ${VERSION}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，跳过创建（幂等）"
+            exit 0
+          fi
+          if [ "$PRERELEASE" = "true" ]; then
+            echo "创建预发布 Release：$TITLE"
+          else
+            echo "创建 Release：$TITLE（latest=$LATEST）"
+          fi
+
+          # 显式声明：预发布永不设为 Latest
+          args=(--title "$TITLE" --generate-notes --verify-tag)
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease --latest=false)
+          elif [ "$LATEST" = "true" ]; then
+            args+=(--latest)
+          else
+            args+=(--latest=false)
+          fi
+
+          if gh release create "$TAG" "${args[@]}"; then
+            echo "已创建 Release：$TITLE"
+            exit 0
+          fi
+
+          # create 失败可能只是并发创建抢先成功，复查一次
+          echo "::warning::gh release create 失败，复查是否已被并发创建"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已由并发任务创建，视为成功"
+            exit 0
+          fi
+          echo "::error::创建 Release 失败，且 tag $TAG 不存在对应 Release"
+          exit 1
