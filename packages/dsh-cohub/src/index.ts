@@ -103,6 +103,43 @@ const SkillRoute = z.object({
     .description("输出契约等级（off=不注入不校验 / lite=注入+校验+标记违约 / strict=注入+校验+重写一次；留空=off）"),
 });
 
+/**
+ * 用户自定义团队角色的单条配置（Config.customRoles 的数组元素）。
+ *
+ * 定位：内置 13 个角色（co-orchestrator + 12 专职代理）之外的**用户自带角色**，
+ * 让用户在 profile patch 里声明「某个名字 + 该角色干什么 + 用哪档工具」，
+ * 由后续批次的注册逻辑映射为一个可被 delegate({ skill }) 引用的 runtime skill。
+ *
+ * 校验全部落在 schema 层（官方设置页 / cordis.patch.yml 校验共用同一份），便于 GUI 生成表单：
+ *   - name / description / prompt / tier 四个字段都 `.required()`：缺字段报
+ *     `$.customRoles[0].name missing required value`；
+ *   - name 用 pattern 约束 kebab-case（首尾无分隔符、只含 a-z0-9 与单个连字符），
+ *     与内置角色命名（co-explorer / co-rule-user）一致；空串也被该 pattern 拒绝；
+ *   - description / prompt 用 `.min(1)`：空串报 `expected string length >= 1 but got 0`；
+ *   - tier 用 `z.union`（schemastery 的枚举即 union）：非法值报
+ *     `expected "ro" | "ro-net" | "rw" | "rw-shell" | "cordis" but got "nope"`。
+ *
+ * **不在这里做重名检查**（是否与内置 13 个角色或彼此的 name 重复）——那需要运行时上下文
+ * （内置角色表 / 已注册技能目录），由后续批次的注册逻辑负责。
+ */
+const CustomRole = z.object({
+  /** 角色名：kebab-case，未来作为 delegate({ skill }) 的取值 */
+  name: z
+    .string()
+    .pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+    .required()
+    .description("角色名（kebab-case，如 my-reviewer）；不得与内置 13 个角色重名（重名检查在注册时进行）"),
+  /** 一句话职责：进技能目录给主代理选人，也作为 GUI 列表的副标题 */
+  description: z.string().min(1).required().description("角色职责（必填，非空）：一句话说明什么时候该派给它"),
+  /** 该角色的任务指令，未来映射为子代理 brief（prompt 前缀） */
+  prompt: z.string().min(1).required().description("该角色的任务指令（必填，非空）：未来映射为子代理 brief"),
+  /** 工具档位：决定该角色子代理能用的工具表 */
+  tier: z
+    .union(["ro", "ro-net", "rw", "rw-shell", "cordis"])
+    .required()
+    .description("工具档位：ro=只读 / ro-net=只读+联网 / rw=读写 / rw-shell=读写+shell / cordis=Cordis 插件改写"),
+});
+
 /** delegate 执行器环境契约注入配置（P1-1）：默认开、可关闭、文本可覆盖 */
 const EnvContractConfig = z.object({
   /** 是否在 delegate spawn prompt 前注入执行器环境契约；默认开 */
@@ -241,6 +278,12 @@ export const Config = z.object({
    *  volatile：DSH 0.2 起由 Loader 按活动 profile entry id 投影为设置页可编辑字段，
    *  变更经 loader/volatile-update 提交到同一引用，无需重挂载（apply 内以 config.skills.get() 实时读取）。 */
   skills: volatileSchema(z.array(SkillRoute).default([])),
+  /** 用户自定义团队角色（内置 13 个角色之外的扩展）：每项 name/description/prompt/tier
+   *  必填，name 必须 kebab-case，tier 取自 5 个档位枚举。默认 []（= 只用内置角色）。
+   *  本批只做配置管道（字段 + schema + patch 默认值）；注册为 runtime skill、重名检查、
+   *  按 tier 派发工具表由后续批次接入，因此当前配置该字段对运行时行为无影响。
+   *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）——用户可改、热生效。 */
+  customRoles: volatileSchema(z.array(CustomRole).default([])),
   /** delegate 执行器环境契约注入（P1-1）：默认开，文本可覆盖 */
   delegateEnvContract: EnvContractConfig,
   /** delegate 中止/失败自动重试（P1-2）：默认不重试。
@@ -268,7 +311,7 @@ export const Config = z.object({
   installPresets: z.boolean().default(true),
 });
 
-export { ScheduleConfig, ResultBudgetConfig, DelegateBackgroundConfig, CohubSettingsSchema };
+export { ScheduleConfig, ResultBudgetConfig, DelegateBackgroundConfig, CustomRole, CohubSettingsSchema };
 /** 兼容/测试导出：preset 安装台账与递归复制（实现位于 preset-install.ts） */
 export { copyTree, installShippedPresets, hashTree, removeInstallRecord } from "./preset-install";
 

@@ -175,6 +175,11 @@ revision 冲突拒绝保存、只写显式配置的代理等。
     councilTimeoutMs: 180000
     skills: []               # delegate 委派路由（DSH 0.2 起由设置页按 profile entry id 投影此 volatile 字段，实时生效）
                              # 每条路由可配 provider/model/maxTokens/reasoningEffort，见下节「skills 字段」
+    customRoles: []          # 用户自定义团队角色（内置 13 个角色之外）。默认 [] = 只用内置角色；
+                             # volatile：设置页可改、热生效。每项四字段全部必填：
+                             #   name（kebab-case，不得与内置角色重名）/ description（非空）
+                             #   / prompt（非空，未来映射为子代理 brief）/ tier（ro|ro-net|rw|rw-shell|cordis）
+                             # 重名检查在运行时注册逻辑中进行；本版仅配置管道，尚不影响运行时行为。
 ```
 
 **启用 council**（councillors 非空时自动注册 council_session 工具）：

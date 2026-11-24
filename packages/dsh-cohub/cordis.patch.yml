@@ -28,6 +28,22 @@
         #   - { name: co-oracle,   provider: deepseek-official, model: deepseek-v4-pro, reasoningEffort: high }
         #   - { name: co-explorer, reasoningEffort: low }   # 只降档，模型仍用父会话的
         skills: []
+        # customRoles：用户自定义团队角色（内置 13 个角色之外）。默认 []，即只用内置角色。
+        # DSH 0.2 起本字段同样是 volatile（设置页可改、热生效），此处为组合层初始值。
+        # 每项四个字段全部必填（schema 层校验，缺任一字段即拒绝挂载）：
+        #   name         kebab-case（^[a-z0-9]+(-[a-z0-9]+)*$），不得与内置 13 个角色重名
+        #   description  非空，一句话职责（什么时候该派给它）
+        #   prompt       非空，该角色的任务指令（未来映射为子代理 brief）
+        #   tier         工具档位，五选一：ro / ro-net / rw / rw-shell / cordis
+        # 注意：重名检查在运行时（注册逻辑）进行，不在 schema 层；本批仅配置管道，
+        # 注册与按 tier 派发工具表由后续批次接入，因此当前配置本字段对运行时行为无影响。
+        # 示例：
+        #   customRoles:
+        #     - name: my-reviewer
+        #       description: 只读代码审查，输出风险清单
+        #       prompt: 你只审查，不修改；按文件列出风险与建议
+        #       tier: ro
+        customRoles: []
         # delegateEnvContract: delegate 委派时是否在子代理 prompt 前注入「执行器环境契约」
         # （通用原则 + 探测式自适应，避免子代理在陌生执行环境现场盲试）。默认开；可关闭/可覆盖文本：
         #   delegateEnvContract: { enabled: true }                    # 默认
