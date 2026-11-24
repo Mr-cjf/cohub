@@ -2,6 +2,14 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.3] - 2026-11-24
+
+### 变更
+
+- **结果预算：取消 co-planner 的 1500 字符硬上限**——方案正文不再被中段截断（co-planner 跑在只读 preset，无法自行落盘，硬压只会丢信息）。
+- **取消子代理字数自我压缩契约**：explorer / fixer / orchestrator 不再要求输出 ≤3000 字符；超长由宿主自动落盘并返回 locator，主代理直接回读。
+- **调整 spill 使用指引**：全文完整保存在 locator 文件，主代理需要明细时直接 read。
+
 ## [0.13.2] - 2026-11-24
 
 ### 变更
