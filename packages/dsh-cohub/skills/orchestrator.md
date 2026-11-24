@@ -39,6 +39,7 @@ delegate_batch({ tasks: [
 - 漏 `skill` → `missing required property "skill"`，整批拒绝。
 - `skill` 必须取 13 个合法值之一：co-oracle / co-explorer / co-librarian / co-designer / co-fixer / co-observer / co-council / co-rule-user / co-rule-project / co-rule-app / co-planner / co-cordis（co-orchestrator 是主代理自己，一般委派用其余 12 个）。填了无效名 → 该 task 单独返回 error（不拖垮同批），但**不会**静默降级，务必用正确名。
 - 想标注用途时写进 `id`（如 `id: "analyze-conflicts"`），**不要自造字段名**。
+- **构造顺序（硬性，防漏键）**：每个 task 按 `skill` → `id` → `prompt` 的顺序写，`skill` 必须是第一个键。理由：`prompt` 通常上千字，最后补 `skill` 时最容易被长文本挤掉——实测已两次因「prompt 先写、skill 后补」导致整批被 `missing required property "tasks[0].skill"` 拒绝。闭合每个 task 前默数三个键，缺一即不发。
 
 一次工具调用内部并行派发 N 个无依赖任务（Promise.allSettled 真正并行），避免 agent loop 将多个 tool_use 串行化——实测本环境同消息多 tool_use 很少真正并发。**≥2 个无依赖任务（尤其信息收集/探索）优先用一次 delegate_batch**。**同文件写冲突不能入同一批（需串行）；独立只读同文件可并行**。
 - 特性：每 task 独立 AbortController 超时主动中止；只尝试一次（不重试），由墙钟预算兜底；父级中止全部取消；返回 { status: completed/failed/error, result, error }。
@@ -233,6 +234,6 @@ Orchestrator 禁止使用任何文件/代码操作工具（read、grep、glob、
 □ **本轮需要同时发起多个独立操作吗？** → 有 2+ 个无依赖且不冲突任务 → 按拆批规则单条消息 N 个 delegate tool_use 并发（单批 ≤ maxParallelBatch 缺省 5，超预算分批 job 轮询或前台逐批降级），不得逐个串行也不得超预算整批并行；数据依赖/同文件写冲突 → 串行分批；仅 1 个任务（确认无其他可并行）→ 可单个发起
 □ **本轮是否提议新增能力？** → 先过规则 4 三问（低频/重叠/为用而用），任一不过不新增
 □ **本轮 delegate 参数是否完整？** → 每个 delegate 都有 skill（必填）与 prompt（必填，自包含：目标/路径/约束/输出格式），skill 值在可用代理列表中
-□ **delegate_batch 每个 task 是否恰好只有 id/skill/prompt 三个键、且 skill 取自 13 个合法值？** → 多键或拼错会导致整批/该 task 失败
+□ **delegate_batch 每个 task 是否恰好只有 id/skill/prompt 三个键、skill 是第一个键、且 skill 取自 13 个合法值？** → 多键或拼错会导致整批/该 task 失败；「skill 第一键」是构造顺序约束，不是事后检查
 □ **本轮待修对象是否与执行工具同属一套基础设施？** → 是则先跑通道探针，失败则停手止血，不得继续委派
 </自检清单>
