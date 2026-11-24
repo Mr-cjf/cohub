@@ -109,7 +109,7 @@ const LOCATOR_FALLBACK = "落盘失败";
 const OVERHEAD_RESERVE = 24;
 
 /** 尾部使用指引（中文；只在确实裁剪过时才出现） */
-const USAGE_HINT = "（需具体行号/原始报错时才读全文；只需结论时勿读；同一 locator 最多读 2 次）";
+const USAGE_HINT = "（全文已完整保存在该文件，主代理需要明细时直接 read（同一 locator 最多读 2 次）；子代理无需为控字数删减内容）";
 
 /** 契约段自身的收缩标记（仅当契约段自己就把预算吃穿时出现） */
 const CONTRACT_CLIP_MARK = "\n…[契约段自身超预算，已中段省略]…\n";
