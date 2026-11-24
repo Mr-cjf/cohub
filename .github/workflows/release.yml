@@ -63,21 +63,21 @@ jobs:
             TAG="$REF_NAME"
           fi
 
-          # 每包附带：发布平台名（尾块文案用）、安装命令模板（@@VER@@ 稍后替换为真实版本）、是否发布到 npm。
+          # 每包附带：发布平台名（尾块文案用）、安装命令模板（%VER% 稍后替换为真实版本）、是否发布到 npm。
           # 安装命令均取自对应 packages/<pkg>/README.md，改 README 时请同步这里。
           case "$TAG" in
             dsh-v*)
               PKG="dsh-cohub"
               MANIFEST="packages/dsh-cohub/package.json"
               PLATFORM="DSH"
-              INSTALL_TPL="dsh plugin --profile web add dsh-cohub@@VER@@"
+              INSTALL_TPL="dsh plugin --profile web add dsh-cohub@%VER%"
               IS_PRIVATE=false
               ;;
             opencode-v*)
               PKG="oh-my-opencode-cohub"
               MANIFEST="packages/oh-my-opencode-cohub/package.json"
               PLATFORM="opencode"
-              INSTALL_TPL="opencode plugin oh-my-opencode-cohub@@VER@@ --global --force"
+              INSTALL_TPL="opencode plugin oh-my-opencode-cohub@%VER% --global --force"
               IS_PRIVATE=false
               ;;
             codex-v*)
@@ -128,8 +128,9 @@ jobs:
             *-*) PRERELEASE=true ;;
           esac
 
-          # 安装命令只在这里定型，避免模板占位符泄漏到 Release 正文
-          INSTALL_CMD="${INSTALL_TPL/@@VER@@/$VERSION}"
+          # 占位符 %VER% 只替换版本号本身：模板里的 @ 保留在占位符之外，避免渲染成 dsh-cohub0.13.2。
+          # codex 模板无 %VER%，替换为无操作，命令保持原样。
+          INSTALL_CMD="${INSTALL_TPL/\%VER\%/$VERSION}"
 
           if [ "$EVENT_NAME" = "push" ]; then
             if [ "$PRERELEASE" = "true" ]; then LATEST=false; else LATEST=true; fi
