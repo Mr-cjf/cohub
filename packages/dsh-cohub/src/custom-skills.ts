@@ -212,6 +212,7 @@ export function createCustomSkillRegistry(options: CustomSkillRegistryOptions): 
       if (skipLogged.has(key)) continue;
       skipLogged.add(key);
       const shown = skip.name.length > 0 ? skip.name : "<empty>";
+      console.log('[cohub/custom-role] skipped name=' + shown + ' reason=' + skip.reason);
       logger?.info?.(`[cohub/custom-role] skipped name=${shown} reason=${skip.reason}`);
     }
   }
@@ -242,6 +243,7 @@ export function createCustomSkillRegistry(options: CustomSkillRegistryOptions): 
       if (upcoming !== undefined && fingerprint(upcoming) === entry.print) continue; // 不变 → 保留
       try {
         entry.dispose();
+        console.log('[cohub/custom-role] disposed name=' + name);
         logger?.info?.(`[cohub/custom-role] disposed name=${name}`);
         if (upcoming !== undefined) {
           updated += 1;
@@ -265,6 +267,7 @@ export function createCustomSkillRegistry(options: CustomSkillRegistryOptions): 
           print: fingerprint(skill),
         });
         // 可观测性：注册成功的证据（tier 便于核对 metadata 映射）
+        console.log('[cohub/custom-role] registered name=' + skill.name + ' tier=' + String(skill.metadata[CUSTOM_SKILL_TIER_KEY]));
         logger?.info?.(
           `[cohub/custom-role] registered name=${skill.name} tier=${String(skill.metadata[CUSTOM_SKILL_TIER_KEY])}`,
         );
@@ -276,6 +279,7 @@ export function createCustomSkillRegistry(options: CustomSkillRegistryOptions): 
     }
 
     // 可观测性：一次快照变化（一轮对账的差量结果），供外部核对「是否真的同步了」
+    console.log('[cohub/custom-role] sync changed added=' + added + ' removed=' + removed + ' updated=' + updated);
     logger?.info?.(`[cohub/custom-role] sync changed added=${added} removed=${removed} updated=${updated}`);
 
     if (plan.registrations.length > 0) {
@@ -291,6 +295,7 @@ export function createCustomSkillRegistry(options: CustomSkillRegistryOptions): 
     start(intervalMs = CUSTOM_ROLE_POLL_MS) {
       sync(); // 挂载即注册，不等第一个 tick
       // 可观测性：对账器已挂载（区分「没有变化」与「根本没在轮询」）
+      console.log('[cohub/custom-role] watcher started interval=' + intervalMs);
       logger?.info?.(`[cohub/custom-role] watcher started interval=${intervalMs}`);
       if (timer !== null || intervalMs <= 0) return () => { /* 未启动 */ };
       timer = setTimer(() => {
@@ -319,6 +324,7 @@ export function createCustomSkillRegistry(options: CustomSkillRegistryOptions): 
       for (const [name, entry] of active) {
         try {
           entry.dispose();
+          console.log('[cohub/custom-role] disposed name=' + name);
           logger?.info?.(`[cohub/custom-role] disposed name=${name}`);
         } catch {
           logger?.warn?.(`cohub: 卸载时注销自定义角色技能 ${name} 失败（忽略）`);
