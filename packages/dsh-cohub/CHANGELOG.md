@@ -2,6 +2,21 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.4] - 2026-11-25
+
+### 新增
+
+- **用户自定义团队（自定义子代理角色）**：`Config.customRoles` 支持在设置页自行增删改角色（名称/职责/提示词/工具档位），保存后约 1 秒热生效，无需重启。
+- **工具档位**：`ro` / `ro-net` / `rw` / `rw-shell` / `cordis` 五档，映射到独立 preset；新增 `cohub-subagent-readonly-net` 与 `cohub-subagent-write-shell` 两个档位 preset。
+- **预置写作组**：新增 `co-writer` / `co-editor` / `co-outliner` 三个内置角色（内置角色达 16 个）。
+- **设置页「自定义团队」编辑器**：列表 / 新增 / 编辑 / 删除 / 前端校验（kebab-case、内置重名、非空）。
+
+### 变更
+
+- **派发层按档位决定工具与 preset**：内置角色行为逐字不变（有 13 角色向后兼容对比断言）。
+- **preset 声明自动写入**：安装/升级时幂等写入 profile patch，冲突时保留用户版本并告警。
+- **可观测**：自定义角色注册/注销/跳过增加 console 日志。
+
 ## [0.13.3] - 2026-11-24
 
 ### 变更
