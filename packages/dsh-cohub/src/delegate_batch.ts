@@ -811,7 +811,7 @@ export function createDelegateBatchTool(
               });
               resultEvents.push(taskEvents);
               // P1-3：每个任务结果先各自预算裁剪（超预算时落盘定位），之后才参与总串拼接
-              // 改动 3 同款：按 skill 分档取更小上限（co-planner 1500 字符；契约段仍优先保留）
+              // 改动 3 同款：按 skill 解析上限（现无分档特例，一律全局档；契约段仍优先保留）
               const resultText = await budgetSubagentResult(ctx, exec, rawText, {
                 maxChars: Math.min(budget.batchTaskMaxChars, resolveSkillResultMaxChars(budget, skillName)),
                 scope: "batch:task",

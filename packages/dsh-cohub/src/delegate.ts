@@ -2230,7 +2230,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             }
             // P1-3：结果先经「契约保留 + 预算裁剪 + 落盘定位」再回传，
             // 避免子代理全文永久驻留父会话历史并被每轮重发。
-            // 改动 3：按 skill 分档取更小上限（co-planner 硬压到 1500 字符；契约段仍优先保留）。
+            // 改动 3：按 skill 解析上限（现无分档特例，一律全局档 maxChars=12000；契约段仍优先保留）。
             const budgeted = await budgetSubagentResult(ctx, exec, rawResult, {
               maxChars: resolveSkillResultMaxChars(budget, skill.name),
               scope: "delegate",

@@ -64,36 +64,30 @@ export interface ResolvedResultBudget {
 /** 单个字符数配置的最小可用值：低于它会产生「越裁越长」的畸形输出。 */
 const MIN_BUDGET_CHARS = 200;
 
-/**
- * 少数角色的**自身**结果上限（skill → 字符数查表）。
- *
- * 与全局档 `config.resultBudget.maxChars` 的关系：**取更小者**。全局档是用户给所有子代理
- * 设的宽上限，本表是某些角色的硬上限——用户把全局档调大不该让这些角色重新回到长输出
- * （那正是要治的病），故不受全局档放宽影响。
- *
- * 依据（真实会话实测）：一次 co-planner 委派里，工具只占 268s，**422s 是模型自己生成**，
- * 其中 step6 单步 265s / 10,076 output tokens——方案正文越长，生成越久，且全文永久驻留
- * 父会话历史被每轮重发。故把 co-planner 的输出硬压到 1500 字符（超长子任务清单改落文件）。
- */
-export const SKILL_RESULT_BUDGET_CHARS: Readonly<Record<string, number>> = {
-  "co-planner": 1_500,
-};
+// 注意：这里**没有**「按 skill 分档的自身结果上限」查表（曾经有一张，现在已删除）。
+//
+// 历史方案曾把 co-planner 的输出硬压到 1500 字符，理由是「超长子任务清单改落文件」。该理由
+// 不成立：co-planner 跑在 readonly preset（无 `write` / `edit` 工具），它自己落不了盘；本模块
+// 的 spill 落盘是父侧插件代写，但能回读 locator 的只有 orchestrator，而 orchestrator 禁读文件
+// （见 skills/orchestrator.md）——于是「压到 1500 + 落盘」的实际效果只是把方案正文中段截断，
+// 信息既补不回、也读不到，下游只能重新委派。
+//
+// 故结果上限**一律由全局档 `config.resultBudget.maxChars` 决定**（默认 12_000 字符
+// ≈ 4000 tokens，见 DEFAULT_DELEGATE_RESULT_CHARS 的依据注释），少数角色不再设特例。
+// 若将来确要按 skill 分档，先确认该角色有把超长内容送出去且被读回的通道，再启用。
 
 /**
  * 解析某 skill 的生效结果上限（字符）。
  *
- * 未命中查表 → 原样返回全局档（行为不变，零风险）；命中 → `min(全局档, 分档值)`，
- * 并抬到 MIN_BUDGET_CHARS 以保证裁剪逻辑仍能保留契约段。
+ * 分档表已移除（原因见上方说明）：所有 skill 一律返回全局档 `budget.maxChars`，
+ * 即与「未命中查表」的历史路径逐字一致，行为零变化。
  *
  * @param budget 已归一的预算配置（resolveResultBudget 的输出）
- * @param skillName skill 名（可能为空 / 未知 / 未指定）
+ * @param _skillName skill 名（保留参数以兼容既有调用点；当前不影响返回值）
  * @returns 该 skill 本次结果的字符上限
  */
-export function resolveSkillResultMaxChars(budget: ResolvedResultBudget, skillName?: string): number {
-  const key = typeof skillName === "string" ? skillName.trim() : "";
-  const tier = key.length > 0 ? SKILL_RESULT_BUDGET_CHARS[key] : undefined;
-  if (tier === undefined) return budget.maxChars;
-  return Math.max(MIN_BUDGET_CHARS, Math.min(budget.maxChars, tier));
+export function resolveSkillResultMaxChars(budget: ResolvedResultBudget, _skillName?: string): number {
+  return budget.maxChars;
 }
 
 /** 契约段识别：XML 风格标签（大小写不敏感） */
