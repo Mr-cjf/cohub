@@ -322,7 +322,7 @@ export const SUBAGENT_WRITE_PRESET = "cohub-subagent-write";
  *
  * 档位化后内置角色的 preset 变化（有意的能力升级，见 roles.ts 的档位表）：
  *   co-librarian ro → cohub-subagent-readonly-net；co-fixer rw-shell → cohub-subagent-write-shell；
- *   co-cordis cordis → cohub-cordis。其余 9 个内置角色与接线前逐字一致。
+ *   co-cordis cordis → cohub-cordis。其余内置角色与接线前逐字一致。
  *
  * @param skillName - 规范化后的 skill 名（如 co-fixer / 自定义角色名）。
  * @param enabled - 总开关（Config.delegateSubagentPreset.enabled，默认 true）。
@@ -1225,7 +1225,7 @@ export function resolveSkillAndRoute(
       ? '传入的 skill 名 "' + echoName + '" 存在但已被禁用（config.disabledSkills），已兜底为 '
         + DEFAULT_FALLBACK_SKILL + "，子代理 preset 同步回退为实施类 " + SUBAGENT_WRITE_PRESET
         + "；如需使用请从禁用清单中移除，而不是改名"
-      : '传入的 skill 名 "' + echoName + '" 未匹配任何角色（内置 13 个 + config.customRoles），已兜底为 '
+      : '传入的 skill 名 "' + echoName + '" 未匹配任何角色（内置角色 + config.customRoles），已兜底为 '
         + DEFAULT_FALLBACK_SKILL + "，子代理 preset 同步回退为实施类 " + SUBAGENT_WRITE_PRESET;
   } else if (fallback) {
     (logger ?? ctx.logger)?.warn?.(

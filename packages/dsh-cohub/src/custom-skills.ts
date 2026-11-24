@@ -1,6 +1,6 @@
 // dsh-cohub/src/custom-skills.ts —— 用户自定义角色（Config.customRoles）→ runtime skill
 //
-// 定位：内置 13 个技能由 src/skills.ts（skills/*.md 生成物）提供，注册即结束；
+// 定位：内置技能由 src/skills.ts（skills/*.md 生成物）提供，注册即结束；
 // 自定义角色来自**用户可改的 volatile 配置**，因此除了「注册」还要处理三件内置技能不需要的事：
 //   ① 冲突与脏值（schema 管不到的运行时重名 / 非法 tier / 非法名）——跳过 + warn，绝不让插件启动失败；
 //   ② tier 信息外露（技能 metadata.tier）——派发层改用 roles.ts 的 resolveTier 直读 config，
@@ -49,7 +49,7 @@ export interface CustomSkillPlan {
   readonly warnings: readonly string[];
 }
 
-/** 内置 13 个技能名（重名检查的基准，取自生成物而非写死） */
+/** 内置技能名（重名检查的基准，取自生成物而非写死） */
 export const BUILTIN_SKILL_NAMES: readonly string[] = COHUB_SKILLS.map((skill) => skill.name);
 
 function text(value: unknown): string {
@@ -61,7 +61,7 @@ function text(value: unknown): string {
  *
  * 跳过规则（任何一条命中即跳过并记 warning，绝不抛错）：
  *   - name 非字符串 / 空 / 不符合 kebab-case；
- *   - name 与内置 13 个技能重名（内置优先，用户不能覆盖内置人设）；
+ *   - name 与内置技能重名（内置优先，用户不能覆盖内置人设）；
  *   - 同一批 customRoles 内重名（保留**第一条**）；
  *   - tier 不是 5 个合法档位之一（`isTier`）。
  * description / prompt 为空串时退回一个可读占位（schema 已 `.min(1)`，此处只做运行时兜底）。

@@ -41,17 +41,21 @@ const EXPECTED_BUILTIN: ReadonlyArray<readonly [string, Tier]> = [
   ["co-rule-project", "ro"],
   ["co-rule-app", "ro"],
   ["co-librarian", "ro-net"],
+  ["co-outliner", "ro-net"],
   ["co-designer", "rw"],
+  ["co-writer", "rw"],
   ["co-fixer", "rw-shell"],
   ["co-cordis", "cordis"],
+  ["co-editor", "ro"],
 ];
 
 // ── 用例 1：内置角色查档（逐角色锁死） ────────────────────────────────────
-group("用例 1：内置角色查档（12 个角色逐一）");
+group("用例 1：内置角色查档（" + EXPECTED_BUILTIN.length + " 个角色逐一）");
 for (const [name, tier] of EXPECTED_BUILTIN) {
   check(`resolveTier(${name}) = ${tier}`, resolveTier(name) === tier);
 }
-check("内置表条目数 = 12（13 个内置角色去掉主代理 co-orchestrator）", Object.keys(BUILTIN_ROLE_TIERS).length === 12);
+check("内置表条目数 = " + EXPECTED_BUILTIN.length + "（内置角色去掉主代理 co-orchestrator）",
+  Object.keys(BUILTIN_ROLE_TIERS).length === EXPECTED_BUILTIN.length);
 check("主代理 co-orchestrator 不在表内（查档返回 null）", resolveTier("co-orchestrator") === null);
 check("表内无多余角色（与期望清单完全一致）",
   Object.keys(BUILTIN_ROLE_TIERS).every((name) => EXPECTED_BUILTIN.some(([n]) => n === name)));

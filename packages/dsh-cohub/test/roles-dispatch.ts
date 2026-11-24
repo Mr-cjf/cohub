@@ -74,8 +74,14 @@ function oldAgentPreset(skillName: string | undefined): string | undefined {
   return OLD_WRITE_PRESET;
 }
 
-/** 13 个内置角色（含主代理 co-orchestrator） */
-const BUILTIN_NAMES: readonly string[] = COHUB_SKILLS.map((skill) => skill.name);
+/**
+ * 「接线前已存在」的内置角色（含主代理 co-orchestrator），逐项对比旧值的基准集。
+ * 写作组（co-writer / co-editor / co-outliner）是接线后新增的，没有旧值可比，
+ * 由下方「全部内置角色都能解析出 preset」一条覆盖，不计入本对比表。
+ */
+const POST_COMPAT_ADDITIONS: ReadonlySet<string> = new Set(["co-writer", "co-editor", "co-outliner"]);
+const BUILTIN_NAMES: readonly string[] = COHUB_SKILLS.map((skill) => skill.name)
+  .filter((name) => !POST_COMPAT_ADDITIONS.has(name));
 
 /**
  * 有意变化清单（档位表驱动的能力升级，上一批 d6c43d9 新增 readonly-net / write-shell 的目的）：
@@ -143,8 +149,8 @@ const CUSTOM: readonly CustomRoleConfig[] = [{
 const snapshotWithCustom = resolveSkillSnapshot({ customRoles: CUSTOM });
 const customLookup = snapshotWithCustom.resolve("my-researcher");
 check("自定义角色可被技能查表命中", customLookup.ok === true);
-check("自定义角色出现在快照名单里（内置 13 + 1）",
-  snapshotWithCustom.names.includes("my-researcher") && snapshotWithCustom.names.length === BUILTIN_NAMES.length + 1);
+check("自定义角色出现在快照名单里（全部内置角色 + 1）",
+  snapshotWithCustom.names.includes("my-researcher") && snapshotWithCustom.names.length === COHUB_SKILLS.length + 1);
 check("自定义角色档位 = ro-net", resolveTier("my-researcher", CUSTOM) === "ro-net");
 check("自定义角色 preset = cohub-subagent-readonly-net",
   resolveSkillAgentPreset("my-researcher", true, CUSTOM) === "cohub-subagent-readonly-net");

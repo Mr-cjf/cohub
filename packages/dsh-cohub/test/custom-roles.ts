@@ -3,7 +3,7 @@
 //
 // 被测契约（对应任务书五类）：
 //   ① 自定义角色被注册成 runtime skill（名字进技能表 + 正文=prompt + metadata.tier）
-//   ② 与内置 13 个角色重名 → 跳过 + warn，不抛错、不影响其余自定义角色
+//   ② 与内置角色重名 → 跳过 + warn，不抛错、不影响其余自定义角色
 //   ③ 两个自定义重名 → 只留第一条 + warn
 //   ④ 非法 tier → 跳过 + warn（顺带覆盖非法 kebab-case 名 / 缺名）
 //   ⑤ Config 从 A 改成 B（模拟 volatile 提交）→ A 被注销、B 被注册；卸载时全部注销
@@ -94,10 +94,10 @@ group("用例 1：自定义角色 → runtime skill");
   check("dispose 后技能被注销", !skills.registered.has("my-reviewer"));
 }
 
-// ── 用例 2：与内置 13 个角色重名 → 跳过 + warn，不抛错 ────────────────────
+// ── 用例 2：与内置角色重名 → 跳过 + warn，不抛错 ────────────────────
 group("用例 2：与内置角色重名");
 {
-  check("内置技能名基数 = 13", BUILTIN_SKILL_NAMES.length === 13 && COHUB_SKILLS.length === 13);
+  check("内置技能名基数 = COHUB_SKILLS 实际条数（不写死数字）", BUILTIN_SKILL_NAMES.length === COHUB_SKILLS.length && COHUB_SKILLS.length >= 13);
   const { ctx, skills, logger } = makeMockCtx();
   const registry = createCustomSkillRegistry({
     skills: ctx.skills,

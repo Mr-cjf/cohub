@@ -107,7 +107,7 @@ const SkillRoute = z.object({
 /**
  * 用户自定义团队角色的单条配置（Config.customRoles 的数组元素）。
  *
- * 定位：内置 13 个角色（co-orchestrator + 12 专职代理）之外的**用户自带角色**，
+ * 定位：内置角色（co-orchestrator + 各专职代理，见 src/skills.ts）之外的**用户自带角色**，
  * 让用户在 profile patch 里声明「某个名字 + 该角色干什么 + 用哪档工具」，
  * 由后续批次的注册逻辑映射为一个可被 delegate({ skill }) 引用的 runtime skill。
  *
@@ -120,7 +120,7 @@ const SkillRoute = z.object({
  *   - tier 用 `z.union`（schemastery 的枚举即 union）：非法值报
  *     `expected "ro" | "ro-net" | "rw" | "rw-shell" | "cordis" but got "nope"`。
  *
- * **不在这里做重名检查**（是否与内置 13 个角色或彼此的 name 重复）——那需要运行时上下文
+ * **不在这里做重名检查**（是否与内置角色或彼此的 name 重复）——那需要运行时上下文
  * （内置角色表 / 已注册技能目录），由后续批次的注册逻辑负责。
  */
 const CustomRole = z.object({
@@ -129,7 +129,7 @@ const CustomRole = z.object({
     .string()
     .pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
     .required()
-    .description("角色名（kebab-case，如 my-reviewer）；不得与内置 13 个角色重名（重名检查在注册时进行）"),
+    .description("角色名（kebab-case，如 my-reviewer）；不得与内置角色重名（重名检查在注册时进行）"),
   /** 一句话职责：进技能目录给主代理选人，也作为 GUI 列表的副标题 */
   description: z.string().min(1).required().description("角色职责（必填，非空）：一句话说明什么时候该派给它"),
   /** 该角色的任务指令，未来映射为子代理 brief（prompt 前缀） */
@@ -279,7 +279,7 @@ export const Config = z.object({
    *  volatile：DSH 0.2 起由 Loader 按活动 profile entry id 投影为设置页可编辑字段，
    *  变更经 loader/volatile-update 提交到同一引用，无需重挂载（apply 内以 config.skills.get() 实时读取）。 */
   skills: volatileSchema(z.array(SkillRoute).default([])),
-  /** 用户自定义团队角色（内置 13 个角色之外的扩展）：每项 name/description/prompt/tier
+  /** 用户自定义团队角色（内置角色之外的扩展）：每项 name/description/prompt/tier
    *  必填，name 必须 kebab-case，tier 取自 5 个档位枚举。默认 []（= 只用内置角色）。
    *  本批只做配置管道（字段 + schema + patch 默认值）；注册为 runtime skill、重名检查、
    *  按 tier 派发工具表由后续批次接入，因此当前配置该字段对运行时行为无影响。

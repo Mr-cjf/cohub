@@ -41,7 +41,8 @@ export const TIER_TO_PRESET: Readonly<Record<Tier, string>> = {
 };
 
 /**
- * 内置角色 → 档位（13 个内置角色中除 co-orchestrator 外的 12 个）。
+ * 内置角色 → 档位（内置角色中除 co-orchestrator 外的全部专职代理）。
+ * 数量以本表条目为准，不在注释里写死——新增角色只加行、不改这里的数字。
  *
  * co-orchestrator 不在此表：它是**主代理**本身（委派发起方），被委派时仍需要完整工具面，
  * 派发层对它的处理是「不走档位、继承父 preset」，用 resolveTier 返回 null 会把这两件事
@@ -49,14 +50,14 @@ export const TIER_TO_PRESET: Readonly<Record<Tier, string>> = {
  *
  * 归类依据 = 各技能自身声明的能力边界（skills.ts 的「只读 / 读写 / 读写+Bash」）：
  *   - 只读且不需要外网 → ro（explorer 在库内 grep/glob；oracle 审代码；planner 出方案；
- *     council 多模型共识；observer 看图；rule-* 读规则文件）
- *   - 只读但要联网 → ro-net（librarian 查官方文档 / GitHub / Web）
- *   - 读写但不需要 shell → rw（designer 只改样式与组件，不跑构建）
+ *     council 多模型共识；observer 看图；rule-* 读规则文件；editor 审校文本）
+ *   - 只读但要联网 → ro-net（librarian 查官方文档 / GitHub / Web；outliner 选题需外部素材）
+ *   - 读写但不需要 shell → rw（designer 只改样式与组件；writer 只写文本，两者都不跑构建）
  *   - 读写 + shell → rw-shell（fixer 要 build / test / git commit）
  *   - Cordis 专线 → cordis（自建 preset，含插件重建与安装链路）
  */
 export const BUILTIN_ROLE_TIERS: Readonly<Record<string, Tier>> = {
-  // 只读（8）
+  // 只读
   "co-explorer": "ro",
   "co-oracle": "ro",
   "co-planner": "ro",
@@ -65,13 +66,16 @@ export const BUILTIN_ROLE_TIERS: Readonly<Record<string, Tier>> = {
   "co-rule-user": "ro",
   "co-rule-project": "ro",
   "co-rule-app": "ro",
-  // 只读 + 联网（1）
+  "co-editor": "ro",
+  // 只读 + 联网
   "co-librarian": "ro-net",
-  // 读写（1）
+  "co-outliner": "ro-net",
+  // 读写
   "co-designer": "rw",
-  // 读写 + shell（1）
+  "co-writer": "rw",
+  // 读写 + shell
   "co-fixer": "rw-shell",
-  // Cordis 专线（1）
+  // Cordis 专线
   "co-cordis": "cordis",
 };
 
@@ -133,14 +137,20 @@ export const TIER_TOOLS: Readonly<Record<Tier, TierTools>> = {
   // ro-net 的工具面与 ro 相同：联网能力由 preset（cohub-subagent-readonly-net 挂 web 工具）提供，
   // 裁剪表只做减法，无需再 deny 网络工具。
   "ro-net": { deny: [...READ_ONLY_DENY, ...UNIVERSAL_DENY] },
-  // rw 与 rw-shell 的**裁剪表相同**，差异只在 preset（cohub-subagent-write 的 preset 声明里
-  // 本来就没有挂 shell，见 presets/profile-patch-presets.yml）。
+  // rw 与 rw-shell 的 **deny 层完全相同**，差异全部由 preset 层决定
+  // （cohub-subagent-write vs cohub-subagent-write-shell）。注意「读写有无 shell」并不构成区别：
+  // **当前 write preset 也挂了 shell** —— presets/cohub-subagent-write/agent.cordis.yml 同时声明
+  // tool-bash（win32 禁用）与 tool-pwsh（非 win32 禁用），即按平台互斥地挂了一个 shell 工具，
+  // 所以 rw 角色（co-designer / co-writer）实际也能跑命令。
   //
   // 为什么不在这里 deny shell（批次 2 修正）：接线前 delegate.ts 的旧表把 co-designer / co-fixer /
   // co-cordis 统一归入 WRITE_SKILLS → base = WRITE_DENY（**不含** SHELL_TOOL）。若 rw 档 deny 里
   // 加上 shell，co-designer 的最终 deny 列表就会比改动前多一项（违反「内置角色工具集逐字不变」）。
-  // 按任务约束「以现有行为为基准修正 roles.ts」，这里以旧表为准：rw 不裁 shell，真正的「无 shell」
-  // 由 preset 层（cohub-subagent-write 不挂 tool-bash / tool-pwsh）保证，与接线前完全一致。
+  // 按任务约束「以现有行为为基准修正 roles.ts」，这里以旧表为准：rw 不裁 shell。
+  //
+  // ⚠️ 待收决策（本批不动）：preset 层既已给 write 挂 shell，「rw 无 shell」这个档位语义已不成立。
+  // 要么去掉 write preset 的 shell（回到原意，designer / writer 随之失去跑命令能力），要么承认
+  // rw 与 rw-shell 的实质差异不在工具面。两条路都改行为，故本批只把事实写进注释。
   rw: { deny: [...WRITE_DENY, ...UNIVERSAL_DENY] },
   "rw-shell": { deny: [...WRITE_DENY, ...UNIVERSAL_DENY] },
   // cordis 与 rw-shell 工具面一致，差异在 preset（插件重建 / 安装链路）。

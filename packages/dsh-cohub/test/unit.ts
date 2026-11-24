@@ -64,15 +64,16 @@ cohub.apply(root, { councillors: [], councilTimeoutMs: 180_000, installPresets: 
 // ① systemPrompt 服务存在且可调用
 console.log('systemPrompt 服务:', typeof root.systemPrompt?.section === 'function' ? 'OK' : 'MISSING');
 
-// ② skills 快照：应含 13 个 co-* 技能
+// ② skills 快照：应含全部内置技能
 const snap: any = await root.skills.snapshot({});
 const names = snap.skills.map((s: any) => s.name).sort();
-console.log('技能数:', names.length, '(期望 13)');
+console.log('技能数:', names.length);
 console.log('技能清单:', names.join(', '));
 
 const EXPECTED = [
-  'co-cordis','co-council','co-designer','co-explorer','co-fixer','co-librarian',
-  'co-observer','co-oracle','co-orchestrator','co-planner','co-rule-app','co-rule-project','co-rule-user',
+  'co-cordis','co-council','co-designer','co-editor','co-explorer','co-fixer','co-librarian',
+  'co-observer','co-oracle','co-orchestrator','co-outliner','co-planner','co-rule-app','co-rule-project',
+  'co-rule-user','co-writer',
 ].sort();
 const okSkills = JSON.stringify(names) === JSON.stringify(EXPECTED);
 console.log('技能清单校验:', okSkills ? 'PASS' : 'FAIL');
@@ -88,9 +89,9 @@ for (const { n, len, hasCn } of loaded) {
 const okContent = loaded.every(x => x.len > 50 && x.hasCn);
 console.log('内容校验:', okContent ? 'PASS' : 'FAIL');
 
-// ③b brief 校验：12 个 skill 均有 brief 且含中文
+// ③b brief 校验：每个内置 skill 均有 brief 且含中文
 const { COHUB_SKILLS } = await import('../src/skills.ts');
-const okBrief = COHUB_SKILLS.length === 13 && COHUB_SKILLS.every((s: any) => !!s.brief?.trim() && /[\u4e00-\u9fff]/.test(s.brief));
+const okBrief = COHUB_SKILLS.length === EXPECTED.length && COHUB_SKILLS.every((s: any) => !!s.brief?.trim() && /[\u4e00-\u9fff]/.test(s.brief));
 for (const s of COHUB_SKILLS) {
   console.log(`  brief ${s.name}: ${s.brief?.length ?? 0} 字, 含中文=${/[\u4e00-\u9fff]/.test(s.brief ?? '')}`);
 }
@@ -230,7 +231,13 @@ console.log('换行规范化(CRLF/CR→LF 等价, 实质字符变化仍区分):'
 const SKILLS_DIR = path.join(import.meta.dirname, '..', 'skills');
 let genMismatch = 0;
 for (const s of COHUB_SKILLS) {
-  const disk = readFileSync(path.join(SKILLS_DIR, `${s.name.replace('co-', '')}.md`), 'utf-8');
+  // 源文件名两种形态都接受：co-<x>.md（写作组新增的 3 个用这个）与 <x>.md（早期 13 个的历史命名）
+  let disk = '';
+  try {
+    disk = readFileSync(path.join(SKILLS_DIR, `${s.name}.md`), 'utf-8');
+  } catch {
+    disk = readFileSync(path.join(SKILLS_DIR, `${s.name.replace('co-', '')}.md`), 'utf-8');
+  }
   if (normalizeEol(disk) !== s.content) { genMismatch++; console.log(`  源不一致: ${s.name}（请先 bun run build）`); }
 }
 const okGen = genMismatch === 0 && okNorm;

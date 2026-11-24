@@ -3,7 +3,7 @@
 > 本文对应 **v0.13.3**；完整变更历史见 [CHANGELOG.md](./CHANGELOG.md)。
 
 DeepSeek Harness 版（对照 [OpenCode 版](../oh-my-opencode-cohub/)）：中文智能体编排插件。
-把「纯调度模式 + 13 个技能（12 个代理编排体系 + co-cordis 组合创作）+ 多模型共识 + 运行期调度韧性」移植到 DSH 原生能力之上。
+把「纯调度模式 + 内置技能（代理编排体系 + co-cordis 组合创作 + 写作组）+ 多模型共识 + 运行期调度韧性」移植到 DSH 原生能力之上。
 
 ## 快速开始
 
@@ -51,7 +51,7 @@ dsh plugin --profile web add <monorepo>/packages/dsh-cohub
 
 重启 DSH 后确认三点：
 
-1. 技能列表中能看到 13 个 `co-*` / cohub 相关技能；
+1. 技能列表中能看到全部 `co-*` / cohub 相关技能；
 2. 设置页出现「CoHub 代理模型」区块；
 3. preset 选择器里能看到 `co-orchestrator` 与 `cohub-cordis`；若看不到，说明 preset 未安装，见下文「工作模式与 preset」的手动兜底步骤。
 
@@ -107,7 +107,7 @@ cp presets/co-orchestrator/* ~/.dsh/.agent-presets/co-orchestrator/
 | **cohub-cordis** | **标准模式 + 中文身份 + 组合创作技能** | ✅ delegate | ✗（用官方创造模式） | 直接动手 + 委派混合、插件开发日常 |
 | 官方 **创造模式**（`cordis`） | 标准 + **Cordis 自指工具面** | ✅ delegate（host plane，同样可用） | ✅ | 自改 harness / preset 创作 / 插件实验 |
 
-**cohub 能力从哪来**：13 个 co-* 技能与 `delegate` / `delegate_batch` 工具由 dsh-cohub bundle 在 **host plane 全局注册**，与 preset 解耦——所以本 preset 不需要（也没有）额外的委派工具行。已实测确认：`delegate` 与 `delegate_batch` 都出现在会话工具表中，任何 preset 的会话（含创造模式）都能直接用，只要 dsh-cohub 挂在该 profile 上。
+**cohub 能力从哪来**：全部 co-* 技能与 `delegate` / `delegate_batch` 工具由 dsh-cohub bundle 在 **host plane 全局注册**，与 preset 解耦——所以本 preset 不需要（也没有）额外的委派工具行。已实测确认：`delegate` 与 `delegate_batch` 都出现在会话工具表中，任何 preset 的会话（含创造模式）都能直接用，只要 dsh-cohub 挂在该 profile 上。
 
 **使用方式**：agent preset 在会话**首次 turn 之后即锁定**（`agent-preset/locked: session has already started; its agent preset is fixed`），所以创造模式只能**新建会话**时选择，不能中途切换。
 
@@ -123,16 +123,19 @@ DSH 0.2.1 起 `SubagentStartRequest.agentPreset` 是一等字段，`delegate` / 
 因此「只读代理不写文件」由工具面物理保证，不再只靠提示词层软约束；`toolFilter` 仅作为补充收窄手段保留。
 手动 `subagent` 委派时也可显式指定这两个 preset 之一，但常规链路无需关心。
 
-## 技能清单（13 个）
+## 技能清单（数量以 `src/skills.ts` 生成物为准，本文不写死）
 
 co-orchestrator（调度）/ co-planner（方案）/ co-oracle（审查）/
 co-explorer（搜索）/ co-librarian（研究）/ co-observer（视觉）/
 co-fixer（执行）/ co-designer（UI）/ co-council（共识）/
 co-rule-user / co-rule-project / co-rule-app（规范分析）/
-co-cordis（Cordis 插件与 preset 组合创造 —— 第 13 个，需读写+Bash 权限）
+co-cordis（Cordis 插件与 preset 组合创造，需读写+Bash 权限）/
+co-outliner（选题 + 写作提纲 + 素材清单，只读+联网）/
+co-writer（按提纲成稿与改稿，读写）/
+co-editor（事实/逻辑/标点审校，只读）
 
-> 前 12 个即代理编排体系，`co-cordis` 是组合创作角色（修插件 / 改 harness 组合 / 写 preset）。
-> `test/unit.ts` 断言的正是这 13 个名字，改动技能清单需同步 `scripts/generate-skills.ts` 与测试。
+> 除 `co-cordis`（组合创作：修插件 / 改 harness 组合 / 写 preset）与写作组（co-outliner → co-writer → co-editor）外，其余即代理编排体系。
+> `test/unit.ts` 断言的正是这份名单（逐个列出，不写死总数），改动技能清单需同步 `scripts/generate-skills.ts` 与测试。
 
 ## 使用
 
@@ -144,7 +147,7 @@ co-cordis（Cordis 插件与 preset 组合创造 —— 第 13 个，需读写+B
 
 **DSH 0.2 起**：本插件**注册独立的设置页**「CoHub 代理模型」——客户端模块
 （`src/client/index.js`）向 `settings.section` slot 注册一个 section（`order: 12`，插在
-「模型」10 与「插件」15 之间），13 个代理每个一行：供应商下拉 + 模型下拉（可降级手填）。
+「模型」10 与「插件」15 之间），每个内置角色一行：供应商下拉 + 模型下拉（可降级手填）。
 页面通过 `configForms` 读写 Config 的 volatile `skills` 字段（走 `mutate` 提交，携带读取时的
 revision 做冲突栅栏），因此改完保存即生效，无需重启。
 
@@ -175,7 +178,7 @@ revision 冲突拒绝保存、只写显式配置的代理等。
     councilTimeoutMs: 180000
     skills: []               # delegate 委派路由（DSH 0.2 起由设置页按 profile entry id 投影此 volatile 字段，实时生效）
                              # 每条路由可配 provider/model/maxTokens/reasoningEffort，见下节「skills 字段」
-    customRoles: []          # 用户自定义团队角色（内置 13 个角色之外）。默认 [] = 只用内置角色；
+    customRoles: []          # 用户自定义团队角色（内置角色之外）。默认 [] = 只用内置角色；
                              # volatile：设置页可改、热生效。每项四字段全部必填：
                              #   name（kebab-case，不得与内置角色重名）/ description（非空）
                              #   / prompt（非空，未来映射为子代理 brief）/ tier（ro|ro-net|rw|rw-shell|cordis）
@@ -355,7 +358,7 @@ npm run audit -- <sessionDir> [--rules <json>] [--rules-file <path>] [--json <ou
 
 | OpenCode 版（oh-my-opencode-cohub） | DSH 版（本包） |
 |---|---|
-| 12 个 agent 注册（双重注册 + config hook） | 13 个 runtime skills（本插件 apply 时注册） |
+| 12 个 agent 注册（双重注册 + config hook） | runtime skills（本插件 apply 时注册） |
 | 中文注入 experimental.chat.system.transform | ctx.systemPrompt.section |
 | task 工具 + 并行派发 | DSH 原生 subagent 工具（后台/续聊） |
 | todowrite | DSH 原生 todo_write |
@@ -384,7 +387,7 @@ npm run build
 #     --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-system-prompt \
 #     --external @deepseek-ai/dsh-skill --external @deepseek-ai/dsh-home-paths
 #   bun build src/co-cordis-plugin.ts --outdir lib --target node --format esm \
-#     --external @deepseek-ai/dsh-tools   # co-cordis 专用插件（第 13 个技能）
+#     --external @deepseek-ai/dsh-tools   # co-cordis 专用插件
 #   bun run scripts/build-client.js       # src/client/index.js → lib/client.js
 ```
 
@@ -414,7 +417,7 @@ scripts/
   deploy-preset.ps1     手动部署内置 preset 到用户 preset root（幂等，防嵌套）
 src/
   index.ts              插件行入口（apply、Config schema、三切片 schema、preset 安装接线）
-  co-cordis-plugin.ts   co-cordis 专用插件（第 13 个技能）
+  co-cordis-plugin.ts   co-cordis 专用插件
   preset-install.ts     内置 preset 安装/升级台账（未改动则更新、用户改动则跳过、孤儿清理）
   delegate.ts           delegate 工具 + StallWatchdog
   delegate_batch.ts     delegate_batch 批量并行派发工具
