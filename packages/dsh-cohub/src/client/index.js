@@ -70,6 +70,12 @@ window.__ModuleLoader__.load({
       "co-cordis"
     ];
 
+    /** Config.customRoles[].tier 的五个合法档位（自定义角色不得越权，取值与 Config schema 一致）。 */
+    var ROLE_TIERS = ["ro", "ro-net", "rw", "rw-shell", "cordis"];
+
+    /** 自定义角色名必须是 kebab-case：运行时把它注册成 skill 名，含空格/大写会污染技能表。 */
+    var ROLE_NAME_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+
     var zh = {
       nav: "CoHub 代理",
       title: "CoHub 代理模型",
@@ -114,7 +120,27 @@ window.__ModuleLoader__.load({
       "skill.co-rule-user": "用户规则",
       "skill.co-rule-project": "项目规则",
       "skill.co-rule-app": "应用规则",
-      "skill.co-cordis": "Cordis 插件"
+      "skill.co-cordis": "Cordis 插件",
+      rolesTitle: "自定义团队",
+      rolesDescription: "在此增删改自定义角色。保存后运行时注册器约 1 秒内热加载，无需重启。",
+      roleName: "名称",
+      roleDescription: "描述",
+      rolePrompt: "提示词",
+      roleTier: "权限档位",
+      roleAdd: "添加角色",
+      roleRemove: "删除",
+      roleEmpty: "还没有自定义角色，点「添加角色」开始。",
+      roleSaved: "已保存，约 1 秒后生效，无需重启。",
+      roleDirty: "有未保存的修改。",
+      roleSavedLabel: "保存",
+      roleUnsaved: "未命名角色",
+      roleErrSummary: "有 {count} 处不合法，已标红，未保存。",
+      roleErrNameRequired: "名称必填。",
+      roleErrNameFormat: "名称须为 kebab-case（小写字母/数字，用 - 连接）。",
+      roleErrNameBuiltin: "名称与内置角色重名。",
+      roleErrNameDuplicate: "名称与其他自定义角色重复。",
+      roleErrDescription: "描述不能为空。",
+      roleErrPrompt: "提示词不能为空。"
     };
 
     var en = {
@@ -161,7 +187,27 @@ window.__ModuleLoader__.load({
       "skill.co-rule-user": "User rules",
       "skill.co-rule-project": "Project rules",
       "skill.co-rule-app": "App rules",
-      "skill.co-cordis": "Cordis plugins"
+      "skill.co-cordis": "Cordis plugins",
+      rolesTitle: "Custom team",
+      rolesDescription: "Add, edit or remove custom roles here. The runtime registrar picks changes up in about 1 second — no restart needed.",
+      roleName: "Name",
+      roleDescription: "Description",
+      rolePrompt: "Prompt",
+      roleTier: "Access tier",
+      roleAdd: "Add role",
+      roleRemove: "Remove",
+      roleEmpty: "No custom roles yet. Click \"Add role\" to start.",
+      roleSaved: "Saved. Takes effect in about 1 second — no restart needed.",
+      roleDirty: "Unsaved changes.",
+      roleSavedLabel: "Save",
+      roleUnsaved: "Unnamed role",
+      roleErrSummary: "{count} invalid field(s), highlighted in red. Nothing was saved.",
+      roleErrNameRequired: "Name is required.",
+      roleErrNameFormat: "Name must be kebab-case (lowercase letters/digits joined by -).",
+      roleErrNameBuiltin: "Name collides with a built-in role.",
+      roleErrNameDuplicate: "Name duplicates another custom role.",
+      roleErrDescription: "Description is required.",
+      roleErrPrompt: "Prompt is required."
     };
 
     /** 无 locale 服务时的最小翻译（防止 props.t 缺失导致页面白屏）。 */
@@ -326,6 +372,92 @@ window.__ModuleLoader__.load({
       return rows;
     }
 
+    /* ── 纯数据层：Config.customRoles ↔ 编辑行 ────────────────────── */
+
+    function emptyRole() {
+      return { name: "", description: "", prompt: "", tier: "ro" };
+    }
+
+    function copyRole(role) {
+      return {
+        name: typeof role.name === "string" ? role.name : "",
+        description: typeof role.description === "string" ? role.description : "",
+        prompt: typeof role.prompt === "string" ? role.prompt : "",
+        tier: ROLE_TIERS.indexOf(role.tier) >= 0 ? role.tier : "ro"
+      };
+    }
+
+    /**
+     * Config.customRoles → 编辑行。
+     * 老配置没有该字段（undefined）时返回空数组，页面按「还没有自定义角色」展示。
+     * @param roles - configForms 快照里的 value.customRoles（任意形状，逐项校验）。
+     * @returns 编辑行数组。
+     */
+    function rowsFromCustomRoles(roles) {
+      var rows = [];
+      if (!Array.isArray(roles)) return rows;
+      for (var i = 0; i < roles.length; i += 1) {
+        var entry = roles[i];
+        if (!entry || typeof entry !== "object") continue;
+        rows.push(copyRole(entry));
+      }
+      return rows;
+    }
+
+    /** 编辑行 → 待写入的 customRoles 数组（只写四个受控字段，tier 越界退回 ro）。 */
+    function rolesToCustomRoles(rows) {
+      var out = [];
+      if (!Array.isArray(rows)) return out;
+      for (var i = 0; i < rows.length; i += 1) {
+        var role = rows[i];
+        if (!role || typeof role !== "object") continue;
+        out.push(copyRole(role));
+      }
+      return out;
+    }
+
+    /**
+     * 提交前的前端校验：违反任一条就不写配置（写进去会污染技能表或让子代理拿错档位）。
+     * 规则：name 必填 + kebab-case + 不撞内置 SKILL_NAMES + 表内不重名；description / prompt 非空。
+     * @returns 与 rows 等长的错误数组，空串表示该字段合法。
+     */
+    function validateRoles(rows) {
+      var errors = [];
+      var counts = {};
+      var list = Array.isArray(rows) ? rows : [];
+      var i;
+      for (i = 0; i < list.length; i += 1) {
+        var name = list[i] && typeof list[i].name === "string" ? list[i].name : "";
+        if (name === "") continue;
+        counts[name] = (counts[name] || 0) + 1;
+      }
+      for (i = 0; i < list.length; i += 1) {
+        var role = list[i] || {};
+        var raw = typeof role.name === "string" ? role.name : "";
+        var error = { name: "", description: "", prompt: "" };
+        if (raw === "") error.name = "nameRequired";
+        else if (!ROLE_NAME_PATTERN.test(raw)) error.name = "nameFormat";
+        else if (SKILL_NAMES.indexOf(raw) >= 0) error.name = "nameBuiltin";
+        else if (counts[raw] > 1) error.name = "nameDuplicate";
+        if (typeof role.description !== "string" || role.description.trim() === "") error.description = "required";
+        if (typeof role.prompt !== "string" || role.prompt.trim() === "") error.prompt = "required";
+        errors.push(error);
+      }
+      return errors;
+    }
+
+    /** 错误表里被标红的字段数（0 = 可以提交）。 */
+    function countRoleErrors(errors) {
+      var count = 0;
+      for (var i = 0; i < errors.length; i += 1) {
+        var error = errors[i] || {};
+        if (error.name !== "") count += 1;
+        if (error.description !== "") count += 1;
+        if (error.prompt !== "") count += 1;
+      }
+      return count;
+    }
+
     /* ── 极简 observable store（uSES：快照未变必须返回同一引用） ──── */
 
     function createStateStore(initial) {
@@ -371,7 +503,12 @@ window.__ModuleLoader__.load({
       // effortsByModel[provider][modelId] = [{ id, label }]；模型不支持推理强度时该键缺失。
       effortsByModel: {},
       catalogStatus: "loading",
-      catalogError: ""
+      catalogError: "",
+      roles: [],
+      rolesDirty: false,
+      rolesSaved: false,
+      rolesFailed: false,
+      roleErrors: []
     });
 
     /**
@@ -400,7 +537,15 @@ window.__ModuleLoader__.load({
 
       var lastValue;
       var lastRows = [];
+      var lastRoles = [];
       var published = null;
+
+      // 自定义角色草稿与 skills 草稿各自独立（写的是不同 path），但共用同一 scope、
+      // 同一 revision 冲突判定和同一个 saving 互斥位。roleErrors 与行等长，空串 = 合法。
+      var rolesDraft = null;          // { rows, revision }
+      var rolesSaved = false;
+      var rolesFailed = false;
+      var roleErrors = [];
 
       function readScope() {
         if (!scope || typeof scope.getSnapshot !== "function") {
@@ -414,13 +559,23 @@ window.__ModuleLoader__.load({
         }
       }
 
-      function currentRows() {
+      /** 快照 value 变了一次就把 skills 与 customRoles 两份编辑行一起重算（共用同一引用判断）。 */
+      function refreshFromValue() {
         var snapshot = readScope();
-        if (snapshot.value !== lastValue) {
-          lastValue = snapshot.value;
-          lastRows = displayRows(rowsFromSkills(snapshot.value && snapshot.value.skills));
-        }
+        if (snapshot.value === lastValue) return;
+        lastValue = snapshot.value;
+        lastRows = displayRows(rowsFromSkills(snapshot.value && snapshot.value.skills));
+        lastRoles = rowsFromCustomRoles(snapshot.value && snapshot.value.customRoles);
+      }
+
+      function currentRows() {
+        refreshFromValue();
         return lastRows;
+      }
+
+      function currentRoles() {
+        refreshFromValue();
+        return lastRoles;
       }
 
       function buildState() {
@@ -438,7 +593,12 @@ window.__ModuleLoader__.load({
           modelsByProvider: catalogByProvider,
           effortsByModel: catalogEfforts,
           catalogStatus: catalogStatus,
-          catalogError: catalogError
+          catalogError: catalogError,
+          roles: rolesDraft !== null ? rolesDraft.rows : currentRoles(),
+          rolesDirty: rolesDraft !== null,
+          rolesSaved: rolesSaved,
+          rolesFailed: rolesFailed,
+          roleErrors: roleErrors
         };
       }
 
@@ -456,7 +616,12 @@ window.__ModuleLoader__.load({
           && left.modelsByProvider === right.modelsByProvider
           && left.effortsByModel === right.effortsByModel
           && left.catalogStatus === right.catalogStatus
-          && left.catalogError === right.catalogError;
+          && left.catalogError === right.catalogError
+          && left.roles === right.roles
+          && left.rolesDirty === right.rolesDirty
+          && left.rolesSaved === right.rolesSaved
+          && left.rolesFailed === right.rolesFailed
+          && left.roleErrors === right.roleErrors;
       }
 
       function publish() {
@@ -470,9 +635,10 @@ window.__ModuleLoader__.load({
       function onScopeChange() {
         if (disposed) return;
         // 自己的写入进行中不做冲突判定：revision 变化正是本次写入引起的。
-        if (!saving && draft !== null) {
+        if (!saving && (draft !== null || rolesDraft !== null)) {
           var snapshot = readScope();
-          if (snapshot.revision !== draft.revision) conflicted = true;
+          if (draft !== null && snapshot.revision !== draft.revision) conflicted = true;
+          if (rolesDraft !== null && snapshot.revision !== rolesDraft.revision) conflicted = true;
         }
         publish();
       }
@@ -485,6 +651,16 @@ window.__ModuleLoader__.load({
         for (var i = 0; i < source.length; i += 1) rows.push(copyRow(source[i]));
         draft = { rows: rows, revision: snapshot.revision };
         return draft;
+      }
+
+      function beginRolesDraft() {
+        if (rolesDraft !== null) return rolesDraft;
+        var snapshot = readScope();
+        var source = currentRoles();
+        var rows = [];
+        for (var i = 0; i < source.length; i += 1) rows.push(copyRole(source[i]));
+        rolesDraft = { rows: rows, revision: snapshot.revision };
+        return rolesDraft;
       }
 
       function canEdit() {
@@ -667,6 +843,127 @@ window.__ModuleLoader__.load({
         });
       }
 
+      /**
+       * 改一行的某个字段（name / description / prompt / tier）。
+       * 只写受控四字段，避免把 Config 里别的键带歪；提交过校验后改字段会即时重算标红。
+       */
+      function editRole(index, field, value) {
+        if (field !== "name" && field !== "description" && field !== "prompt" && field !== "tier") return;
+        if (!canEdit()) return;
+        var current = beginRolesDraft();
+        if (index < 0 || index >= current.rows.length) return;
+        if (current.rows[index][field] === value) return;
+        var next = [];
+        for (var i = 0; i < current.rows.length; i += 1) {
+          var copy = copyRole(current.rows[i]);
+          if (i === index) copy[field] = value;
+          next.push(copy);
+        }
+        rolesDraft.rows = next;
+        roleErrors = roleErrors.length > 0 ? validateRoles(next) : [];
+        rolesSaved = false;
+        rolesFailed = false;
+        publish();
+      }
+
+      /** 追加一个空行（默认 tier=ro，最小权限起步）。 */
+      function addRole() {
+        if (!canEdit()) return;
+        var current = beginRolesDraft();
+        var next = [];
+        for (var i = 0; i < current.rows.length; i += 1) next.push(copyRole(current.rows[i]));
+        next.push(emptyRole());
+        rolesDraft.rows = next;
+        roleErrors = [];
+        rolesSaved = false;
+        rolesFailed = false;
+        publish();
+      }
+
+      /** 删掉一行。删空后保存即写回 []，运行时注册器会移除这些角色。 */
+      function removeRole(index) {
+        if (!canEdit()) return;
+        var current = beginRolesDraft();
+        if (index < 0 || index >= current.rows.length) return;
+        var next = [];
+        for (var i = 0; i < current.rows.length; i += 1) {
+          if (i !== index) next.push(current.rows[i]);
+        }
+        rolesDraft.rows = next;
+        roleErrors = [];
+        rolesSaved = false;
+        rolesFailed = false;
+        publish();
+      }
+
+      function discardRoles() {
+        if (saving) return;
+        rolesDraft = null;
+        rolesSaved = false;
+        rolesFailed = false;
+        roleErrors = [];
+        publish();
+      }
+
+      /**
+       * 整表写回 Config.customRoles（数组字段整体替换，与 skills 同一 mutate 契约）。
+       * 校验不通过只标红、不发请求；成功后运行时注册器约 1 秒内热加载，无需重启。
+       */
+      function saveRoles() {
+        if (disposed || saving || rolesDraft === null) return Promise.resolve(false);
+        var snapshot = readScope();
+        if (snapshot.status !== "ready" || snapshot.writable !== true || conflicted) return Promise.resolve(false);
+        if (rolesDraft.revision !== undefined && snapshot.revision !== rolesDraft.revision) {
+          conflicted = true;
+          publish();
+          return Promise.resolve(false);
+        }
+        var errors = validateRoles(rolesDraft.rows);
+        if (countRoleErrors(errors) > 0) {
+          roleErrors = errors;
+          rolesSaved = false;
+          rolesFailed = false;
+          publish();
+          return Promise.resolve(false);
+        }
+        var expected = rolesDraft.revision;
+        var next = rolesToCustomRoles(rolesDraft.rows);
+        saving = true;
+        rolesSaved = false;
+        rolesFailed = false;
+        roleErrors = [];
+        publish();
+        var request;
+        try {
+          request = scope.mutate([{ op: "set", path: ["customRoles"], value: next }], expected);
+        } catch (error) {
+          saving = false;
+          rolesFailed = true;
+          publish();
+          return Promise.resolve(false);
+        }
+        return Promise.resolve(request).then(function (accepted) {
+          if (disposed) return false;
+          saving = false;
+          if (accepted === true) {
+            rolesDraft = null;
+            rolesFailed = false;
+            rolesSaved = true;
+            lastValue = undefined;
+          } else {
+            rolesFailed = true;
+          }
+          publish();
+          return accepted === true;
+        }, function () {
+          if (disposed) return false;
+          saving = false;
+          rolesFailed = true;
+          publish();
+          return false;
+        });
+      }
+
       function loadCatalog() {
         catalogGeneration += 1;
         var generation = catalogGeneration;
@@ -779,7 +1076,12 @@ window.__ModuleLoader__.load({
         resetRow: resetRow,
         discard: discard,
         save: save,
-        loadCatalog: loadCatalog
+        loadCatalog: loadCatalog,
+        editRole: editRole,
+        addRole: addRole,
+        removeRole: removeRole,
+        discardRoles: discardRoles,
+        saveRoles: saveRoles
       };
     }
 
@@ -826,7 +1128,21 @@ window.__ModuleLoader__.load({
         ".cohub-button-primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover);}",
         ".cohub-button-ghost{color:var(--dsw-alias-label-secondary);background:transparent;border:1px solid var(--dsw-alias-border-l2);}",
         ".cohub-button-ghost:hover:not(:disabled){color:var(--dsw-alias-label-primary);}",
-        ".cohub-button:disabled{opacity:.45;cursor:default;}"
+        ".cohub-button:disabled{opacity:.45;cursor:default;}",
+        // ── 自定义团队区块（与上面的模型区块隔开，各自独立的草稿与保存按钮） ──
+        ".cohub-roles{display:flex;flex-direction:column;gap:12px;margin-top:8px;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2);}",
+        ".cohub-subtitle{margin:0;font-size:14px;font-weight:600;line-height:22px;}",
+        ".cohub-role-summary{flex:1 1 140px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}",
+        // 名称 + 档位并排，描述与提示词各自独占一行（prompt 是多行文本域，需要整行宽度）。
+        ".cohub-role-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,150px);gap:8px;margin-top:8px;align-items:start;}",
+        "@media (max-width:560px){.cohub-role-fields{grid-template-columns:minmax(0,1fr);}}",
+        ".cohub-field-wide{grid-column:1 / -1;}",
+        ".cohub-textarea{box-sizing:border-box;width:100%;min-height:64px;resize:vertical;font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;font-size:13px;line-height:20px;}",
+        ".cohub-textarea:focus-visible{border-color:var(--dsw-alias-brand-primary);outline:none;}",
+        ".cohub-textarea:disabled{opacity:.6;cursor:default;}",
+        // 校验失败的行：只把具体字段标红，行本身不整体变色。
+        ".cohub-invalid{border-color:var(--dsw-alias-state-error-primary);}",
+        ".cohub-role-error{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary);}"
       ].join("\n");
       var tag = document.createElement("style");
       tag.dataset.plugin = "dsh-cohub";
@@ -1037,6 +1353,170 @@ window.__ModuleLoader__.load({
         );
       }
 
+      /* ── 自定义团队：增删改 Config.customRoles ─────────────────── */
+
+      var roles = state.roles || [];
+      var roleErrors = state.roleErrors || [];
+
+      function roleErrorOf(index) {
+        var error = roleErrors[index];
+        return error && typeof error === "object" ? error : {};
+      }
+
+      /** 把 validateRoles 的错误码翻成文案；一行可能同时命中多条（比如 name + prompt）。 */
+      function roleMessage(error) {
+        var parts = [];
+        if (error.name === "nameRequired") parts.push(t("roleErrNameRequired"));
+        else if (error.name === "nameFormat") parts.push(t("roleErrNameFormat"));
+        else if (error.name === "nameBuiltin") parts.push(t("roleErrNameBuiltin"));
+        else if (error.name === "nameDuplicate") parts.push(t("roleErrNameDuplicate"));
+        if (error.description === "required") parts.push(t("roleErrDescription"));
+        if (error.prompt === "required") parts.push(t("roleErrPrompt"));
+        return parts.join(" ");
+      }
+
+      function renderRole(role, index) {
+        var error = roleErrorOf(index);
+        var invalid = error.name !== "" || error.description !== "" || error.prompt !== "";
+        var tierOptions = [];
+        for (var k = 0; k < ROLE_TIERS.length; k += 1) {
+          tierOptions.push(React.createElement("option", { key: ROLE_TIERS[k], value: ROLE_TIERS[k] }, ROLE_TIERS[k]));
+        }
+        var message = roleMessage(error);
+        var typeLabel = role.name !== "" ? role.name : t("roleUnsaved");
+        return React.createElement("li", {
+          key: "role-" + index,
+          className: invalid ? "cohub-row cohub-invalid" : "cohub-row"
+        },
+          React.createElement("div", { className: "cohub-row-head" },
+            React.createElement("span", { className: "cohub-row-name" }, typeLabel),
+            React.createElement("span", { className: "cohub-role-summary" },
+              role.description !== "" ? role.description : t("roleDescription")),
+            React.createElement("span", { className: "cohub-badge" }, role.tier),
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-row-reset",
+              disabled: locked,
+              "aria-label": t("roleRemove") + " " + typeLabel,
+              onClick: function () {
+                props.removeRole(index);
+              }
+            }, t("roleRemove"))
+          ),
+          React.createElement("div", { className: "cohub-role-fields" },
+            React.createElement("div", { className: "cohub-field" },
+              React.createElement("label", { className: "cohub-label" }, t("roleName")),
+              React.createElement("input", {
+                className: error.name !== "" ? "cohub-input cohub-invalid" : "cohub-input",
+                type: "text",
+                value: role.name,
+                disabled: locked,
+                placeholder: "my-reviewer",
+                "aria-label": typeLabel + " · " + t("roleName"),
+                onChange: function (event) {
+                  props.editRole(index, "name", event.target.value);
+                }
+              })
+            ),
+            React.createElement("div", { className: "cohub-field" },
+              React.createElement("label", { className: "cohub-label" }, t("roleTier")),
+              React.createElement("select", {
+                className: "cohub-select",
+                value: role.tier,
+                disabled: locked,
+                "aria-label": typeLabel + " · " + t("roleTier"),
+                onChange: function (event) {
+                  props.editRole(index, "tier", event.target.value);
+                }
+              }, tierOptions)
+            ),
+            React.createElement("div", { className: "cohub-field cohub-field-wide" },
+              React.createElement("label", { className: "cohub-label" }, t("roleDescription")),
+              React.createElement("input", {
+                className: error.description !== "" ? "cohub-input cohub-invalid" : "cohub-input",
+                type: "text",
+                value: role.description,
+                disabled: locked,
+                "aria-label": typeLabel + " · " + t("roleDescription"),
+                onChange: function (event) {
+                  props.editRole(index, "description", event.target.value);
+                }
+              })
+            ),
+            React.createElement("div", { className: "cohub-field cohub-field-wide" },
+              React.createElement("label", { className: "cohub-label" }, t("rolePrompt")),
+              React.createElement("textarea", {
+                className: error.prompt !== "" ? "cohub-textarea cohub-invalid" : "cohub-textarea",
+                value: role.prompt,
+                disabled: locked,
+                rows: 3,
+                "aria-label": typeLabel + " · " + t("rolePrompt"),
+                onChange: function (event) {
+                  props.editRole(index, "prompt", event.target.value);
+                }
+              })
+            )
+          ),
+          message !== "" ? React.createElement("p", { className: "cohub-role-error" }, message) : null
+        );
+      }
+
+      var roleItems = [];
+      for (var r = 0; r < roles.length; r += 1) roleItems.push(renderRole(roles[r], r));
+
+      var roleErrorCount = countRoleErrors(roleErrors);
+      var roleStatus = null;
+      var roleStatusClass = "cohub-status";
+      if (state.rolesFailed) {
+        roleStatus = t("failed");
+        roleStatusClass += " cohub-status-error";
+      } else if (roleErrorCount > 0) {
+        roleStatus = t("roleErrSummary", { count: roleErrorCount });
+        roleStatusClass += " cohub-status-error";
+      } else if (state.rolesSaved) {
+        roleStatus = t("roleSaved");
+        roleStatusClass += " cohub-status-ok";
+      } else if (state.rolesDirty) {
+        roleStatus = t("roleDirty");
+      } else if (!state.writable) {
+        roleStatus = t("readOnly");
+      }
+
+      var rolesBlock = React.createElement("div", { className: "cohub-roles" },
+        React.createElement("h3", { className: "cohub-subtitle" }, t("rolesTitle")),
+        React.createElement("p", { className: "cohub-desc" }, t("rolesDescription")),
+        roles.length === 0
+          ? React.createElement("p", { className: "cohub-notice" }, t("roleEmpty"))
+          : React.createElement("ul", { className: "cohub-rows" }, roleItems),
+        React.createElement("div", { className: "cohub-actions" },
+          React.createElement("button", {
+            type: "button",
+            className: "cohub-button cohub-button-ghost",
+            disabled: locked,
+            onClick: function () {
+              props.addRole();
+            }
+          }, t("roleAdd")),
+          roleStatus !== null ? React.createElement("p", { className: roleStatusClass }, roleStatus) : null,
+          React.createElement("button", {
+            type: "button",
+            className: "cohub-button cohub-button-ghost",
+            disabled: !state.rolesDirty || state.saving,
+            onClick: function () {
+              props.discardRoles();
+            }
+          }, t("discard")),
+          React.createElement("button", {
+            type: "button",
+            className: "cohub-button cohub-button-primary",
+            disabled: !state.rolesDirty || !state.writable || state.saving || state.conflicted,
+            onClick: function () {
+              props.saveRoles();
+            }
+          }, t(state.saving ? "saving" : "roleSavedLabel"))
+        )
+      );
+
       var items = [];
       for (var i = 0; i < rows.length; i += 1) items.push(renderRow(rows[i]));
 
@@ -1094,7 +1574,8 @@ window.__ModuleLoader__.load({
               props.save();
             }
           }, t(state.saving ? "saving" : "save"))
-        )
+        ),
+        rolesBlock
       );
     }
 
@@ -1139,6 +1620,21 @@ window.__ModuleLoader__.load({
           },
           retryCatalog: function () {
             controller.loadCatalog();
+          },
+          editRole: function (index, field, value) {
+            controller.editRole(index, field, value);
+          },
+          addRole: function () {
+            controller.addRole();
+          },
+          removeRole: function (index) {
+            controller.removeRole(index);
+          },
+          discardRoles: function () {
+            controller.discardRoles();
+          },
+          saveRoles: function () {
+            return controller.saveRoles();
           }
         };
       };
