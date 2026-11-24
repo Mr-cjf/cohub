@@ -410,3 +410,250 @@ export function removeInstallRecord(userRoot: string): void {
     /* 忽略 */
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 第二部分：把 preset **声明**幂等写入 profile 的 cordis.patch.yml
+//
+// 背景：新版宿主按 `@deepseek-ai/dsh-agent-preset` 的声明行注册 preset，
+// 只把 presets/<id>/ 复制到 ~/.dsh/.agent-presets/ 并不足以让
+// `agentPreset: "<id>"` 生效——profile 的 cordis.patch.yml 里还必须有一条
+// `- insert: { id: preset-<id>, config: { id: <id>, ... } }`。
+//
+// 本步骤把声明从包内 presets/<id>/（preset.yml 的 name/description/order +
+// agent.cordis.yml 的 plugins 行）**动态生成**，因此新增档位目录即自动获得声明，
+// 不需要再同步维护一份手写清单（旧的手写做法正是本步骤要取代的）。
+//
+// 幂等键 = config.id：
+//   - 未声明 → 追加到文件末尾（不重排既有内容）；
+//   - 已声明且规范化后与生成内容一致 → 跳过，**不写盘**（字节不变、不产生备份）；
+//   - 已声明但内容不同 → 保留用户版本、只记录 warning（用户可能有意改过）；
+//   - 任何异常 → 只告警，绝不阻断插件挂载。
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PresetPatchApplyResult {
+  /** 目标 patch 文件（~/.dsh/profiles/<profile>/cordis.patch.yml） */
+  patchPath: string;
+  /** 本次追加的 preset id */
+  appended: string[];
+  /** 已存在且与包内一致（未动） */
+  unchanged: string[];
+  /** 已存在但内容不同 → 保留用户版本并告警 */
+  conflicts: string[];
+  /** 写入前生成的备份文件（仅在实际写盘时产生） */
+  backup?: string;
+  /** 降级原因（无可写内容 / 读失败 / 落盘失败等） */
+  degraded?: string;
+}
+
+/** 单行 YAML 标量：JSON 双引号字符串是合法的 YAML 标量，且转义最省心 */
+function yamlScalar(value: string): string {
+  return JSON.stringify(value);
+}
+
+/** 整体缩进一段 YAML（空行不补空格），用于把 agent.cordis.yml 塞进 plugins: 之下 */
+function indentBlock(text: string, spaces: number): string {
+  const pad = " ".repeat(spaces);
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => (line.trim() === "" ? "" : pad + line))
+    .join("\n");
+}
+
+/** 从 preset.yml 里取 name / description / order（只做行级解析，不引入 YAML 依赖） */
+function readPresetMeta(dir: string): { name?: string; description?: string; order?: number } {
+  try {
+    const raw = readFileSync(join(dir, "preset.yml"), "utf8").replace(/\r\n/g, "\n");
+    const meta: { name?: string; description?: string; order?: number } = {};
+    for (const line of raw.split("\n")) {
+      const m = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line);
+      if (!m) continue;
+      const key = m[1];
+      const rest = m[2].trim();
+      if (key === "order") {
+        const n = Number(rest);
+        if (Number.isFinite(n)) meta.order = n;
+        continue;
+      }
+      if (key !== "name" && key !== "description") continue;
+      if (rest === "" || rest === "|" || rest === "|-" || rest === ">" || rest === ">-") continue;
+      meta[key] = rest.replace(/^(['"])(.*)\1$/, "$2");
+    }
+    return meta;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 依据包内 presets 目录生成 profile patch 声明片段（每个 preset 一段 `- insert:`）。
+ * 目录缺少 agent.cordis.yml 或 id 不合法时跳过该目录。
+ */
+export function buildPresetPatchDeclarations(shippedDir: string): Array<{ id: string; text: string }> {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(shippedDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const ids = entries
+    .filter((entry) => entry.isDirectory() && isSafePresetId(entry.name))
+    .map((entry) => entry.name)
+    .filter((id) => existsSync(join(shippedDir, id, "agent.cordis.yml")))
+    .sort();
+
+  const out: Array<{ id: string; text: string }> = [];
+  for (const id of ids) {
+    const dir = join(shippedDir, id);
+    const meta = readPresetMeta(dir);
+    const plugins = readFileSync(join(dir, "agent.cordis.yml"), "utf8").trimEnd();
+    const lines = ["- insert:", `    - id: preset-${id}`, "      name: '@deepseek-ai/dsh-agent-preset'", "      config:", `        id: ${id}`];
+    if (meta.name !== undefined) lines.push(`        name: ${yamlScalar(meta.name)}`);
+    if (meta.description !== undefined) lines.push(`        description: ${yamlScalar(meta.description)}`);
+    if (meta.order !== undefined) lines.push(`        order: ${meta.order}`);
+    lines.push("        plugins:", indentBlock(plugins, 10));
+    out.push({ id, text: lines.join("\n") });
+  }
+  return out;
+}
+
+/**
+ * 在 patch 文本中定位「声明了 presetId 的那一段 `- insert:`」。
+ *
+ * 判定条件（两者同时满足）：块内出现顶层项 `- id: preset-<id>`，且块内出现
+ * `config: id: <id>`。后者用 `^\s+id:\s*<id>$` 匹配，不会误命中 `- id: ...` 行。
+ */
+function findPresetInsertBlock(text: string, presetId: string): { start: number; end: number; body: string } | null {
+  const lines = text.split("\n");
+  const starts: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^-\s+insert\s*:/.test(lines[i])) starts.push(i);
+  }
+  const configId = new RegExp(`^\\s+id:\\s*['"]?${presetId}['"]?\\s*$`, "m");
+  const itemId = new RegExp(`^\\s*-\\s*id:\\s*['"]?preset-${presetId}['"]?\\s*$`, "m");
+  for (let k = 0; k < starts.length; k++) {
+    const startLine = starts[k];
+    // 块结束：下一个顶层列表项 / 下一个顶层键 / 文件末尾
+    let endLine = lines.length;
+    for (let i = startLine + 1; i < lines.length; i++) {
+      if (/^(-\s|[A-Za-z_][\w.-]*\s*:)/.test(lines[i])) {
+        endLine = i;
+        break;
+      }
+    }
+    if (k + 1 < starts.length && starts[k + 1] < endLine) endLine = starts[k + 1];
+    const body = lines.slice(startLine, endLine).join("\n");
+    if (itemId.test(body) && configId.test(body)) return { start: startLine, end: endLine, body };
+  }
+  return null;
+}
+
+/**
+ * 把 cohub 需要的 preset 声明幂等写入目标 profile 的 cordis.patch.yml。
+ *
+ * @param shippedDir 包内 presets 目录
+ * @param patchPath  目标 profile 的 cordis.patch.yml（父目录必须已存在）
+ * @param logger     可选日志（warn 用于冲突与降级）
+ */
+export function applyPresetPatchDeclarations(
+  shippedDir: string,
+  patchPath: string,
+  logger?: any,
+): PresetPatchApplyResult {
+  const result: PresetPatchApplyResult = { patchPath, appended: [], unchanged: [], conflicts: [] };
+
+  let declarations: Array<{ id: string; text: string }>;
+  try {
+    declarations = buildPresetPatchDeclarations(shippedDir);
+  } catch (error) {
+    result.degraded = "declarations unbuildable";
+    logger?.warn?.("cohub: 生成 preset 声明片段失败，跳过 profile patch 写入", error);
+    return result;
+  }
+  if (declarations.length === 0) {
+    result.degraded = "no shipped presets";
+    return result;
+  }
+
+  // 不放宽这一条：profile 目录不存在时绝不创建（避免给不存在的 profile 造目录）
+  if (!existsSync(dirname(patchPath))) {
+    result.degraded = "profile dir missing";
+    return result;
+  }
+
+  let original = "";
+  try {
+    original = readFileSync(patchPath, "utf8");
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") {
+      result.degraded = "patch unreadable";
+      logger?.warn?.(`cohub: 读取 ${patchPath} 失败，跳过 preset 声明写入`, error);
+      return result;
+    }
+  }
+  const existed = existsSync(patchPath);
+
+  const toAppend: string[] = [];
+  for (const decl of declarations) {
+    const found = findPresetInsertBlock(original, decl.id);
+    if (!found) {
+      toAppend.push(decl.text);
+      continue;
+    }
+    if (normalizeText(found.body) === normalizeText(decl.text)) {
+      result.unchanged.push(decl.id);
+      continue;
+    }
+    result.conflicts.push(decl.id);
+    logger?.warn?.(
+      `cohub: profile patch 里 preset "${decl.id}" 的声明与包内版本不一致，已保留你的版本（不覆盖）；` +
+        "若要跟随上游更新，请手动删除该 preset 的 - insert: 段后重启",
+    );
+  }
+  if (toAppend.length === 0) return result; // 幂等：无新增即不写盘、不备份
+
+  try {
+    if (existed) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").replace(/Z$/, "");
+      const backup = `${patchPath}.bak-${stamp}`;
+      copyFileSync(patchPath, backup);
+      result.backup = backup;
+    }
+    // 只在末尾追加：保留原有格式与注释，不重排文件
+    const separator = original.length === 0 ? "" : original.endsWith("\n") ? "\n" : "\n\n";
+    const next = original + separator + toAppend.join("\n\n") + "\n";
+    writeFileSync(patchPath, next, "utf8");
+    result.appended.push(...declarations.filter((d) => toAppend.includes(d.text)).map((d) => d.id));
+  } catch (error) {
+    result.degraded = "patch write failed";
+    logger?.warn?.(`cohub: 写入 ${patchPath} 失败（下一次启动会重试）`, error);
+  }
+  return result;
+}
+
+/**
+ * 解析当前活动 profile 的 cordis.patch.yml 路径。
+ *
+ * 优先 `$DSH_PROFILE`；未设置时若 `~/.dsh/profiles/` 下恰好只有一个 profile 目录就用它；
+ * 否则返回 null（多 profile 且无法判定时不猜，避免写错用户配置）。
+ *
+ * @param home DSH 家目录（`dshHomePath()`）
+ * @param env  环境变量映射（测试可注入）
+ */
+export function resolveProfilePatchPath(
+  home: string,
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  const root = join(home, "profiles");
+  const explicit = env.DSH_PROFILE?.trim();
+  if (explicit) return join(root, explicit, "cordis.patch.yml");
+  try {
+    const names = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && isSafePresetId(entry.name))
+      .map((entry) => entry.name);
+    if (names.length === 1) return join(root, names[0], "cordis.patch.yml");
+  } catch {
+    /* profiles 目录不存在：返回 null */
+  }
+  return null;
+}

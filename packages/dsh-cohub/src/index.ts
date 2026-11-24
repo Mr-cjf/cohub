@@ -12,7 +12,7 @@ import type { Volatile } from "@deepseek-ai/cosmokit";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
-import { copyTree, installShippedPresets } from "./preset-install";
+import { applyPresetPatchDeclarations, copyTree, installShippedPresets, resolveProfilePatchPath } from "./preset-install";
 import { CHINESE_LANGUAGE_INSTRUCTION } from "./chinese";
 import { COHUB_SKILLS } from "./skills";
 import { createCouncilTool } from "./council";
@@ -314,6 +314,8 @@ export const Config = z.object({
 export { ScheduleConfig, ResultBudgetConfig, DelegateBackgroundConfig, CustomRole, CohubSettingsSchema };
 /** 兼容/测试导出：preset 安装台账与递归复制（实现位于 preset-install.ts） */
 export { copyTree, installShippedPresets, hashTree, removeInstallRecord } from "./preset-install";
+// 测试与维护入口：preset 声明生成 / 幂等写入 profile patch / 活动 profile 解析
+export { applyPresetPatchDeclarations, buildPresetPatchDeclarations, resolveProfilePatchPath } from "./preset-install";
 
 /**
  * 0.1 时代的 settings namespace 段 schema（settings.yaml 的 cohub.* 段）。
@@ -357,7 +359,30 @@ function readPackageVersion(): string {
  * 安装失败只告警，绝不拖垮插件挂载（preset 是可选增强，技能才是核心能力）。
  */
 function installAgentPresets(logger: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void } | undefined) {
-  return installShippedPresets(SHIPPED_PRESETS_DIR, dshHomePath(".agent-presets"), readPackageVersion(), logger);
+  const r = installShippedPresets(SHIPPED_PRESETS_DIR, dshHomePath(".agent-presets"), readPackageVersion(), logger);
+  // ② 把 preset **声明**幂等写入当前 profile 的 cordis.patch.yml（新版宿主按声明行注册 preset，
+  //    只复制目录不够）。已存在且一致 → 不写盘；内容不同 → 保留用户版本并告警；失败不阻断挂载。
+  try {
+    const patchPath = resolveProfilePatchPath(dshHomePath());
+    if (patchPath === null) {
+      logger?.info?.("cohub: 无法判定活动 profile（$DSH_PROFILE 未设置且 profiles 下不止一个），跳过 preset 声明写入");
+    } else {
+      const p = applyPresetPatchDeclarations(SHIPPED_PRESETS_DIR, patchPath, logger);
+      if (p.appended.length > 0) {
+        logger?.info?.(
+          `cohub: 已向 ${patchPath} 追加 ${p.appended.length} 条 preset 声明（${p.appended.join(", ")}）${p.backup ? `，原文件已备份为 ${p.backup}` : ""}`,
+        );
+      }
+      if (p.conflicts.length > 0) {
+        logger?.info?.(`cohub: ${p.conflicts.length} 条 preset 声明保留你的版本：${p.conflicts.join(", ")}`);
+      }
+      if (p.degraded !== undefined) logger?.info?.(`cohub: preset 声明写入已跳过（${p.degraded}）`);
+    }
+  } catch (error) {
+    // 防御：声明写入是可选增强，任何异常都不得拖垮插件挂载
+    logger?.warn?.("cohub: 写入 profile patch 的 preset 声明失败（不影响插件启动）", error);
+  }
+  return r;
 }
 
 export function apply(ctx: any, config: any) {

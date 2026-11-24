@@ -11,7 +11,8 @@ import { join } from "node:path";
 // lib/ 是 bun 产物（无 .d.ts）。allowJs 的 JS 推断对这几个 API 过窄（如 never[] / 缺 degraded），
 // 故在**产物边界**按 any 使用；这些 API 的类型正确性由 bun run typecheck:src（src 源）覆盖。
 import * as libBuild from "../lib/index.js";
-const { installShippedPresets, removeInstallRecord, hashTree }: any = libBuild;
+const { installShippedPresets, removeInstallRecord, hashTree, buildPresetPatchDeclarations, applyPresetPatchDeclarations, resolveProfilePatchPath }: any =
+  libBuild;
 
 let pass = 0;
 let fail = 0;
@@ -137,6 +138,66 @@ check("用户自建目录不被误删", existsSync(join(userRoot2, "my-own", "pr
 r8 = installShippedPresets(shipped2, userRoot2, "0.4.8");
 check("孤儿清理幂等", r8.removed.length === 0);
 rmSync(sandbox2, { recursive: true, force: true });
+
+// ---- 场景 9：preset 声明幂等写入 profile 的 cordis.patch.yml（① 空 patch ② 幂等 ③ 冲突 ④ 备份/开关） ----
+// 全部在仓库 .tmp 沙箱里模拟 profile，绝不触碰真实的 ~/.dsh。
+console.log("===== 场景 9：profile patch 声明写入 =====");
+const homeDir = join(sandbox, "home");
+const profileRoot = join(homeDir, "profiles", "test-profile");
+const patchPath = join(profileRoot, "cordis.patch.yml");
+const decls = buildPresetPatchDeclarations(realPresets);
+check("声明可从包内 presets 目录生成（4 档位 + 2 主代理 = 6 条）", decls.length === 6);
+check("每条声明都带 config.id", decls.every((d: any) => d.text.includes(`        id: ${d.id}`)));
+check("声明插件行来自 agent.cordis.yml（含 persona）", decls.every((d: any) => d.text.includes("@deepseek-ai/dsh-persona")));
+
+// ① 空 patch（文件不存在）：追加全部声明
+mkdirSync(profileRoot, { recursive: true });
+let pr = applyPresetPatchDeclarations(realPresets, patchPath, { warn() {}, info() {} });
+const t1 = read(patchPath);
+check("① 空 patch 追加全部声明", pr.appended.length === decls.length && existsSync(patchPath));
+check("① 每条 - id: preset-<id> 都落盘", decls.every((d: any) => t1.includes(`    - id: preset-${d.id}`)));
+check("① 原文件不存在 → 不产生备份", pr.backup === undefined);
+
+// ② 已存在同 id 同内容 → 不重复、字节不变
+pr = applyPresetPatchDeclarations(realPresets, patchPath, { warn() {} });
+check("② 第二次不追加", pr.appended.length === 0);
+check("② 全部判定为 unchanged", pr.unchanged.length === decls.length);
+check("② 文件字节完全不变", read(patchPath) === t1);
+check("② 无改动不写盘 → 无备份", pr.backup === undefined);
+
+// ③ 已存在但内容不同 → 保留用户版 + warning，不覆盖
+const edited = t1.replace("fetch: true", "fetch: false");
+writeFileSync(patchPath, edited, "utf8");
+const warnings: string[] = [];
+pr = applyPresetPatchDeclarations(realPresets, patchPath, { warn: (...a: any[]) => warnings.push(a.map(String).join(" ")) });
+check("③ 仅 1 条判定冲突", pr.conflicts.length === 1);
+check("③ 其余条仍 unchanged", pr.unchanged.length === decls.length - 1);
+check("③ 用户版本被保留（文件未变）", read(patchPath) === edited);
+check("③ 记录了 warning", warnings.some((w) => w.includes("保留你的版本")));
+check("③ 冲突不写盘 → 无备份", pr.backup === undefined);
+
+// ④ 既有 patch 上追加缺失声明 → 先备份，且原有注释/声明保留
+const patch2Dir = join(sandbox, "profile2", "profiles", "p2");
+mkdirSync(patch2Dir, { recursive: true });
+const patch2 = join(patch2Dir, "cordis.patch.yml");
+writeFileSync(patch2, "# 占位注释\n# 用户自己的注释\n" + decls[0].text + "\n", "utf8");
+const p2 = applyPresetPatchDeclarations(realPresets, patch2, { warn() {} });
+check("④ 已声明的那条不重复追加", !p2.appended.includes(decls[0].id));
+check("④ 其余声明被追加", p2.appended.length === decls.length - 1);
+check("④ 生成 .bak-<时间戳> 备份且内容为原文", typeof p2.backup === "string" && existsSync(p2.backup) && read(p2.backup).startsWith("# 占位注释"));
+check("④ 原有注释与既有声明保留", read(patch2).includes("# 用户自己的注释") && read(patch2).includes(`    - id: preset-${decls[0].id}`));
+
+// ④' installPresets:false 由 index.ts 的守卫整块跳过（声明写入也在该守卫内）
+const srcText = read(join(import.meta.dirname, "..", "src", "index.ts"));
+const guarded = /if \(config\.installPresets !== false\) \{[\s\S]*installAgentPresets\([\s\S]*?\n {2}\}/.test(srcText);
+const insideInstaller = /function installAgentPresets[\s\S]*?applyPresetPatchDeclarations\(/.test(srcText);
+check("④ installPresets:false 时声明写入同样被跳过", guarded && insideInstaller);
+
+// ⑤ 默认 profile 解析：$DSH_PROFILE 优先；未设置时唯一 profile 自动取用；多个则不猜
+check("⑤ $DSH_PROFILE 优先", resolveProfilePatchPath(homeDir, { DSH_PROFILE: "mobile" }) === join(homeDir, "profiles", "mobile", "cordis.patch.yml"));
+check("⑤ 唯一 profile 时自动取用", resolveProfilePatchPath(homeDir, {}) === patchPath);
+mkdirSync(join(homeDir, "profiles", "second"), { recursive: true });
+check("⑤ 多个 profile 且未指定 → null（不猜）", resolveProfilePatchPath(homeDir, {}) === null);
 
 rmSync(sandbox, { recursive: true, force: true });
 
