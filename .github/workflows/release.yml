@@ -122,11 +122,12 @@ jobs:
             echo "tag=$TAG"
             echo "package=$PKG"
             echo "version=$VERSION"
+            echo "manifest=$MANIFEST"
             echo "prerelease=$PRERELEASE"
             echo "latest=$LATEST"
           } >> "$GITHUB_OUTPUT"
 
-          echo "解析结果: tag=$TAG package=$PKG version=$VERSION prerelease=$PRERELEASE latest=$LATEST"
+          echo "解析结果: tag=$TAG package=$PKG version=$VERSION manifest=$MANIFEST prerelease=$PRERELEASE latest=$LATEST"
 
       - name: 创建 GitHub Release（幂等）
         env:
@@ -134,6 +135,7 @@ jobs:
           TAG: ${{ steps.meta.outputs.tag }}
           PKG: ${{ steps.meta.outputs.package }}
           VERSION: ${{ steps.meta.outputs.version }}
+          MANIFEST: ${{ steps.meta.outputs.manifest }}
           PRERELEASE: ${{ steps.meta.outputs.prerelease }}
           LATEST: ${{ steps.meta.outputs.latest }}
         run: |
@@ -150,8 +152,49 @@ jobs:
             echo "创建 Release：$TITLE（latest=$LATEST）"
           fi
 
+          # 正文来源：优先抽取 tag 快照内 CHANGELOG 的对应版本段，缺失/抽取为空才回退自动生成。
+          # 抽段规则：起于 `##[ \t]` 且含带边界版本号的行，止于下一 `## ` 行（不含），去尾空行，截 60000 字符。
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          CHANGELOG="$(dirname "$MANIFEST")/CHANGELOG.md"
+          NOTES_SOURCE=generated
+          if git cat-file -e "$TAG:$CHANGELOG" 2>/dev/null &&
+            git show "$TAG:$CHANGELOG" | awk -v ver="$VERSION" '
+              BEGIN {
+                v = ver
+                gsub(/[.]/, "[.]", v)
+                pat = "[^0-9.]" v "[^0-9.]"
+                started = 0
+                out = ""
+              }
+              started == 0 {
+                if ($0 ~ /^##[ \t]/ && (" " $0 " ") ~ pat) {
+                  started = 1
+                  out = $0 "\n"
+                }
+                next
+              }
+              {
+                if ($0 ~ /^## /) exit
+                out = out $0 "\n"
+              }
+              END {
+                if (started == 0) exit
+                sub(/\n+$/, "", out)
+                if (length(out) > 60000) out = substr(out, 1, 60000)
+                printf "%s", out
+              }
+            ' > "$NOTES_FILE" &&
+            [ -s "$NOTES_FILE" ]; then
+            NOTES_SOURCE=changelog
+          fi
+          echo "::notice::notes source=$NOTES_SOURCE"
+
           # 显式声明：预发布永不设为 Latest
-          args=(--title "$TITLE" --generate-notes --verify-tag)
+          if [ "$NOTES_SOURCE" = "changelog" ]; then
+            args=(--title "$TITLE" --notes-file "$NOTES_FILE" --verify-tag)
+          else
+            args=(--title "$TITLE" --generate-notes --verify-tag)
+          fi
           if [ "$PRERELEASE" = "true" ]; then
             args+=(--prerelease --latest=false)
           elif [ "$LATEST" = "true" ]; then
