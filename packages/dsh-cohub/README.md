@@ -187,6 +187,7 @@ revision 冲突拒绝保存、只写显式配置的代理等。
                              # volatile：设置页可改、热生效。每项 id（kebab-case）/ name（非空）/
                              # members（角色名数组，至少 1 个，取自内置角色或 customRoles 的 name）必填，
                              # description 可选；「成员必须真实存在」「id 不得重复」由运行时校验。
+                             # lead（可选）：队长角色名，必须在本团队成员内；空 = 默认 co-orchestrator。
     activeTeam: ""           # 活动团队 id；空串 = 不限制（全部角色可用）。volatile，热生效。
 ```
 
@@ -220,7 +221,7 @@ revision 冲突拒绝保存、只写显式配置的代理等。
       stall:
         enabled: true
         consecutiveErrors: 3      # S1 连续同类错误阈值
-        idleMs: 180000            # S2 无结果空转毫秒
+        idleMs: 600000            # S2 无结果空转毫秒（10 分钟）
         reasoningWithoutAction: 50 # S3 纯推理无动作阈值
         loopCount: 3              # S4 同工具名 + 同参数重复次数
         graceMs: 30000            # 宽限窗口

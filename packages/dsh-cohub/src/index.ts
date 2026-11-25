@@ -172,6 +172,8 @@ const Team = z.object({
     .array(z.string().min(1))
     .min(1)
     .description("成员角色名（内置角色或 customRoles 的 name；至少 1 个；存在性检查在运行时）"),
+  /** 队长角色名：可省略；空 = 默认 co-orchestrator。只有 string 这一层校验（非空由运行时判） */
+  lead: z.string().description("队长的角色名；必须在本团队成员内；空 = 默认 co-orchestrator"),
 });
 
 /** delegate 执行器环境契约注入配置（P1-1）：默认开、可关闭、文本可覆盖 */
@@ -189,7 +191,7 @@ const StallDetector = z.object({
   /** S1 连续同类错误阈值（同一归一化错误签名连续出现且期间无成功工具结果） */
   consecutiveErrors: z.number().default(3),
   /** S2 无结果空转毫秒（距上次工具结果超过它且仍在产出推理块） */
-  idleMs: z.number().default(180_000),
+  idleMs: z.number().default(600_000),
   /** S3 纯推理无动作阈值（连续推理块数，期间 0 次工具调用） */
   reasoningWithoutAction: z.number().default(50),
   /** S4 重复调用循环阈值（同工具名 + 归一化参数重复且结果均为错误/未变） */
