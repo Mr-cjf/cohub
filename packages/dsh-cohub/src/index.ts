@@ -501,6 +501,10 @@ export function apply(ctx: any, config: any) {
     resultBudget: config.resultBudget.get(),
     delegateBackground: config.delegateBackground.get(),
     delegateSubagentPreset: config.delegateSubagentPreset.get(),
+    // 团队过滤（Config.teams / activeTeam）：派发层据此限定可派角色；activeTeam 为空 → 不限制。
+    // 两者都是 volatile，每次 execute 经 getSettings() 取当前快照 → 设置页热改即生效。
+    teams: config.teams.get(),
+    activeTeam: config.activeTeam.get(),
   });
   const currentSkills = () => config.skills.get();
 

@@ -19,7 +19,10 @@
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
 import {
+  describeRoleNotAllowed,
+  isRoleAllowed,
   presetForTier,
+  resolveActiveTeam,
   resolveSkillSnapshot,
   resolveTier,
   TIER_TOOLS,
@@ -27,6 +30,8 @@ import {
   type CustomRoleConfig,
   type ResolvedRole,
   type SkillSnapshot,
+  type TeamConfig,
+  type TeamFilterConfig,
 } from "./roles.ts";
 import { EnvSignatureLearner, envFingerprint, normalizeErrorSignature, pickEnvContractText, readEnvSignatures, writeEnvSignatures, type EnvContractFacts, type EnvFingerprint, type EnvSignaturesConfig } from "./env-signatures.ts";
 import { contentText } from "./text-utils.ts";
@@ -152,6 +157,11 @@ export interface DelegateConfig {
   customRoles?: readonly CustomRoleConfig[];
   /** 被禁用的角色名（可选配置渠道）：命中时错误文案区分「存在但被禁用」与「不存在」。 */
   disabledSkills?: readonly string[];
+  /** 全部团队（Config.teams 透传）：与 activeTeam 一起决定「当前能派哪些角色」。
+   *  缺省 / activeTeam 为空 → 不限制（全部角色可用，行为与接线前逐字一致）。 */
+  teams?: readonly TeamConfig[];
+  /** 当前团队 id（Config.activeTeam 透传）：空串 = 不限制；指向不存在的团队同样视为不限制。 */
+  activeTeam?: string;
   /** 后台 job 模式（background delegate）：默认关闭 → 完全保持前台同步行为。
    *  开启后 delegate 把这次运行注册为 DSH 后台 job 并立即返回 jobId，
    *  主代理用 job_output 取结果（或等完成时自动唤醒），等待期间可并行推进其他工作。
@@ -1915,7 +1925,15 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
     // 子代理独立精简 preset：默认开启（settings 优先，config 兜底；缺省 true = 新行为）
     const presetCfg = settingsNow.delegateSubagentPreset ?? config.delegateSubagentPreset;
     const subagentPresetEnabled = presetCfg?.enabled ?? true;
-    return { retry, stall, schedule: scheduleCfg, budget, background, subagentPresetEnabled };
+    // 团队过滤（Config.teams / activeTeam）：settings 优先，config 兜底。activeTeam 为空 →
+    // 不限制（isRoleAllowed 恒 true），因此未配置团队的部署行为与接线前逐字一致。
+    const teamFilter: TeamFilterConfig = {
+      teams: settingsNow.teams ?? config.teams,
+      activeTeam: settingsNow.activeTeam ?? config.activeTeam,
+      customRoles: config.customRoles,
+      disabledSkills: config.disabledSkills,
+    };
+    return { retry, stall, schedule: scheduleCfg, budget, background, subagentPresetEnabled, teamFilter };
   }
 
   // P3-2（N1）：环境契约持久化配置归一（默认 auto；无缓存时行为不变；读写失败静默降级）
@@ -1964,7 +1982,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       }
 
       // P3-3（N3）：每次调用解析生效配置（settings > config > 保守默认）；RETRYABLE 随 retryableReasons 动态
-      const { retry, stall, schedule, budget, background, subagentPresetEnabled } = resolveRuntimeConfig();
+      const { retry, stall, schedule, budget, background, subagentPresetEnabled, teamFilter } = resolveRuntimeConfig();
       const RETRYABLE = new Set(retry.retryableReasons);
       ctx.logger?.info?.("[cohub schedule] 生效调度参数：batch=" + (schedule?.maxParallelBatch ?? 5)
         + " wallMs=" + (schedule?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS));
@@ -1977,6 +1995,19 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       });
       const { skill, role: skillRole, route, fallback: skillFallback, note: skillNote } =
         resolveSkillAndRoute(args.skill, getRoutes, ctx, ctx.logger, skillSnapshot);
+      // ①b 团队过滤（Config.teams / activeTeam）：skill 名解析之后、任何 spawn 之前硬性校验。
+      //    无活动团队时 isRoleAllowed 恒 true → 与接线前行为逐字一致；团队生效时不合法直接抛错
+      //    （返回成功文本会让主代理误以为已派出）。兜底来的 co-fixer 同样受团队约束。
+      if (!isRoleAllowed(skill.name, teamFilter)) {
+        const rejection = describeRoleNotAllowed(skill.name, teamFilter);
+        ctx.logger?.warn?.("[cohub team-filter] delegate：" + rejection);
+        throw new Error(rejection);
+      }
+      // 配置暂时不一致（activeTeam 指向不存在的 id）时 fail-soft 为「不限制」，但必须留痕可诊断
+      if (resolveActiveTeam(teamFilter) === null && (teamFilter.activeTeam ?? "").trim().length > 0) {
+        ctx.logger?.warn?.("[cohub team-filter] activeTeam \"" + teamFilter.activeTeam
+          + "\" 在 teams 中不存在，本次按「不限制」处理（全部角色可用），请修正配置");
+      }
       // label 里的 skill 片段：兜底时显式标 (default:co-fixer)，绝不出现 ":undefined"
       const skillTag = formatSkillLabel(skill, skillFallback);
 

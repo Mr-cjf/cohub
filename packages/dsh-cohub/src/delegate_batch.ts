@@ -34,7 +34,15 @@ import {
 import { applyResultBudget, approxTokens, resolveResultBudget, resolveSkillResultMaxChars } from "./result-budget.ts";
 import { validateContractText, formatContractViolation } from "./output-contract.ts";
 import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
-import { resolveSkillSnapshot, type SkillSnapshot } from "./roles.ts";
+import {
+  describeRoleNotAllowed,
+  isRoleAllowed,
+  listAllowedRoles,
+  resolveActiveTeam,
+  resolveSkillSnapshot,
+  type SkillSnapshot,
+  type TeamFilterConfig,
+} from "./roles.ts";
 import { contentText } from "./text-utils.ts";
 import { WALL_CLOCK_BUDGET_MS } from "./shared/constants.ts";
 import { maybeDeferTodoNudge } from "./todo-nudge.ts";
@@ -74,22 +82,42 @@ const SKILL_NAMES_TEXT = KNOWN_SKILL_NAMES.join(", ");
  *
  * 导出仅为单测（test/roles-dispatch.ts）覆盖批量路径的白名单判据；运行时只在本文件内调用。
  */
-export function assertKnownSkill(raw: string, snapshot: SkillSnapshot): { ok: true } | { ok: false; error: string } {
+export function assertKnownSkill(
+  raw: string,
+  snapshot: SkillSnapshot,
+  teamConfig?: TeamFilterConfig,
+): { ok: true } | { ok: false; error: string } {
   if (raw.length === 0) return { ok: true };
   const lookup = snapshot.resolve(raw);
   if (lookup.ok) return { ok: true };
-  const names = snapshot.names.join(" / ");
+  // 可用名单按 listAllowedRoles 动态生成：设置了 activeTeam 时只列该团队成员，
+  // 否则列统一快照的全部角色（内置 ∪ customRoles）——文案与 orchestrator 看到的名单保持同源。
+  const activeTeam = teamConfig === undefined ? null : resolveActiveTeam(teamConfig);
+  const scoped = activeTeam === null
+    ? [...snapshot.names]
+    : snapshot.names.filter((name) => activeTeam.members.includes(name));
+  const allowedNames = activeTeam === null
+    // 未传团队配置（旧调用 / 单测）→ 用调用方快照；传了 → 按 listAllowedRoles 动态生成
+    // （其内置 ∪ customRoles 与上面的 skillSnapshot 同源，名单一致）
+    ? (teamConfig === undefined ? [...snapshot.names] : listAllowedRoles(teamConfig))
+    : (scoped.length > 0 ? scoped : [...activeTeam.members]);
+  const names = allowedNames.join(" / ");
+  const scopeNote = activeTeam === null
+    ? ""
+    : `（当前团队 "${activeTeam.name}"(${activeTeam.id}) 限定）`;
   if (lookup.reason === "disabled") {
     return {
       ok: false,
       error: `skill 名 "${raw}" 存在但已被禁用（config.disabledSkills），当前不可派发；`
-        + `如需使用请将其从禁用清单中移除，而不是改名。可用角色：${names}`,
+        + `如需使用请将其从禁用清单中移除，而不是改名。可用角色${scopeNote}：${names}`,
     };
   }
   return {
     ok: false,
-    error: `skill 名 "${raw}" 不存在。可用角色：${names}`
-      + `（co-orchestrator 为主代理，通常委派用其余 ${snapshot.names.length - 1} 个）`,
+    error: `skill 名 "${raw}" 不存在。可用角色${scopeNote}：${names}`
+      + (activeTeam === null
+        ? `（co-orchestrator 为主代理，通常委派用其余 ${snapshot.names.length - 1} 个）`
+        : ""),
   };
 }
 
@@ -306,12 +334,20 @@ export function createDelegateBatchTool(
     const toolFilterEnabled = (settingsNow.toolFilter ?? config.toolFilter)?.enabled ?? true;
     // 子代理独立精简 preset：默认开启（settings 优先，config 兜底）
     const presetEnabled = (settingsNow.delegateSubagentPreset ?? config.delegateSubagentPreset)?.enabled ?? true;
+    // 团队过滤（Config.teams / activeTeam）：settings 优先，config 兜底；activeTeam 为空 → 不限制
+    const teamFilter: TeamFilterConfig = {
+      teams: settingsNow.teams ?? config.teams,
+      activeTeam: settingsNow.activeTeam ?? config.activeTeam,
+      customRoles: config.customRoles,
+      disabledSkills: config.disabledSkills,
+    };
     return {
       wallClockBudgetMs: Math.max(0, scheduleCfg?.wallClockBudgetMs ?? WALL_CLOCK_BUDGET_MS),
       maxParallelBatch: Math.min(rawMaxParallel, MAX_BATCH_SIZE),
       budget,
       toolFilterEnabled,
       presetEnabled,
+      teamFilter,
     };
   }
 
@@ -334,7 +370,8 @@ export function createDelegateBatchTool(
               type: "string",
               required: true,
               description: "必填。合法值（" + KNOWN_SKILL_NAMES.length + " 选 1）：" + SKILL_NAMES_TEXT
-                + "。注意 co-orchestrator 为主代理，通常委派用其余 " + (KNOWN_SKILL_NAMES.length - 1) + " 个。",
+                + "。注意 co-orchestrator 为主代理，通常委派用其余 " + (KNOWN_SKILL_NAMES.length - 1) + " 个。"
+                + "若配置了 activeTeam，实际可派发角色收窄为该团队 members（越界该 task 单独返回 error）。",
             },
             prompt: { type: "string", required: true, description: "必填，给该代理的具体任务（自包含）" },
             // 粒度自检（「单包硬上限」的运行时版本）：可选声明，超限只让本 task 落 error 并附拆分建议。
@@ -374,7 +411,7 @@ export function createDelegateBatchTool(
         throw new Error(depthRejection);
       }
 
-      const { wallClockBudgetMs, maxParallelBatch, budget, toolFilterEnabled, presetEnabled } = resolveRuntimeConfig();
+      const { wallClockBudgetMs, maxParallelBatch, budget, toolFilterEnabled, presetEnabled, teamFilter } = resolveRuntimeConfig();
       // 统一技能快照（内置 ∪ config.customRoles）：白名单、技能解析、档位裁剪、preset、提示词
       // 全部经这一份名单，与 delegate 单发路径同一条解析链。每批重建 → customRoles 热改即生效。
       const skillSnapshot = resolveSkillSnapshot({
@@ -442,7 +479,7 @@ export function createDelegateBatchTool(
           // 不合法时**只让该 task 失败**（返回 skillError，由收集阶段转成 status:"error"），
           // 绝不抛全局异常——同批其它 task 照常派发，不被一个写错的 skill 名拖垮。
           // 空串/缺失仍走上方的兜底（:382-394 不变），这里只拦「非空但不合法 / 已禁用」。
-          const skillCheck = assertKnownSkill(requestedSkill, skillSnapshot);
+          const skillCheck = assertKnownSkill(requestedSkill, skillSnapshot, teamFilter);
           if (!skillCheck.ok) {
             ctx.logger?.warn?.(
               "[cohub delegate_batch] task \"" + taskId + "\" 的 skill 名 \"" + requestedSkill
@@ -454,6 +491,18 @@ export function createDelegateBatchTool(
               taskId, skillName: requestedSkill, skillTag: requestedSkill, task,
               taskNotes: [], run: undefined, ac: undefined, onExecAbort: null, startedAt,
               startError: undefined, skillError: skillCheck.error,
+            };
+          }
+          // ② 团队过滤（Config.teams / activeTeam）：白名单之后、路由与 spawn 之前逐 task 校验。
+          //    与白名单同一纪律——只让该 task 落 error，同批其它 task 照常派发，绝不整批失败。
+          //    activeTeam 为空 → isRoleAllowed 恒 true，历史调用零行为变化。
+          if (!isRoleAllowed(requestedSkill, teamFilter)) {
+            const rejection = describeRoleNotAllowed(requestedSkill, teamFilter);
+            ctx.logger?.warn?.("[cohub team-filter] delegate_batch task \"" + taskId + "\"：" + rejection);
+            return {
+              taskId, skillName: requestedSkill, skillTag: requestedSkill, task,
+              taskNotes: [], run: undefined, ac: undefined, onExecAbort: null, startedAt,
+              startError: undefined, skillError: rejection,
             };
           }
           // D · 粒度自检（「单包硬上限」的运行时版本）：白名单之后、路由之前。

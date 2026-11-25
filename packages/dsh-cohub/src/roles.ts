@@ -249,6 +249,119 @@ export interface SkillSnapshotConfig {
   readonly disabledSkills?: readonly string[];
 }
 
+// ── 团队过滤（Config.teams / Config.activeTeam） ─────────────────────────────
+//
+// 背景：配置层早已有 teams（角色池编组）与 activeTeam（当前启用哪一组），但派发层从不读它们，
+// 于是「设置当前团队后仍能派任何角色」= 团队只是摆设。本段是这条约束的唯一判定源：
+//   activeTeam 空串 / 找不到对应团队 → null（**不限制**，全部角色可用，与旧行为逐字一致）；
+//   activeTeam 命中团队 → 只有 members 内的角色可派发。
+//
+// 为什么「找不到对应团队」视为不限制而不是硬报错：teams 与 activeTeam 都是 volatile 字段，
+// 用户在设置页里可能先把 activeTeam 写成新 id、再补 teams 条目（或反向删除）；此时硬失败会让
+// 整个编排立刻瘫痪，且错误出现在每次派发。本插件既有的处置纪律是 fail-soft + 可诊断文案
+// （见 delegate 的 preset / toolFilter 降级），故这里同样取「不限制 + 由调用方 warn」。
+
+/** 团队配置（Config.teams 的元素；schema 在 index.ts，这里只声明判定需要的字段） */
+export interface TeamConfig {
+  /** 团队 id（kebab-case；Config.activeTeam 的取值） */
+  readonly id: string;
+  /** 显示名（进错误文案给人看） */
+  readonly name: string;
+  /** 可选说明：这组角色适合什么任务 */
+  readonly description?: string;
+  /** 成员角色名（内置角色或 customRoles 的 name） */
+  readonly members: readonly string[];
+}
+
+/** 解析后的活动团队（{@link resolveActiveTeam} 的返回值） */
+export interface ActiveTeam {
+  readonly id: string;
+  readonly name: string;
+  readonly members: readonly string[];
+}
+
+/**
+ * 团队过滤的配置视图：teams / activeTeam 决定「能派谁」，customRoles 只影响
+ * {@link listAllowedRoles} 在**不限制**时回显的完整名单（内置 ∪ 自定义）。
+ */
+export interface TeamFilterConfig extends SkillSnapshotConfig {
+  /** 全部团队（Config.teams） */
+  readonly teams?: readonly TeamConfig[];
+  /** 当前团队 id；空串 = 不限制 */
+  readonly activeTeam?: string;
+}
+
+/**
+ * 解析当前活动团队。
+ *
+ * 返回 null 的两种情形等价处理（= 不限制）：
+ *   ① activeTeam 为空 / 纯空白（缺省配置）；
+ *   ② activeTeam 非空但在 teams 中找不到同 id 的团队。
+ *
+ * ② 是**有意的 fail-soft**：teams 与 activeTeam 都是热改的 volatile 配置，写入顺序不受控，
+ * 把「配置暂时不一致」变成每次派发都失败会直接瘫痪编排；调用方仍会 warn，用户可自行修配置。
+ *
+ * @param config - 团队过滤配置（可缺省）
+ * @returns `{ id, name, members }`（members 已去空白 / 去空项，保留原顺序）；null = 不限制
+ */
+export function resolveActiveTeam(config?: TeamFilterConfig): ActiveTeam | null {
+  const id = (config?.activeTeam ?? "").trim();
+  if (id.length === 0) return null;
+  const matched = (config?.teams ?? []).find((team) => (team?.id ?? "").trim() === id);
+  if (matched === undefined) return null;
+  const members = (matched.members ?? [])
+    .map((member) => (typeof member === "string" ? member.trim() : ""))
+    .filter((member) => member.length > 0);
+  const name = (matched.name ?? "").trim();
+  return { id, name: name.length > 0 ? name : id, members };
+}
+
+/**
+ * 角色是否允许被派发。
+ *
+ * @param roleName - 角色名（空白会被 trim；空名的判定结果是「不允许」——空名本来就不可派发）
+ * @param config - 团队过滤配置（缺省 / activeTeam 为空 / 团队不存在 → 恒 true）
+ * @returns 允许与否
+ */
+export function isRoleAllowed(roleName: string | undefined, config?: TeamFilterConfig): boolean {
+  const team = resolveActiveTeam(config);
+  if (team === null) return true;
+  const key = (roleName ?? "").trim();
+  return key.length > 0 && team.members.includes(key);
+}
+
+/**
+ * 当前允许派发的角色名单（用于错误提示与 orchestrator 名单）。
+ *
+ * - 无活动团队 → 统一快照的全部角色名（内置 ∪ config.customRoles，顺序同快照）；
+ * - 有活动团队 → 该团队 members（保留配置顺序；成员名可能是尚未注册的角色，调用方按名使用）。
+ *
+ * @param config - 团队过滤配置（可缺省）
+ * @returns 角色名数组（每次新建，调用方可安全修改）
+ */
+export function listAllowedRoles(config?: TeamFilterConfig): string[] {
+  const team = resolveActiveTeam(config);
+  if (team !== null) return [...team.members];
+  return [...resolveSkillSnapshot(config).names];
+}
+
+/**
+ * 生成「角色不在当前团队内」的错误文案（delegate / delegate_batch 共用同一措辞）。
+ *
+ * 形如：`角色 "co-writer" 不在当前团队 "写作组"(writing) 内；该团队可用角色：co-writer, co-editor`
+ * 团队可用角色为空时如实说明「该团队没有任何可用角色」，而不是留一个空清单。
+ *
+ * @param roleName - 被拒的角色名
+ * @param config - 团队过滤配置
+ * @returns 错误文案（调用方据此构造 Error / task error）
+ */
+export function describeRoleNotAllowed(roleName: string, config?: TeamFilterConfig): string {
+  const team = resolveActiveTeam(config);
+  if (team === null) return `角色 "${roleName}" 允许派发（当前未设置 activeTeam）`;
+  const available = team.members.length > 0 ? team.members.join(", ") : "（该团队没有任何可用角色）";
+  return `角色 "${roleName}" 不在当前团队 "${team.name}"(${team.id}) 内；该团队可用角色：${available}`;
+}
+
 /** 统一技能快照：一次解析，派发层各处共用同一份名单与档位 */
 export interface SkillSnapshot {
   /** 全部角色（内置在前、顺序与 COHUB_SKILLS 一致；自定义在后；同名覆盖原位） */
