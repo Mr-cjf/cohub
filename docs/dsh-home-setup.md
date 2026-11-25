@@ -456,7 +456,7 @@ node -e "const r=require(process.env.USERPROFILE+'/.dsh/.cohub-preset-install.js
       stall:
         enabled: true
         consecutiveErrors: 3
-        idleMs: 180000
+        idleMs: 600000
         reasoningWithoutAction: 50
         loopCount: 3
         graceMs: 30000

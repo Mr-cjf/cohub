@@ -1025,7 +1025,7 @@ class StallWatchdog {
     this.cfg = {
       enabled: cfg.enabled ?? false,
       consecutiveErrors: Math.max(1, Math.trunc(cfg.consecutiveErrors ?? 3)),
-      idleMs: Math.max(0, cfg.idleMs ?? 180_000),
+      idleMs: Math.max(0, cfg.idleMs ?? 600_000),
       reasoningWithoutAction: Math.max(1, Math.trunc(cfg.reasoningWithoutAction ?? 50)),
       loopCount: Math.max(1, Math.trunc(cfg.loopCount ?? 3)),
       graceMs: Math.max(0, cfg.graceMs ?? 30_000),
@@ -1904,7 +1904,7 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
     const stall = {
       enabled: retryCfg?.stall?.enabled ?? false,
       consecutiveErrors: Math.max(1, Math.trunc(retryCfg?.stall?.consecutiveErrors ?? 3)),
-      idleMs: Math.max(0, retryCfg?.stall?.idleMs ?? 180_000),
+      idleMs: Math.max(0, retryCfg?.stall?.idleMs ?? 600_000),
       reasoningWithoutAction: Math.max(1, Math.trunc(retryCfg?.stall?.reasoningWithoutAction ?? 50)),
       loopCount: Math.max(1, Math.trunc(retryCfg?.stall?.loopCount ?? 3)),
       graceMs: Math.max(0, retryCfg?.stall?.graceMs ?? 30_000),

@@ -10,8 +10,8 @@
  * 使用位置：dsh-cohub（council 执行超时 / councilTimeoutMs 配置默认值）、
  * oh-my-opencode-cohub（council + adaptive-params default）。
  *
- * ⚠️ dsh-cohub `delegate.ts` 的 `idleMs`（约 L151 / L455）数值同为 180_000，
- * 但它是**停滞检测的空闲阈值**（StallDetector S2），语义与本常量无关，勿并入。
+ * ⚠️ dsh-cohub `delegate.ts` 的 stall `idleMs`（S2 停滞检测的空闲阈值）值与本常量无关，
+ * 现已为 600_000（10 分钟）；历史上曾同为 180_000，但语义不同，勿并入本常量。
  */
 export const COUNCIL_TIMEOUT_MS = 180_000;
 
