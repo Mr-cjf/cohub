@@ -271,6 +271,13 @@ export interface TeamConfig {
   readonly description?: string;
   /** 成员角色名（内置角色或 customRoles 的 name） */
   readonly members: readonly string[];
+  /**
+   * 队长角色名（可省略）：决定**主代理**运行时人格（见 {@link resolveLeadPersona}）。
+   *
+   * 与「派发过滤」无关——lead 不自动获得派发豁免：若 lead 不在 members 里，它只是不能被派发，
+   * 仍可担任主代理（回退规则见 {@link resolveActiveTeam}）。
+   */
+  readonly lead?: string;
 }
 
 /** 解析后的活动团队（{@link resolveActiveTeam} 的返回值） */
@@ -278,7 +285,12 @@ export interface ActiveTeam {
   readonly id: string;
   readonly name: string;
   readonly members: readonly string[];
+  /** 队长角色名（已按回退规则确定；members 为空时为 ""） */
+  readonly lead: string;
 }
+
+/** 主代理自身的角色名（团队队长回退目标；其人格由 preset 自带，无需注入） */
+export const PRIMARY_AGENT_ROLE = "co-orchestrator";
 
 /**
  * 团队过滤的配置视图：teams / activeTeam 决定「能派谁」，customRoles 只影响
@@ -302,7 +314,8 @@ export interface TeamFilterConfig extends SkillSnapshotConfig {
  * 把「配置暂时不一致」变成每次派发都失败会直接瘫痪编排；调用方仍会 warn，用户可自行修配置。
  *
  * @param config - 团队过滤配置（可缺省）
- * @returns `{ id, name, members }`（members 已去空白 / 去空项，保留原顺序）；null = 不限制
+ * @returns `{ id, name, members, lead }`（members 已去空白 / 去空项，保留原顺序；lead 见
+ *          {@link resolveLeadPersona} 的回退规则）；null = 不限制
  */
 export function resolveActiveTeam(config?: TeamFilterConfig): ActiveTeam | null {
   const id = (config?.activeTeam ?? "").trim();
@@ -313,7 +326,103 @@ export function resolveActiveTeam(config?: TeamFilterConfig): ActiveTeam | null 
     .map((member) => (typeof member === "string" ? member.trim() : ""))
     .filter((member) => member.length > 0);
   const name = (matched.name ?? "").trim();
-  return { id, name: name.length > 0 ? name : id, members };
+  return { id, name: name.length > 0 ? name : id, members, lead: resolveTeamLead(matched, members) };
+}
+
+/**
+ * 队长回退规则（唯一判定源）：
+ *   ① `team.lead` 非空且 ∈ members → 用它（显式指定优先）；
+ *   ② 否则 members 含 `co-orchestrator` → 用它（默认主代理仍在团队里，不加人格注入）；
+ *   ③ 否则 members[0]（没指定就把第一成员当队长）；
+ *   ④ members 为空 → ""（叫不出队长，调用方按「无队长」处理）。
+ *
+ * 为什么 ① 要求 ∈ members：配置里 lead 可能指向一个已从团队删掉的角色（热改配置的常见残留形态），
+ * 此时按「没指定」处理、走回退，比让一个不在团队的幽灵角色当队长更可诊断。
+ */
+function resolveTeamLead(team: TeamConfig, members: readonly string[]): string {
+  const declared = (team.lead ?? "").trim();
+  if (declared.length > 0 && members.includes(declared)) return declared;
+  if (members.includes(PRIMARY_AGENT_ROLE)) return PRIMARY_AGENT_ROLE;
+  return members[0] ?? "";
+}
+
+/**
+ * 解析队长的人格（主代理运行时身份）。
+ *
+ * 来源统一走 {@link resolveSkillSnapshot}：
+ *   - 内置角色 → 取其 `brief`（一句话职责，**不是全文 content**，避免把整篇技能正文塞进
+ *     每一轮系统提示词）；
+ *   - 自定义角色 → 取其 `prompt`（快照已把 prompt 同时写进 brief/content）。
+ *
+ * 返回 null 的四种情形（调用方据此**不注入**、保持原行为）：
+ *   ① 无活动团队；② 队长为空（members 为空）；③ 队长名查不到（未知 / 已禁用）；
+ *   ④ 该角色的 brief 为空。
+ *
+ * @param config - 团队过滤配置（可缺省）
+ * @returns `{ name, title, persona }`；null = 没有可用的队长人格
+ */
+export function resolveLeadPersona(config?: TeamFilterConfig): LeadPersona | null {
+  const team = resolveActiveTeam(config);
+  if (team === null || team.lead.length === 0) return null;
+  const found = resolveSkillSnapshot(config).resolve(team.lead);
+  if (!found.ok) return null;
+  const persona = (found.role.skill.brief ?? "").trim();
+  if (persona.length === 0) return null;
+  const title = (found.role.skill.description ?? "").trim();
+  return { name: team.lead, title: title.length > 0 ? title : team.lead, persona };
+}
+
+/** 队长人格快照（{@link resolveLeadPersona} 的返回值） */
+export interface LeadPersona {
+  /** 角色名（如 co-writer） */
+  readonly name: string;
+  /** 一句话职责（内置角色的 description / 自定义角色的 description） */
+  readonly title: string;
+  /** 人格正文：内置角色的 brief / 自定义角色的 prompt */
+  readonly persona: string;
+}
+
+/**
+ * 渲染「队长人格」系统提示词段。
+ *
+ * 返回空串的三个条件（宿主会丢弃空 section，故系统提示词与改动前**逐字一致**）：
+ *   ① 无活动团队；② 队长为空；③ 队长就是 `co-orchestrator`（它的人格由 preset persona 自带，
+ *      再注入一遍等于把同一段话写两遍）。
+ *
+ * 注入内容包含四块，缺一不可：
+ *   - 队长人格本体（brief，不是全文）；
+ *   - 一句边界声明：**你仍是本会话的调度者**；
+ *   - 本团队可派发的队员名单（与派发过滤同源，避免主代理去派一个必被拒的角色）；
+ *   - 调度纪律段（原样复用 co-orchestrator 的 brief）——换队长**不允许**丢掉调度本职。
+ *
+ * @param config - 团队过滤配置（可缺省）
+ * @returns 提示词段文本；"" = 不注入
+ */
+export function renderLeadSection(config?: TeamFilterConfig): string {
+  const team = resolveActiveTeam(config);
+  if (team === null) return "";
+  const lead = resolveLeadPersona(config);
+  if (lead === null || lead.name === PRIMARY_AGENT_ROLE) return "";
+  const members = team.members.length > 0 ? team.members.join("、") : "（该团队没有可用队员）";
+  return [
+    `<主代理人格：团队队长 ${lead.name}>`,
+    `本会话的主代理由团队「${team.name}」(${team.id}) 的队长 ${lead.name}（${lead.title}）担任。你的主代理职责：`,
+    lead.persona,
+    "",
+    `边界：你仍是本会话的调度者，可派发的队员见下；调度纪律仍适用。`,
+    `可派发的队员：${members}`,
+    "",
+    "调度纪律（不因换队长而失效）：",
+    orchestratorBrief(),
+    "</主代理人格>",
+  ].join("\n");
+}
+
+/** co-orchestrator 的 brief（调度纪律正文；内置表为准，不被自定义角色覆盖） */
+function orchestratorBrief(): string {
+  const skill = COHUB_SKILLS.find((item) => item.name === PRIMARY_AGENT_ROLE);
+  const brief = (skill?.brief ?? "").trim();
+  return brief.length > 0 ? brief : "你是纯调度者：只委派，不亲自操作；并行批次与执行时长受调度纪律约束。";
 }
 
 /**

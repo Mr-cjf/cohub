@@ -16,6 +16,7 @@ import { applyPresetPatchDeclarations, copyTree, installShippedPresets, resolveP
 import { registerCohubPresets, unregisterCohubPresets } from "./preset-runtime";
 import { CHINESE_LANGUAGE_INSTRUCTION } from "./chinese";
 import { COHUB_SKILLS } from "./skills";
+import { renderLeadSection } from "./roles.ts";
 import { CUSTOM_ROLE_POLL_MS, createCustomSkillRegistry } from "./custom-skills.ts";
 import { createCouncilTool } from "./council";
 import { createDelegateTool } from "./delegate";
@@ -444,6 +445,16 @@ function installAgentPresets(logger: { info?: (...args: unknown[]) => void; warn
   return r;
 }
 
+/**
+ * 读取可能是 Volatile 引用的配置字段。
+ * 正常情况（schemastery ≥ 3.18.4）teams / activeTeam / customRoles 是 Volatile，取 get() 得当前快照；
+ * 旧版本降级为普通值，此时直接返回原值（与 customRoles 既有降级读法一致）。
+ */
+function readVolatile<T>(value: T | { get(): T }): T {
+  const holder = value as { get?: () => T } | undefined;
+  return typeof holder?.get === "function" ? holder.get() : (value as T);
+}
+
 export function apply(ctx: any, config: any) {
   // ① 中文语言指令 —— 注入到系统提示词（对应 OpenCode 的 experimental.chat.system.transform）
   ctx.effect(() => ctx.systemPrompt.section({
@@ -451,6 +462,22 @@ export function apply(ctx: any, config: any) {
     order: 95,
     text: CHINESE_LANGUAGE_INSTRUCTION,
   }), "cohub.section()");
+
+  // ①b 团队队长人格 —— 运行时按 Config.activeTeam 的团队队长决定主代理人格。
+  //    · text 是**函数**：每次 assemble 现读 volatile 配置 → 设置页换队长度热生效，无需重启；
+  //    · 空串 = 不注入（宿主会丢弃空 section），故「无团队 / 队长为空 / 队长就是 co-orchestrator」
+  //      三种情形下系统提示词与改动前**逐字一致**（co-orchestrator 人格由 preset persona 自带）；
+  //    · 有队长时注入的是队长 brief（不是全文 content，避免撑大每轮系统提示词），并附带边界声明
+  //      + 可派队员名单 + 原调度纪律段：换队长不允许丢掉 orchestrator 的调度本职。
+  ctx.effect(() => ctx.systemPrompt.section({
+    name: "cohub:lead",
+    order: 96,
+    text: () => renderLeadSection({
+      teams: readVolatile(config.teams),
+      activeTeam: readVolatile(config.activeTeam),
+      customRoles: readVolatile(config.customRoles),
+    }),
+  }), "cohub.lead()");
 
   // ② 13 技能（12 专职代理 + orchestrator）→ runtime skills
   //    主代理用 skill 工具按需加载，再通过 subagent 委派（DSH 原生），
