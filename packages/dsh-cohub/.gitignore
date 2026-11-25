@@ -19,3 +19,4 @@ analysis/
 
 # 本地临时工作目录（worktree/bare 仓库测试产物）
 .tmp/
+tmp-*.mjs
