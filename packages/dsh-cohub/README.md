@@ -179,16 +179,22 @@ revision 冲突拒绝保存、只写显式配置的代理等。
     skills: []               # delegate 委派路由（DSH 0.2 起由设置页按 profile entry id 投影此 volatile 字段，实时生效）
                              # 每条路由可配 provider/model/maxTokens/reasoningEffort，见下节「skills 字段」
     customRoles: []          # 用户自定义团队角色（内置角色之外）。默认 [] = 只用内置角色；
-                             # volatile：设置页可改、热生效。每项四字段全部必填：
-                             #   name（kebab-case，不得与内置角色重名）/ description（非空）
-                             #   / prompt（非空，未来映射为子代理 brief）/ tier（ro|ro-net|rw|rw-shell|cordis）
-                             # 重名检查在运行时注册逻辑中进行；本版仅配置管道，尚不影响运行时行为。
-    teams: []                # 团队（角色池编组）：把内置角色与 customRoles 按用途分组。
+                             # volatile：设置页可改、热生效。每项字段：
+                             #   name / description / prompt 必填（name 为 kebab-case，不得与内置角色重名）；
+                             #   tools 可选，工具插件 id 数组（默认 []，如 [tool-fs, tool-web]），优先于 tier；
+                             #   tier 可选，快捷组合/展示用（ro|ro-net|rw|rw-shell|cordis），
+                             #     tools 非空时以 tools 为准，tools 与 tier 都空 = 只读组合。
+                             # 角色专属模型不在此配，而在 skills 路由里按角色名覆盖 provider/model 等。
+                             # 重名检查与工具 id 存在性检查在运行时注册逻辑中进行。
+    teams: []                # 团队（角色池编组）：把内置角色与 customRoles 按用途分组，
+                             # 每个团队映射为一个 DSH Agent 预设（团队切换在 DSH 的 Agent 预设里选择）。
                              # volatile：设置页可改、热生效。每项 id（kebab-case）/ name（非空）/
                              # members（角色名数组，至少 1 个，取自内置角色或 customRoles 的 name）必填，
                              # description 可选；「成员必须真实存在」「id 不得重复」由运行时校验。
                              # lead（可选）：队长角色名，必须在本团队成员内；空 = 默认 co-orchestrator。
-    activeTeam: ""           # 活动团队 id；空串 = 不限制（全部角色可用）。volatile，热生效。
+                             # presetId（可选）：该团队注册成的 Agent 预设 id；省略 = cohub-team-<id>。
+    activeTeam: ""           # 已废弃：团队切换改为在 DSH 的 Agent 预设里选择；该字段仅作旧配置兼容，
+                             # 不再参与派发判定。volatile（保留仅为兼容旧配置）。
 ```
 
 **启用 council**（councillors 非空时自动注册 council_session 工具）：

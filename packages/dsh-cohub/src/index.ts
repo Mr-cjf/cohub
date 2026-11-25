@@ -90,7 +90,11 @@ const SkillRoute = z.object({
   //
   // 不加 .required()：schemastery 中未 required 即可选（缺省时解析结果不含该键）；
   // 不加 .default()：避免官方设置页把默认值强制写回每一条路由。
-  reasoningEffort: z.string().description("推理强度（如 low/medium/high；留空则按模型默认档/继承规则）"),
+  reasoningEffort: z
+    .string()
+    .description(
+      "推理强度：合法值由该 provider+model 的模型目录决定（models[].reasoning.efforts[].id，常见 low/medium/high，可含 minimal/xhigh 等 adapter 自有档），非跨 provider 固定枚举；留空 = 按模型默认档/继承父会话",
+    ),
   // 输出契约启用等级（波2b）：定义在 src/output-contract.ts（12 角色的 JSON Schema 子集）。
   //
   // 缺省 off —— 不注入契约段、不校验、不重写，因此默认配置下运行时行为与旧版**完全一致**。
@@ -110,16 +114,23 @@ const SkillRoute = z.object({
  * 用户自定义团队角色的单条配置（Config.customRoles 的数组元素）。
  *
  * 定位：内置角色（co-orchestrator + 各专职代理，见 src/skills.ts）之外的**用户自带角色**，
- * 让用户在 profile patch 里声明「某个名字 + 该角色干什么 + 用哪档工具」，
+ * 让用户在 profile patch 里声明「某个名字 + 该角色干什么 + 用哪些工具」，
  * 由后续批次的注册逻辑映射为一个可被 delegate({ skill }) 引用的 runtime skill。
  *
+ * **工具与模型解耦**：`tools`（自由绑定工具插件 id）优先于 `tier`（快捷组合）；
+ * 角色专属模型由 `Config.skills` 的路由（按角色名匹配）单独配置，不放在这里。
+ *
  * 校验全部落在 schema 层（官方设置页 / cordis.patch.yml 校验共用同一份），便于 GUI 生成表单：
- *   - name / description / prompt / tier 四个字段都 `.required()`：缺字段报
+ *   - name / description / prompt 三个字段 `.required()`：缺字段报
  *     `$.customRoles[0].name missing required value`；
  *   - name 用 pattern 约束 kebab-case（首尾无分隔符、只含 a-z0-9 与单个连字符），
  *     与内置角色命名（co-explorer / co-rule-user）一致；空串也被该 pattern 拒绝；
  *   - description / prompt 用 `.min(1)`：空串报 `expected string length >= 1 but got 0`；
- *   - tier 用 `z.union`（schemastery 的枚举即 union）：非法值报
+ *   - tools 用 `z.array(z.string().min(1)).default([])`：元素空串报
+ *     `$.customRoles[0].tools[0] expected string length >= 1 but got 0`；缺省为 []
+ *     （= 回退按 tier 取默认组合，tier 也空则视为只读组合）。**不做 id 形状校验**：
+ *     工具插件 id 的存在性与可用性依赖运行时插件表，由注册/派发逻辑 fail-soft 处理；
+ *   - tier 可选（不 `.required()`）：非法值仍报
  *     `expected "ro" | "ro-net" | "rw" | "rw-shell" | "cordis" but got "nope"`。
  *
  * **不在这里做重名检查**（是否与内置角色或彼此的 name 重复）——那需要运行时上下文
@@ -136,34 +147,46 @@ const CustomRole = z.object({
   description: z.string().min(1).required().description("角色职责（必填，非空）：一句话说明什么时候该派给它"),
   /** 该角色的任务指令，未来映射为子代理 brief（prompt 前缀） */
   prompt: z.string().min(1).required().description("该角色的任务指令（必填，非空）：未来映射为子代理 brief"),
-  /** 工具档位：决定该角色子代理能用的工具表 */
+  /** 角色绑定的工具插件 id：优先于 tier；为空时回退按 tier 取默认组合 */
+  tools: z
+    .array(z.string().min(1))
+    .default([])
+    .description(
+      "角色绑定的工具插件 id（如 tool-fs / tool-web / tool-pwsh）；为空 = 回退按 tier 取默认组合（tier 也空则视为只读组合）；id 存在性由运行时校验",
+    ),
+  /** 工具档位（快捷组合/展示用）：可选；tools 非空时以 tools 为准 */
   tier: z
     .union(["ro", "ro-net", "rw", "rw-shell", "cordis"])
-    .required()
-    .description("工具档位：ro=只读 / ro-net=只读+联网 / rw=读写 / rw-shell=读写+shell / cordis=Cordis 插件改写"),
+    .description(
+      "工具档位（可选，快捷组合/展示用）：ro=只读 / ro-net=只读+联网 / rw=读写 / rw-shell=读写+shell / cordis=Cordis 插件改写；tools 非空时以 tools 为准，tools 与 tier 都空 = 只读组合",
+    ),
 });
 
 /**
  * 团队配置（Config.teams 的数组元素）：把角色池（内置角色 + customRoles）按用途编组，
- * 由 Config.activeTeam 选择「本次可用哪一组角色」。
+ * 并映射为 DSH 的一个 **Agent 预设**——团队切换改为在 DSH 的 Agent 预设里选择
+ * （Config.activeTeam 已废弃，仅作旧配置兼容）。
  *
  * 校验只落在 schema 能表达的范围内（与 CustomRole 同一风格）：
  *   - id 用 pattern 约束 kebab-case（首尾无分隔符、只含 a-z0-9 与单个连字符）；
  *   - name 用 `.min(1)`：空串报 `expected string length >= 1 but got 0`；
  *   - members 用 `z.array(z.string().min(1)).min(1)`：空数组报
- *     `expected array length >= 1 but got 0`，元素为空串同样被拒。
+ *     `expected array length >= 1 but got 0`，元素为空串同样被拒；
+ *   - presetId 可选（不 `.required()`），省略时按 `cohub-team-<id>` 推导。
  *
  * **不在这里做**「成员必须是真实存在的角色（内置 16 或 customRoles 的 name）」与
  * 「id 之间不得重复」——两者都需要运行时上下文（内置角色表 / customRoles 快照），
  * 由后续批次的运行时校验负责。
  */
 const Team = z.object({
-  /** 团队 id：kebab-case，作为 Config.activeTeam 的取值 */
+  /** 团队 id：kebab-case；同时作为预设 id（presetId）的 slug 来源 */
   id: z
     .string()
     .pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
     .required()
-    .description("团队 id（kebab-case，如 writing）；不得与其他团队重复（唯一性检查在运行时）"),
+    .description(
+      "团队 id（kebab-case，如 writing）；同时作为预设 id 的 slug 来源（见 presetId）；不得与其他团队重复（唯一性检查在运行时）",
+    ),
   /** 显示名：进技能目录 / 设置页给人看 */
   name: z.string().min(1).required().description("团队显示名（必填，非空）"),
   /** 一句话说明这组角色适合什么任务；可省略 */
@@ -175,6 +198,10 @@ const Team = z.object({
     .description("成员角色名（内置角色或 customRoles 的 name；至少 1 个；存在性检查在运行时）"),
   /** 队长角色名：可省略；空 = 默认 co-orchestrator。只有 string 这一层校验（非空由运行时判） */
   lead: z.string().description("队长的角色名；必须在本团队成员内；空 = 默认 co-orchestrator"),
+  /** 该团队注册成的 Agent 预设 id：省略时按 cohub-team-<id> 推导 */
+  presetId: z
+    .string()
+    .description("该团队注册成的 Agent 预设 id（省略 = 按 cohub-team-<id> 推导）；在 DSH 的 Agent 预设里选择团队"),
 });
 
 /** delegate 执行器环境契约注入配置（P1-1）：默认开、可关闭、文本可覆盖 */
@@ -311,14 +338,16 @@ export const Config = z.object({
   /** 子代理 provider（spawn 为内置进程内后端） */
   councilProvider: z.string().default("spawn"),
   /** skill 路由表（delegate 工具）：按 skill 名覆盖 provider/model/maxTokens/reasoningEffort，缺省继承父模型。
-   *  reasoningEffort 可单独配置（不配 provider/model 时只覆盖推理强度，provider/model 仍继承父会话）。
+   *  角色专属模型即由此配置（按角色名给一条路由，如 { name: my-auditor, provider, model }），
+   *  与 customRoles(工具绑定) 解耦；不配 provider/model 时只覆盖推理强度，provider/model 仍继承父会话。
    *  volatile：DSH 0.2 起由 Loader 按活动 profile entry id 投影为设置页可编辑字段，
    *  变更经 loader/volatile-update 提交到同一引用，无需重挂载（apply 内以 config.skills.get() 实时读取）。 */
   skills: volatileSchema(z.array(SkillRoute).default([])),
-  /** 用户自定义团队角色（内置角色之外的扩展）：每项 name/description/prompt/tier
-   *  必填，name 必须 kebab-case，tier 取自 5 个档位枚举。默认 []（= 只用内置角色）。
-   *  本批只做配置管道（字段 + schema + patch 默认值）；注册为 runtime skill、重名检查、
-   *  按 tier 派发工具表由后续批次接入，因此当前配置该字段对运行时行为无影响。
+  /** 用户自定义团队角色（内置角色之外的扩展）：每项 name/description/prompt 必填、
+   *  name 必须 kebab-case；tools 自由绑定工具插件 id（默认 []，优先于 tier）、
+   *  tier 可选（快捷组合/展示用，取自 5 个档位枚举；tools 与 tier 都空 = 只读组合）。
+   *  角色专属模型不在这里配，而在 skills 路由里按角色名覆盖 provider/model/maxTokens/reasoningEffort。
+   *  默认 []（= 只用内置角色）。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）——用户可改、热生效。 */
   customRoles: volatileSchema(z.array(CustomRole).default([])),
   /** delegate 执行器环境契约注入（P1-1）：默认开，文本可覆盖 */
@@ -347,13 +376,15 @@ export const Config = z.object({
    *  需要时手动清理 ~/.dsh/.agent-presets/ 下对应目录）。 */
   installPresets: z.boolean().default(true),
   /** 团队（角色池编组）：与 customRoles 配合，把内置角色 + 自定义角色按用途分组，
-   *  由 activeTeam 选择当前可用哪一组。每项 id/name/members 必填，id 必须 kebab-case，
-   *  members 至少 1 个。默认 []（= 未编组，行为与旧版一致）。
-   *  本批只做配置管道（字段 + schema + patch 默认值）：按 activeTeam 过滤可用角色、
-   *  成员是否存在、id 是否重复均由后续批次的运行时逻辑接入，当前配置该字段对运行时行为无影响。
+   *  每个团队映射为一个 DSH Agent 预设（presetId，省略时按 cohub-team-<id> 推导），
+   *  团队切换改为在 DSH 的 Agent 预设里选择（activeTeam 已废弃）。每项 id/name/members 必填，
+   *  id 必须 kebab-case，members 至少 1 个，presetId 可选。默认 []（= 未编组，行为与旧版一致）。
+   *  成员是否存在、id 是否重复均由后续批次的运行时逻辑接入；注册为预设、工具表派生
+   *  （customRoles.tools 优先、tier 兜底）在后续批次接入。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）——用户可改、热生效。 */
   teams: volatileSchema(z.array(Team).default([])),
-  /** 活动团队 id：取 teams 中某项的 id；默认空串 = 不限制（全部角色可用）。
+  /** 已废弃：团队切换改为在 DSH 的 Agent 预设里选择（见 teams.presetId）；
+   *  该字段仅作旧配置兼容，不再参与派发判定。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。
    *  「该 id 必须存在于 teams」的检查在运行时（schema 只能表达 string）。 */
   activeTeam: volatileSchema(z.string().default("")),
