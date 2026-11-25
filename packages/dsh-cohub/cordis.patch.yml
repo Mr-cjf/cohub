@@ -44,6 +44,23 @@
         #       prompt: 你只审查，不修改；按文件列出风险与建议
         #       tier: ro
         customRoles: []
+        # teams / activeTeam：团队（角色池编组）——把内置角色与 customRoles 按用途分组，
+        # activeTeam 选择当前可用哪一组。默认 teams=[]、activeTeam=""，即不限制（全部角色可用），
+        # 行为与旧版完全一致。teams 每项三字段必填：
+        #   id           kebab-case（^[a-z0-9]+(-[a-z0-9]+)*$），activeTeam 的取值
+        #   name         非空显示名
+        #   members      角色名数组，至少 1 个（取自内置角色或 customRoles 的 name）
+        # description 可选。「成员必须真实存在」「id 不得重复」由运行时校验，不在 schema 层；
+        # 本批仅配置管道，按 activeTeam 过滤可用角色由后续批次接入，因此当前对运行时行为无影响。
+        # 示例：
+        #   teams:
+        #     - id: writing
+        #       name: 写作组
+        #       description: 选题 → 提纲 → 成稿 → 审校
+        #       members: [co-outliner, co-writer, co-editor]
+        #   activeTeam: writing        # 空串 "" = 不限制
+        teams: []
+        activeTeam: ""
         # delegateEnvContract: delegate 委派时是否在子代理 prompt 前注入「执行器环境契约」
         # （通用原则 + 探测式自适应，避免子代理在陌生执行环境现场盲试）。默认开；可关闭/可覆盖文本：
         #   delegateEnvContract: { enabled: true }                    # 默认

@@ -183,6 +183,11 @@ revision 冲突拒绝保存、只写显式配置的代理等。
                              #   name（kebab-case，不得与内置角色重名）/ description（非空）
                              #   / prompt（非空，未来映射为子代理 brief）/ tier（ro|ro-net|rw|rw-shell|cordis）
                              # 重名检查在运行时注册逻辑中进行；本版仅配置管道，尚不影响运行时行为。
+    teams: []                # 团队（角色池编组）：把内置角色与 customRoles 按用途分组。
+                             # volatile：设置页可改、热生效。每项 id（kebab-case）/ name（非空）/
+                             # members（角色名数组，至少 1 个，取自内置角色或 customRoles 的 name）必填，
+                             # description 可选；「成员必须真实存在」「id 不得重复」由运行时校验。
+    activeTeam: ""           # 活动团队 id；空串 = 不限制（全部角色可用）。volatile，热生效。
 ```
 
 **启用 council**（councillors 非空时自动注册 council_session 工具）：

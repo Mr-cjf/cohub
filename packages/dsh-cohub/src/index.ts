@@ -141,6 +141,38 @@ const CustomRole = z.object({
     .description("工具档位：ro=只读 / ro-net=只读+联网 / rw=读写 / rw-shell=读写+shell / cordis=Cordis 插件改写"),
 });
 
+/**
+ * 团队配置（Config.teams 的数组元素）：把角色池（内置角色 + customRoles）按用途编组，
+ * 由 Config.activeTeam 选择「本次可用哪一组角色」。
+ *
+ * 校验只落在 schema 能表达的范围内（与 CustomRole 同一风格）：
+ *   - id 用 pattern 约束 kebab-case（首尾无分隔符、只含 a-z0-9 与单个连字符）；
+ *   - name 用 `.min(1)`：空串报 `expected string length >= 1 but got 0`；
+ *   - members 用 `z.array(z.string().min(1)).min(1)`：空数组报
+ *     `expected array length >= 1 but got 0`，元素为空串同样被拒。
+ *
+ * **不在这里做**「成员必须是真实存在的角色（内置 16 或 customRoles 的 name）」与
+ * 「id 之间不得重复」——两者都需要运行时上下文（内置角色表 / customRoles 快照），
+ * 由后续批次的运行时校验负责。
+ */
+const Team = z.object({
+  /** 团队 id：kebab-case，作为 Config.activeTeam 的取值 */
+  id: z
+    .string()
+    .pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+    .required()
+    .description("团队 id（kebab-case，如 writing）；不得与其他团队重复（唯一性检查在运行时）"),
+  /** 显示名：进技能目录 / 设置页给人看 */
+  name: z.string().min(1).required().description("团队显示名（必填，非空）"),
+  /** 一句话说明这组角色适合什么任务；可省略 */
+  description: z.string().description("团队说明（可省略）：一句话描述这组角色适合什么任务"),
+  /** 成员角色名：内置角色或 customRoles 的 name，至少 1 个 */
+  members: z
+    .array(z.string().min(1))
+    .min(1)
+    .description("成员角色名（内置角色或 customRoles 的 name；至少 1 个；存在性检查在运行时）"),
+});
+
 /** delegate 执行器环境契约注入配置（P1-1）：默认开、可关闭、文本可覆盖 */
 const EnvContractConfig = z.object({
   /** 是否在 delegate spawn prompt 前注入执行器环境契约；默认开 */
@@ -310,9 +342,22 @@ export const Config = z.object({
    *  默认 true。设为 false 后本插件不再动该目录（已安装的 preset 不会自动删除，
    *  需要时手动清理 ~/.dsh/.agent-presets/ 下对应目录）。 */
   installPresets: z.boolean().default(true),
+  /** 团队（角色池编组）：与 customRoles 配合，把内置角色 + 自定义角色按用途分组，
+   *  由 activeTeam 选择当前可用哪一组。每项 id/name/members 必填，id 必须 kebab-case，
+   *  members 至少 1 个。默认 []（= 未编组，行为与旧版一致）。
+   *  本批只做配置管道（字段 + schema + patch 默认值）：按 activeTeam 过滤可用角色、
+   *  成员是否存在、id 是否重复均由后续批次的运行时逻辑接入，当前配置该字段对运行时行为无影响。
+   *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）——用户可改、热生效。 */
+  teams: volatileSchema(z.array(Team).default([])),
+  /** 活动团队 id：取 teams 中某项的 id；默认空串 = 不限制（全部角色可用）。
+   *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）。
+   *  「该 id 必须存在于 teams」的检查在运行时（schema 只能表达 string）。 */
+  activeTeam: volatileSchema(z.string().default("")),
 });
 
-export { ScheduleConfig, ResultBudgetConfig, DelegateBackgroundConfig, CustomRole, CohubSettingsSchema };
+/** 团队的解析后类型（供外部 / 测试引用） */
+export type Team = ReturnType<typeof Team>;
+export { ScheduleConfig, ResultBudgetConfig, DelegateBackgroundConfig, CustomRole, Team, CohubSettingsSchema };
 /** 兼容/测试导出：preset 安装台账与递归复制（实现位于 preset-install.ts） */
 export { copyTree, installShippedPresets, hashTree, removeInstallRecord } from "./preset-install";
 // 测试与维护入口：preset 声明生成 / 幂等写入 profile patch / 活动 profile 解析
