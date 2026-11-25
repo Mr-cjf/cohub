@@ -231,11 +231,14 @@ export function buildTeamPresetDefs(config?: TeamPresetConfig, logger?: Logger):
 // 注册表台账与幂等同步
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** 单个 id 的台账：指纹 + 宿主返回的 unregister 句柄 */
+/** 单个 id 的台账：指纹 + 宿主 register() 的原始返回值（释放时才用 handleOf 解析形态） */
 interface TeamPresetEntry {
   fingerprint: string;
-  handle?: () => unknown;
+  handle?: unknown;
 }
+
+/** 台账挂载键：优先挂在 registry 本体上（跨插件重载 / 包装对象存活），WeakMap 只做只读对象的备份 */
+const LEDGER_KEY = Symbol.for("cohub.team-presets.ledger.v1");
 
 /** 每个 agentPresets 注册表各自一份台账（按 registry 隔离，避免多实例串味） */
 const stateByRegistry = new WeakMap<object, Map<string, TeamPresetEntry>>();
@@ -261,18 +264,132 @@ function resolveRegistry(ctx: any): any {
   }
 }
 
+/**
+ * 取该 registry 的台账。
+ *
+ * 先读 registry 本体上的 Symbol 槽（宿主若每次 reflect.get 都返回新包装对象，
+ * 或插件被热重载导致模块计时器重建，台账都不会丢），再回退 WeakMap（只读 / 冷冻对象）。
+ */
 function stateOf(registry: object): Map<string, TeamPresetEntry> {
+  const holder = registry as unknown as Record<symbol, unknown>;
+  try {
+    const attached = holder[LEDGER_KEY];
+    if (attached instanceof Map) return attached as Map<string, TeamPresetEntry>;
+  } catch {
+    /* 只读 proxy：落到 WeakMap */
+  }
   let map = stateByRegistry.get(registry);
   if (map === undefined) {
     map = new Map<string, TeamPresetEntry>();
     stateByRegistry.set(registry, map);
+    try {
+      holder[LEDGER_KEY] = map;
+    } catch {
+      /* 不可写：只靠本进程 WeakMap */
+    }
   }
   return map;
 }
 
-/** 预设指纹：name / description / order / plugins 任一变化都算「需要重建」 */
-function fingerprintOf(def: CohubPresetDef): string {
-  return JSON.stringify([def.name, def.description ?? "", def.order ?? null, def.plugins]);
+/** 团队预设的 id 命名空间前缀（孤儿对账时只清自己这一族，绝不误伤别人的预设） */
+const TEAM_PRESET_PREFIX = "cohub-team-";
+
+/**
+ * 观测日志（**必须走 console.log**）。
+ *
+ * 为什么不走 `ctx.logger.info`：宿主在 info 级别默认不把插件日志下发到实例日志文件，
+ * 上一版只有 logger.info/warn → 真机「完全没有任何团队对账痕迹」，删不删、
+ * 改不改名都无从判断。console.log 直落 stdout，任何宿主版本都看得见。
+ */
+function log(message: string, ...rest: unknown[]): void {
+  try {
+    console.log(`[cohub/team-preset] ${message}`, ...rest);
+  } catch {
+    /* stdout 被关：忽略 */
+  }
+}
+
+/** 指纹的显式输入（任一字段变化都必须重建；显式列全，防止靠间接字段漏判） */
+interface FingerprintMeta {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly members: readonly string[];
+  readonly lead: string;
+  readonly presetId: string;
+}
+
+/**
+ * 预设指纹：**id / name / description / members / lead / presetId** + order / plugins 全量参与。
+ *
+ * 上一版只哈希 `[name, description, order, plugins]`——改名能命中，但 members / lead /
+ * presetId 靠 description / persona 间接体现，一旦组装逻辑调整就可能同哈希不同语义；
+ * 这里显式列出，改名 / 换队长 / 改成员 / 改 presetId 一律触发「先 unregister 再 register」。
+ */
+function fingerprintOf(def: CohubPresetDef, meta?: FingerprintMeta): string {
+  return JSON.stringify([
+    meta?.id ?? def.id,
+    meta?.name ?? def.name,
+    meta?.description ?? def.description ?? "",
+    meta?.members ?? [],
+    meta?.lead ?? "",
+    meta?.presetId ?? "",
+    def.order ?? null,
+    def.plugins,
+  ]);
+}
+
+/**
+ * 把 `register()` 的返回值统一成「可调用的释放函数」。
+ *
+ * 宿主版本间返回值不一致：函数式 unregister 句柄 / `{ unregister() }` / `{ dispose() }` / void。
+ * 上一版只认 `typeof handle === "function"`，非函数形态就**什么都没存**，
+ * 于是删除团队时无句柄可调、改名时旧注册也释放不掉。
+ */
+function handleOf(value: unknown): (() => unknown) | undefined {
+  if (typeof value === "function") return value as () => unknown;
+  const obj = value as { unregister?: unknown; dispose?: unknown } | null | undefined;
+  if (obj && typeof obj.unregister === "function") return () => (obj.unregister as () => unknown)();
+  if (obj && typeof obj.dispose === "function") return () => (obj.dispose as () => unknown)();
+  return undefined;
+}
+
+/** 枚举注册表里现有的预设 id（宿主 API 未知，尽力而为；拿不到就返回空） */
+function enumeratePresetIds(registry: any): string[] {
+  const out = new Set<string>();
+  const push = (value: unknown) => {
+    if (typeof value === "string" && value.length > 0) out.add(value);
+    else if (value && typeof (value as { id?: unknown }).id === "string") out.add((value as { id: string }).id);
+  };
+  try {
+    if (registry instanceof Map) for (const key of registry.keys()) push(key);
+  } catch {
+    /* 忽略 */
+  }
+  for (const method of ["ids", "list", "keys", "values", "entries"]) {
+    try {
+      const fn = registry?.[method];
+      if (typeof fn !== "function") continue;
+      const returned = fn.call(registry);
+      if (returned && typeof returned[Symbol.iterator] === "function") {
+        for (const item of returned) {
+          if (Array.isArray(item)) push(item[0]);
+          else push(item);
+        }
+      }
+    } catch {
+      /* 宿主该方法签名不同：换下一个 */
+    }
+  }
+  try {
+    const presets = registry?.presets;
+    if (presets instanceof Map) for (const key of presets.keys()) push(key);
+    else if (Array.isArray(presets)) for (const item of presets) push(item);
+    else if (presets && typeof presets === "object") for (const key of Object.keys(presets)) push(key);
+  } catch {
+    /* 忽略 */
+  }
+  return [...out];
 }
 
 /** 是否是「id 重复」错误（宿主文案：Duplicate agent preset） */
@@ -285,28 +402,42 @@ function isDuplicateError(error: unknown): boolean {
  * @returns 是否真的释放了某个东西
  */
 function releaseExisting(registry: any, id: string, entry?: TeamPresetEntry): boolean {
-  if (typeof entry?.handle === "function") {
+  // ① 台账里的原始返回值（函数 / {unregister} / {dispose} 三种形态统一解析）
+  const fromLedger = handleOf(entry?.handle);
+  if (typeof fromLedger === "function") {
     try {
-      entry.handle();
+      fromLedger();
       return true;
     } catch {
       /* 句柄失效：继续走宿主接口 */
     }
   }
+  // ② registry.get(id) 返回的条目
   let existing: any;
   try {
-    existing = typeof registry.get === "function" ? registry.get(id) : undefined;
+    existing = typeof registry?.get === "function" ? registry.get(id) : undefined;
   } catch {
     existing = undefined;
   }
-  if (existing !== undefined && existing !== null) {
-    if (typeof existing.unregister === "function") {
-      existing.unregister();
+  const fromEntry = handleOf(existing);
+  if (typeof fromEntry === "function") {
+    try {
+      fromEntry();
       return true;
+    } catch {
+      /* 继续走 ③ */
     }
-    if (typeof registry.delete === "function") {
-      registry.delete(id);
-      return true;
+  }
+  // ③ 宿主注册表自身的顶层卸载入口（版本间命名不一：unregister / remove / delete）
+  for (const method of ["unregister", "remove", "delete"]) {
+    try {
+      const fn = registry?.[method];
+      if (typeof fn === "function") {
+        fn.call(registry, id);
+        return true;
+      }
+    } catch {
+      /* 换下一个 */
     }
   }
   return false;
@@ -342,58 +473,86 @@ export async function syncTeamPresets(ctx: any, logger: Logger | undefined, conf
   const state = stateOf(registry);
   const defs = buildTeamPresetDefs(config, logger);
   const wanted = new Set(defs.map((def) => def.id));
+  const sources = new Map<string, TeamPresetSource>();
+  for (const team of readList<TeamPresetSource>(config?.teams as never)) {
+    if (typeof team?.id !== "string" || team.id.trim().length === 0) continue;
+    sources.set(teamPresetId(team), team);
+  }
+  const membersOf = (id: string) => {
+    const team = sources.get(id);
+    return team === undefined ? 0 : cleanMembers(team).length;
+  };
 
-  // ① 团队被删除 → 注销
+  // ① 团队被删除 → 必须真的调 unregister（优先台账句柄，其次宿主接口）
   for (const [id, entry] of [...state.entries()]) {
     if (wanted.has(id)) continue;
     state.delete(id);
-    try {
-      releaseExisting(registry, id, entry);
+    const released = releaseExisting(registry, id, entry);
+    result.removed.push(id);
+    log(`unregistered id=${id} reason=removed${released ? "" : " released=false"}`);
+  }
+  // ①b 台账丢失兜底：注册表里本命名空间内、本次配置里已不存在的孤儿预设也要清掉
+  for (const id of enumeratePresetIds(registry)) {
+    if (wanted.has(id) || state.has(id) || result.removed.includes(id)) continue;
+    if (!id.startsWith(TEAM_PRESET_PREFIX)) continue;
+    if (releaseExisting(registry, id)) {
       result.removed.push(id);
-    } catch (error) {
-      logger?.warn?.(`cohub: 注销团队预设 ${id} 失败（忽略）`, error);
+      log(`unregistered id=${id} reason=removed(orphan)`);
     }
   }
 
-  // ② 新增 / 更新 / 跳过
+  // ② 新增 / 更新（改名 / 改成员 / 换队长 / 改 presetId → 先 unregister 再 register）
   for (const def of defs) {
-    const fingerprint = fingerprintOf(def);
+    const meta = sources.get(def.id);
+    const fingerprint = fingerprintOf(
+      def,
+      meta === undefined
+        ? undefined
+        : {
+            id: def.id,
+            name: def.name,
+            description: def.description ?? "",
+            members: cleanMembers(meta),
+            lead: resolveTeamLead(meta, cleanMembers(meta)),
+            presetId: teamPresetId(meta),
+          },
+    );
     const prev = state.get(def.id);
     if (prev !== undefined && prev.fingerprint === fingerprint) {
       result.unchanged.push(def.id);
       continue;
     }
+    const updating = prev !== undefined;
+    if (updating) {
+      state.delete(def.id);
+      if (releaseExisting(registry, def.id, prev)) log(`unregistered id=${def.id} reason=renamed`);
+    } else {
+      // 非本模块登记的旧注册（如上一次 apply）也要先清掉，避免 Duplicate
+      releaseExisting(registry, def.id);
+    }
     try {
-      if (prev !== undefined) {
-        releaseExisting(registry, def.id, prev);
-        state.delete(def.id);
-        result.updated.push(def.id);
-      } else {
-        // 非本模块登记的旧注册（如上一次 apply）也要先清掉，避免 Duplicate
-        releaseExisting(registry, def.id);
-        result.registered.push(def.id);
-      }
-      let handle: unknown;
+      let registered: unknown;
       try {
-        handle = await registry.register(def);
+        registered = await registry.register(def);
       } catch (error) {
         if (!isDuplicateError(error)) throw error;
-        releaseExisting(registry, def.id);
-        handle = await registry.register(def);
+        // Duplicate 且释放不掉：说明宿主另有登记，无法保证新 def 生效 → 记 failed，不伪造台账
+        if (!releaseExisting(registry, def.id)) throw error;
+        registered = await registry.register(def);
       }
-      state.set(def.id, {
-        fingerprint,
-        ...(typeof handle === "function" ? { handle: handle as () => unknown } : {}),
-      });
+      // 存原始返回值（形态解析留到释放时），保证删除 / 改名时一定有东西可调
+      state.set(def.id, { fingerprint, handle: registered });
+      (updating ? result.updated : result.registered).push(def.id);
+      log(`registered id=${def.id} name=${def.name} members=${membersOf(def.id)}`);
     } catch (error) {
       result.failed.push(def.id);
-      result.registered = result.registered.filter((id) => id !== def.id);
-      result.updated = result.updated.filter((id) => id !== def.id);
       logger?.warn?.(`cohub: 注册团队预设 ${def.id} 失败（其余团队继续）`, error);
+      log(`failed id=${def.id} reason=register-error`);
     }
   }
 
   if (result.registered.length > 0 || result.updated.length > 0 || result.removed.length > 0) {
+    log(`sync changed added=${result.registered.length} removed=${result.removed.length} updated=${result.updated.length}`);
     logger?.info?.(
       `cohub: 团队预设同步 — 新增 ${result.registered.length}（${result.registered.join(", ") || "-"}）` +
         `，更新 ${result.updated.length}（${result.updated.join(", ") || "-"}）` +
@@ -418,6 +577,7 @@ export function unregisterTeamPresets(ctx: any, logger?: Logger): string[] {
     try {
       releaseExisting(registry, id, entry);
       removed.push(id);
+      log(`unregistered id=${id} reason=disposed`);
     } catch (error) {
       logger?.warn?.(`cohub: 注销团队预设 ${id} 失败（忽略）`, error);
     }
