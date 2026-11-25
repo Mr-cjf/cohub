@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
 import { applyPresetPatchDeclarations, copyTree, installShippedPresets, resolveProfilePatchPath } from "./preset-install";
 import { registerCohubPresets, unregisterCohubPresets } from "./preset-runtime";
+import { syncTeamPresets, unregisterTeamPresets } from "./team-presets.ts";
 import { CHINESE_LANGUAGE_INSTRUCTION } from "./chinese";
 import { COHUB_SKILLS } from "./skills";
 import { renderLeadSection } from "./roles.ts";
@@ -407,6 +408,17 @@ export {
   registerCohubPresets,
   unregisterCohubPresets,
 } from "./preset-runtime";
+// 测试与维护入口：团队 preset（Config.teams → Agent 预设）的定义生成 / 幂等同步 / 卸载
+export {
+  TEAM_PRESET_ORDER_BASE,
+  buildTeamPersona,
+  buildTeamPresetDefs,
+  buildTeamPresetPlugins,
+  listRegisteredTeamPresets,
+  syncTeamPresets,
+  teamPresetId,
+  unregisterTeamPresets,
+} from "./team-presets.ts";
 
 /**
  * 0.1 时代的 settings namespace 段 schema（settings.yaml 的 cohub.* 段）。
@@ -561,6 +573,46 @@ export function apply(ctx: any, config: any) {
       }
     };
   }, "cohub.agentPresets()");
+
+  // ②d 团队 preset 的**运行时注册**（Config.teams → DSH 原生「Agent 预设」选择器）
+  //    · 每个团队注册为一个预设：id = team.presetId || `cohub-team-<id>`，persona = 队长 brief
+  //      + 「本团队可派角色：…」，工具面抄 co-orchestrator 主代理（不挂 tool-cordis 全进程单例）；
+  //    · 幂等：模块内按 registry 维护「已注册 id → 指纹 + handle」台账，指纹不变则完全跳过，
+  //      改名 / 改成员 → 先 unregister 再 register，团队被删 → unregister；
+  //    · 热生效：teams / customRoles 都是 volatile 字段且宿主无变更回调，故沿用 customRoles 的
+  //      「1s 轮询 + 差量同步」模式（CUSTOM_ROLE_POLL_MS）；
+  //    · fail-soft：无 agentPresets 服务 / 单团队注册失败只 warn，不阻断插件；
+  //    · 卸载：dispose 里停轮询并注销全部团队预设。
+  ctx.effect(() => {
+    let inFlight = false;
+    const readConfig = () => ({
+      teams: readVolatile(config.teams),
+      customRoles: readVolatile(config.customRoles),
+    });
+    const sync = () => {
+      if (inFlight) return; // 轮询间隔短于一次注册耗时时，跳过本轮，避免台账竞争
+      inFlight = true;
+      syncTeamPresets(ctx, ctx.logger, readConfig())
+        .catch((error: unknown) => {
+          ctx.logger?.warn?.("cohub: 同步团队预设失败（忽略，不影响插件其余能力）", error);
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    sync();
+    const timer = setInterval(sync, CUSTOM_ROLE_POLL_MS);
+    // Node 定时器不阻止进程退出（与 custom-skills 的轮询同策略）
+    (timer as { unref?: () => void }).unref?.();
+    return () => {
+      clearInterval(timer);
+      try {
+        unregisterTeamPresets(ctx, ctx.logger);
+      } catch (error) {
+        ctx.logger?.warn?.("cohub: 卸载团队预设失败（忽略）", error);
+      }
+    };
+  }, "cohub.teamPresets()");
 
   // ③ 【兼容备用】内置 agent preset（co-orchestrator / cohub-cordis / 3 个子代理档位）
   //    的目录安装 + profile patch 声明写入。
