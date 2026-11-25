@@ -35,7 +35,7 @@
     }
   },
   "scripts": {
-    "build": "bun run scripts/generate-skills.ts && bun run scripts/guard-schema.ts && bun build src/index.ts --outdir lib --target node --format esm --external @deepseek-ai/cordis --external @deepseek-ai/schemastery --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-system-prompt --external @deepseek-ai/dsh-skill --external @deepseek-ai/dsh-home-paths && bun build src/co-cordis-plugin.ts --outdir lib --target node --format esm --external @deepseek-ai/dsh-tools && bun run scripts/build-client.js",
+    "build": "bun run scripts/generate-skills.ts && bun run scripts/generate-role-catalog.ts && bun run scripts/guard-schema.ts && bun build src/index.ts --outdir lib --target node --format esm --external @deepseek-ai/cordis --external @deepseek-ai/schemastery --external @deepseek-ai/dsh-tools --external @deepseek-ai/dsh-system-prompt --external @deepseek-ai/dsh-skill --external @deepseek-ai/dsh-home-paths && bun build src/co-cordis-plugin.ts --outdir lib --target node --format esm --external @deepseek-ai/dsh-tools && bun run scripts/build-client.js",
     "lint:schema": "bun run scripts/guard-schema.ts",
     "test:runtime": "node test/runtime-0.2.ts",
     "test:host": "node test/host-integration.ts",
