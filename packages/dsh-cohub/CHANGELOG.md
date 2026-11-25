@@ -2,6 +2,19 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.5] - 2026-11-25
+
+### 新增
+
+- **团队组装**：`Config.teams`（团队容器，含 id/name/description/members）+ `Config.activeTeam`（当前团队）。设置当前团队后，`delegate` / `delegate_batch` 只允许派该团队成员，越界会明确报错并列出可用角色。
+- **角色详情**：设置页可展开查看每个角色的工具档位、brief 提示词、**完整技能正文**、以及绑定工具清单（中文名 + 平台门控 + 插件名）。
+- **团队视图**：设置页重构为「团队 + 角色库」双区块；团队卡片显示成员档位分布（如 `rw-shell ×1、ro ×2`）。
+
+### 修复
+
+- 角色卡片标题不显示角色名、一律显示「未命名角色」（原实现只判空串，`undefined` / 纯空格被误判为有名字）。
+- 角色目录数据改为构建期生成 + 构建时拼接，避免 87KB 数据污染客户端源码。
+
 ## [0.13.4] - 2026-11-25
 
 ### 新增
