@@ -70,6 +70,13 @@ window.__ModuleLoader__.load({
       "co-cordis"
     ];
 
+    /**
+     * 内置角色全量清单（16 个）= 13 个可委派技能 + 3 个仅档位表登记的规则/写作角色
+     * （co-editor / co-outliner / co-writer，见 src/roles.ts 的 BUILTIN_ROLE_TIERS）。
+     * 团队成员的「内置角色」分组用这份清单，与派发层认可的档位表一致。
+     */
+    var BUILTIN_ROLE_NAMES = SKILL_NAMES.concat(["co-editor", "co-outliner", "co-writer"]);
+
     /** Config.customRoles[].tier 的五个合法档位（自定义角色不得越权，取值与 Config schema 一致）。 */
     var ROLE_TIERS = ["ro", "ro-net", "rw", "rw-shell", "cordis"];
 
@@ -121,8 +128,34 @@ window.__ModuleLoader__.load({
       "skill.co-rule-project": "项目规则",
       "skill.co-rule-app": "应用规则",
       "skill.co-cordis": "Cordis 插件",
-      rolesTitle: "自定义团队",
-      rolesDescription: "在此增删改自定义角色。保存后运行时注册器约 1 秒内热加载，无需重启。",
+      rolesTitle: "角色库",
+      rolesDescription: "先在这里建角色，再到上面的「团队」里勾选为成员。保存后运行时注册器约 1 秒内热加载，无需重启。",
+      teamsTitle: "团队",
+      teamsDescription: "把角色编成团队：勾选成员后点「设为当前」，本次会话只用当前团队的成员。",
+      teamEmpty: "还没有团队。点「新建团队」开始。",
+      teamAdd: "新建团队",
+      teamRemove: "删除",
+      teamSetActive: "设为当前",
+      teamUnsetActive: "取消当前",
+      teamActiveBadge: "当前",
+      teamUnsaved: "未命名团队",
+      teamMemberCount: "{count} 个成员",
+      teamName: "团队名",
+      teamDescription: "说明",
+      teamMembers: "成员（内置角色 / 自定义角色）",
+      teamMembersEmpty: "先到下方「角色库」创建自定义角色。",
+      teamBuiltinGroup: "内置角色",
+      teamCustomGroup: "自定义角色",
+      teamSavedLabel: "保存团队",
+      teamSaved: "已保存，约 1 秒后生效，无需重启。",
+      teamDirty: "有未保存的修改。",
+      teamErrSummary: "有 {count} 处不合法，已标红，未保存。",
+      teamErrNameRequired: "团队名不能为空。",
+      teamErrMembersRequired: "至少选择 1 个成员。",
+      teamErrIdFormat: "团队 id 不合法（kebab-case）。",
+      teamErrIdDuplicate: "团队 id 与其他团队重复。",
+      teamActiveCleared: "当前团队已删除，已清空「当前」。",
+      teamIdHint: "id：{id}",
       roleName: "名称",
       roleDescription: "描述",
       rolePrompt: "提示词",
@@ -188,8 +221,34 @@ window.__ModuleLoader__.load({
       "skill.co-rule-project": "Project rules",
       "skill.co-rule-app": "App rules",
       "skill.co-cordis": "Cordis plugins",
-      rolesTitle: "Custom team",
-      rolesDescription: "Add, edit or remove custom roles here. The runtime registrar picks changes up in about 1 second — no restart needed.",
+      rolesTitle: "Role library",
+      rolesDescription: "Create roles here first, then tick them as members under \"Teams\" above. The runtime registrar picks changes up in about 1 second — no restart needed.",
+      teamsTitle: "Teams",
+      teamsDescription: "Group roles into teams: tick the members, then click \"Set active\" — only the active team's members stay available in this session.",
+      teamEmpty: "No teams yet. Click \"New team\" to start.",
+      teamAdd: "New team",
+      teamRemove: "Remove",
+      teamSetActive: "Set active",
+      teamUnsetActive: "Clear active",
+      teamActiveBadge: "Active",
+      teamUnsaved: "Unnamed team",
+      teamMemberCount: "{count} member(s)",
+      teamName: "Team name",
+      teamDescription: "Description",
+      teamMembers: "Members (built-in / custom roles)",
+      teamMembersEmpty: "Create a custom role in the Role library below first.",
+      teamBuiltinGroup: "Built-in roles",
+      teamCustomGroup: "Custom roles",
+      teamSavedLabel: "Save teams",
+      teamSaved: "Saved. Takes effect in about 1 second — no restart needed.",
+      teamDirty: "Unsaved changes.",
+      teamErrSummary: "{count} invalid field(s), highlighted in red. Nothing was saved.",
+      teamErrNameRequired: "Team name is required.",
+      teamErrMembersRequired: "Pick at least one member.",
+      teamErrIdFormat: "Team id must be kebab-case.",
+      teamErrIdDuplicate: "Team id duplicates another team.",
+      teamActiveCleared: "The active team was removed; \"Active\" has been cleared.",
+      teamIdHint: "id: {id}",
       roleName: "Name",
       roleDescription: "Description",
       rolePrompt: "Prompt",
@@ -458,6 +517,158 @@ window.__ModuleLoader__.load({
       return count;
     }
 
+    /* ── 纯数据层：Config.teams ↔ 编辑行 ─────────────────────────── */
+
+    /** 团队 id 的合法形状，与服务端 Team.id 的 pattern 一致。 */
+    var TEAM_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+    /**
+     * 团队 id 生成：name 转 kebab-case（小写、非字母数字折成单连字符、去首尾连字符）。
+     * 中文名折完可能为空串 → 返回 ""，由 uniqueTeamId 兜底成 "team"。
+     */
+    function kebabIdOf(name) {
+      var raw = typeof name === "string" ? name.trim().toLowerCase() : "";
+      if (raw === "") return "";
+      return raw.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    }
+
+    /**
+     * 生成不与 taken 冲突的团队 id：基准可用直接用，否则依次加 -2 / -3 …
+     * （最多到 -99；极端情况退回时间戳后缀——宁可 id 难看，也不让两个团队撞 id，
+     *  否则 Config.activeTeam 的含义就有歧义）。
+     * @param name - 团队显示名（可中文；折叠为空时基准取 "team"）。
+     * @param taken - 已被占用的 id 列表（其他团队）。
+     */
+    function uniqueTeamId(name, taken) {
+      var base = kebabIdOf(name);
+      if (base === "") base = "team";
+      var used = {};
+      var list = Array.isArray(taken) ? taken : [];
+      for (var i = 0; i < list.length; i += 1) {
+        if (typeof list[i] === "string") used[list[i]] = true;
+      }
+      if (used[base] !== true) return base;
+      for (var n = 2; n <= 99; n += 1) {
+        var candidate = base + "-" + n;
+        if (used[candidate] !== true) return candidate;
+      }
+      return base + "-" + String(Date.now());
+    }
+
+    /** 新建团队的草稿行（id 先占位，isNew 让改名时重算 id；保存时不外泄该标记）。 */
+    function emptyTeam(id) {
+      return { id: id, name: "", description: "", members: [], isNew: true };
+    }
+
+    /** Config.teams 的一项 → 编辑行；members 只保留非空字符串。 */
+    function copyTeam(team) {
+      var members = [];
+      var list = team && Array.isArray(team.members) ? team.members : [];
+      for (var i = 0; i < list.length; i += 1) {
+        if (typeof list[i] === "string" && list[i] !== "") members.push(list[i]);
+      }
+      return {
+        id: team && typeof team.id === "string" ? team.id : "",
+        name: team && typeof team.name === "string" ? team.name : "",
+        description: team && typeof team.description === "string" ? team.description : "",
+        members: members,
+        isNew: false
+      };
+    }
+
+    /**
+     * Config.teams → 编辑行。老配置没有该字段（undefined）时返回空数组，页面按「还没有团队」展示。
+     * @param teams - configForms 快照里的 value.teams（任意形状，逐项校验）。
+     */
+    function rowsFromTeams(teams) {
+      var rows = [];
+      if (!Array.isArray(teams)) return rows;
+      for (var i = 0; i < teams.length; i += 1) {
+        var entry = teams[i];
+        if (!entry || typeof entry !== "object") continue;
+        rows.push(copyTeam(entry));
+      }
+      return rows;
+    }
+
+    /** 编辑行 → 待写入的 teams 数组（只写 schema 的四个字段，草稿标记不外泄）。 */
+    function teamsToConfig(rows) {
+      var out = [];
+      if (!Array.isArray(rows)) return out;
+      for (var i = 0; i < rows.length; i += 1) {
+        var team = rows[i];
+        if (!team || typeof team !== "object") continue;
+        out.push({
+          id: typeof team.id === "string" ? team.id : "",
+          name: typeof team.name === "string" ? team.name : "",
+          description: typeof team.description === "string" ? team.description : "",
+          members: Array.isArray(team.members) ? team.members.slice() : []
+        });
+      }
+      return out;
+    }
+
+    /**
+     * 团队校验（对齐服务端 Team schema，另加页面才判得了的 id 重复）：
+     *   - name 去空白后非空；
+     *   - members 至少 1 个；
+     *   - id 合法（kebab-case）且表内不重复。
+     * @returns 与 rows 等长的错误数组，空串表示该字段合法。
+     */
+    function validateTeams(rows) {
+      var list = Array.isArray(rows) ? rows : [];
+      var counts = {};
+      var errors = [];
+      var i;
+      for (i = 0; i < list.length; i += 1) {
+        var seeded = list[i] && typeof list[i].id === "string" ? list[i].id : "";
+        if (seeded === "") continue;
+        counts[seeded] = (counts[seeded] || 0) + 1;
+      }
+      for (i = 0; i < list.length; i += 1) {
+        var team = list[i] || {};
+        var error = { name: "", members: "", id: "" };
+        var teamName = typeof team.name === "string" ? team.name.trim() : "";
+        var id = typeof team.id === "string" ? team.id : "";
+        if (teamName === "") error.name = "nameRequired";
+        if (!Array.isArray(team.members) || team.members.length === 0) error.members = "required";
+        if (id === "" || !TEAM_ID_PATTERN.test(id)) error.id = "idFormat";
+        else if (counts[id] > 1) error.id = "idDuplicate";
+        errors.push(error);
+      }
+      return errors;
+    }
+
+    /** 团队错误表里被标红的字段数（0 = 可以提交）。 */
+    function countTeamErrors(errors) {
+      var count = 0;
+      for (var i = 0; i < errors.length; i += 1) {
+        var error = errors[i] || {};
+        if (error.name !== "") count += 1;
+        if (error.members !== "") count += 1;
+        if (error.id !== "") count += 1;
+      }
+      return count;
+    }
+
+    /**
+     * 成员候选：内置 16 角色 + customRoles（自定义与内置同名时不重复列出）。
+     * customRoles 取「角色库」当前的编辑行，因此刚新建但未保存的角色也能先勾上。
+     */
+    function memberCandidates(customRows) {
+      var builtin = [];
+      for (var i = 0; i < BUILTIN_ROLE_NAMES.length; i += 1) builtin.push(BUILTIN_ROLE_NAMES[i]);
+      var custom = [];
+      var list = Array.isArray(customRows) ? customRows : [];
+      for (var j = 0; j < list.length; j += 1) {
+        var row = list[j] || {};
+        var name = typeof row.name === "string" ? row.name : "";
+        if (name === "" || builtin.indexOf(name) >= 0) continue;
+        custom.push({ name: name, description: typeof row.description === "string" ? row.description : "" });
+      }
+      return { builtin: builtin, custom: custom };
+    }
+
     /* ── 极简 observable store（uSES：快照未变必须返回同一引用） ──── */
 
     function createStateStore(initial) {
@@ -508,7 +719,16 @@ window.__ModuleLoader__.load({
       rolesDirty: false,
       rolesSaved: false,
       rolesFailed: false,
-      roleErrors: []
+      roleErrors: [],
+      teams: [],
+      activeTeam: "",
+      teamsDirty: false,
+      teamsSaved: false,
+      teamsFailed: false,
+      teamErrors: [],
+      teamsNotice: "",
+      expandedTeam: -1,
+      activeTeamBusy: false
     });
 
     /**
@@ -538,6 +758,8 @@ window.__ModuleLoader__.load({
       var lastValue;
       var lastRows = [];
       var lastRoles = [];
+      var lastTeams = [];
+      var lastActiveTeam = "";
       var published = null;
 
       // 自定义角色草稿与 skills 草稿各自独立（写的是不同 path），但共用同一 scope、
@@ -546,6 +768,16 @@ window.__ModuleLoader__.load({
       var rolesSaved = false;
       var rolesFailed = false;
       var roleErrors = [];
+
+      // 团队草稿：写 path:["teams"]。「设为当前」/「删除当前团队」走 path:["activeTeam"]，
+      // 是独立的一次 mutate（不同 path，不能塞进同一次提交）。
+      var teamsDraft = null;          // { rows, revision }
+      var teamsSaved = false;
+      var teamsFailed = false;
+      var teamErrors = [];
+      var teamsNotice = "";           // "activeCleared" = 删除当前团队后的一次性提示
+      var expandedTeam = -1;          // 展开编辑的团队行下标，-1 = 全收起
+      var activeTeamBusy = false;
 
       function readScope() {
         if (!scope || typeof scope.getSnapshot !== "function") {
@@ -566,6 +798,8 @@ window.__ModuleLoader__.load({
         lastValue = snapshot.value;
         lastRows = displayRows(rowsFromSkills(snapshot.value && snapshot.value.skills));
         lastRoles = rowsFromCustomRoles(snapshot.value && snapshot.value.customRoles);
+        lastTeams = rowsFromTeams(snapshot.value && snapshot.value.teams);
+        lastActiveTeam = snapshot.value && typeof snapshot.value.activeTeam === "string" ? snapshot.value.activeTeam : "";
       }
 
       function currentRows() {
@@ -576,6 +810,16 @@ window.__ModuleLoader__.load({
       function currentRoles() {
         refreshFromValue();
         return lastRoles;
+      }
+
+      function currentTeams() {
+        refreshFromValue();
+        return lastTeams;
+      }
+
+      function currentActiveTeam() {
+        refreshFromValue();
+        return lastActiveTeam;
       }
 
       function buildState() {
@@ -598,7 +842,16 @@ window.__ModuleLoader__.load({
           rolesDirty: rolesDraft !== null,
           rolesSaved: rolesSaved,
           rolesFailed: rolesFailed,
-          roleErrors: roleErrors
+          roleErrors: roleErrors,
+          teams: teamsDraft !== null ? teamsDraft.rows : currentTeams(),
+          activeTeam: currentActiveTeam(),
+          teamsDirty: teamsDraft !== null,
+          teamsSaved: teamsSaved,
+          teamsFailed: teamsFailed,
+          teamErrors: teamErrors,
+          teamsNotice: teamsNotice,
+          expandedTeam: expandedTeam,
+          activeTeamBusy: activeTeamBusy
         };
       }
 
@@ -621,7 +874,16 @@ window.__ModuleLoader__.load({
           && left.rolesDirty === right.rolesDirty
           && left.rolesSaved === right.rolesSaved
           && left.rolesFailed === right.rolesFailed
-          && left.roleErrors === right.roleErrors;
+          && left.roleErrors === right.roleErrors
+          && left.teams === right.teams
+          && left.activeTeam === right.activeTeam
+          && left.teamsDirty === right.teamsDirty
+          && left.teamsSaved === right.teamsSaved
+          && left.teamsFailed === right.teamsFailed
+          && left.teamErrors === right.teamErrors
+          && left.teamsNotice === right.teamsNotice
+          && left.expandedTeam === right.expandedTeam
+          && left.activeTeamBusy === right.activeTeamBusy;
       }
 
       function publish() {
@@ -639,6 +901,7 @@ window.__ModuleLoader__.load({
           var snapshot = readScope();
           if (draft !== null && snapshot.revision !== draft.revision) conflicted = true;
           if (rolesDraft !== null && snapshot.revision !== rolesDraft.revision) conflicted = true;
+          if (teamsDraft !== null && snapshot.revision !== teamsDraft.revision) conflicted = true;
         }
         publish();
       }
@@ -964,6 +1227,250 @@ window.__ModuleLoader__.load({
         });
       }
 
+      /* ── 团队：Config.teams + Config.activeTeam ──────────────────── */
+
+      function beginTeamsDraft() {
+        if (teamsDraft !== null) return teamsDraft;
+        var snapshot = readScope();
+        var source = currentTeams();
+        var rows = [];
+        for (var i = 0; i < source.length; i += 1) rows.push(copyTeam(source[i]));
+        teamsDraft = { rows: rows, revision: snapshot.revision };
+        return teamsDraft;
+      }
+
+      /** 除第 index 行以外已被占用的团队 id（id 消歧用）。 */
+      function takenIdsExcept(rows, index) {
+        var out = [];
+        for (var i = 0; i < rows.length; i += 1) {
+          if (i === index) continue;
+          if (typeof rows[i].id === "string" && rows[i].id !== "") out.push(rows[i].id);
+        }
+        return out;
+      }
+
+      /** 写回草稿行并（按需）重算标红；任何编辑都会清掉「已保存」状态。 */
+      function pushTeamsRows(rows) {
+        teamsDraft.rows = rows;
+        teamErrors = teamErrors.length > 0 ? validateTeams(rows) : [];
+        teamsSaved = false;
+        teamsFailed = false;
+        teamsNotice = "";
+        publish();
+      }
+
+      /** 单击卡片头部展开/收起编辑区（纯 UI 状态，不进配置）。 */
+      function toggleTeam(index) {
+        expandedTeam = expandedTeam === index ? -1 : index;
+        publish();
+      }
+
+      /**
+       * 改团队字段（name / description）。
+       * name 变更时：**新建行**（isNew）重算 id 并自动消歧；**已存团队保留原 id**，
+       * 否则改名会把 Config.activeTeam 指向的 id 弄悬空。
+       */
+      function editTeam(index, field, value) {
+        if (field !== "name" && field !== "description") return;
+        if (!canEdit()) return;
+        var current = beginTeamsDraft();
+        if (index < 0 || index >= current.rows.length) return;
+        if (current.rows[index][field] === value) return;
+        var next = [];
+        for (var i = 0; i < current.rows.length; i += 1) {
+          var row = current.rows[i];
+          var copy = copyTeam(row);
+          copy.isNew = row.isNew === true;
+          if (i === index) {
+            copy[field] = value;
+            if (field === "name" && copy.isNew === true) {
+              copy.id = uniqueTeamId(value, takenIdsExcept(current.rows, index));
+            }
+          }
+          next.push(copy);
+        }
+        pushTeamsRows(next);
+      }
+
+      /** 勾选/取消一个成员（成员多选）。 */
+      function toggleTeamMember(index, roleName) {
+        if (typeof roleName !== "string" || roleName === "") return;
+        if (!canEdit()) return;
+        var current = beginTeamsDraft();
+        if (index < 0 || index >= current.rows.length) return;
+        var next = [];
+        for (var i = 0; i < current.rows.length; i += 1) {
+          var row = current.rows[i];
+          var copy = copyTeam(row);
+          copy.isNew = row.isNew === true;
+          if (i === index) {
+            var at = copy.members.indexOf(roleName);
+            if (at >= 0) copy.members.splice(at, 1);
+            else copy.members.push(roleName);
+          }
+          next.push(copy);
+        }
+        pushTeamsRows(next);
+      }
+
+      /** 追加一个空团队（id 先按 "team"/"team-2"… 占位，填名后自动重算）。 */
+      function addTeam() {
+        if (!canEdit()) return;
+        var current = beginTeamsDraft();
+        var next = [];
+        for (var i = 0; i < current.rows.length; i += 1) {
+          var copy = copyTeam(current.rows[i]);
+          copy.isNew = current.rows[i].isNew === true;
+          next.push(copy);
+        }
+        next.push(emptyTeam(uniqueTeamId("", takenIdsExcept(next, -1))));
+        expandedTeam = next.length - 1;
+        pushTeamsRows(next);
+      }
+
+      /** 单 path 写配置：异常与 rejected promise 都归一为 false（不抛给 UI）。 */
+      function mutatePath(path, value, expected) {
+        if (disposed || !scope || typeof scope.mutate !== "function") return Promise.resolve(false);
+        var request;
+        try {
+          request = scope.mutate([{ op: "set", path: path, value: value }], expected);
+        } catch (error) {
+          return Promise.resolve(false);
+        }
+        return Promise.resolve(request).then(function (accepted) {
+          return accepted === true;
+        }, function () {
+          return false;
+        });
+      }
+
+      /**
+       * 设为当前团队；对已是当前的团队再点一次 = 取消（写空串 = 不限制）。
+       * 立即写 Config.activeTeam，不等「保存团队」。
+       */
+      function setActiveTeam(id) {
+        if (!canEdit()) return Promise.resolve(false);
+        var snapshot = readScope();
+        if (snapshot.status !== "ready" || snapshot.writable !== true) return Promise.resolve(false);
+        var nextValue = id === currentActiveTeam() ? "" : id;
+        activeTeamBusy = true;
+        teamsFailed = false;
+        publish();
+        return mutatePath(["activeTeam"], nextValue, snapshot.revision).then(function (ok) {
+          activeTeamBusy = false;
+          if (ok) {
+            teamsNotice = "";
+            lastValue = undefined;
+          } else {
+            teamsFailed = true;
+          }
+          publish();
+          return ok;
+        });
+      }
+
+      /**
+       * 删除一个团队行。若删的正是当前团队，顺手把 Config.activeTeam 清空
+       * （独立的一次 path:["activeTeam"] 写入），避免「当前」指向不存在的团队。
+       */
+      function removeTeam(index) {
+        if (!canEdit()) return Promise.resolve(false);
+        var current = beginTeamsDraft();
+        if (index < 0 || index >= current.rows.length) return Promise.resolve(false);
+        var removed = current.rows[index];
+        var next = [];
+        for (var i = 0; i < current.rows.length; i += 1) {
+          if (i === index) continue;
+          var copy = copyTeam(current.rows[i]);
+          copy.isNew = current.rows[i].isNew === true;
+          next.push(copy);
+        }
+        expandedTeam = -1;
+        pushTeamsRows(next);
+        var removedId = removed && typeof removed.id === "string" ? removed.id : "";
+        if (removedId === "" || removedId !== currentActiveTeam()) return Promise.resolve(true);
+        var snapshot = readScope();
+        if (snapshot.status !== "ready" || snapshot.writable !== true) return Promise.resolve(false);
+        return mutatePath(["activeTeam"], "", snapshot.revision).then(function (ok) {
+          if (ok) {
+            teamsNotice = "activeCleared";
+            lastValue = undefined;
+          } else {
+            teamsFailed = true;
+          }
+          publish();
+          return ok;
+        });
+      }
+
+      function discardTeams() {
+        if (saving) return;
+        teamsDraft = null;
+        teamsSaved = false;
+        teamsFailed = false;
+        teamErrors = [];
+        teamsNotice = "";
+        expandedTeam = -1;
+        publish();
+      }
+
+      /** 整表写回 Config.teams（数组字段整体替换，与 skills / customRoles 同一 mutate 契约）。 */
+      function saveTeams() {
+        if (disposed || saving || teamsDraft === null) return Promise.resolve(false);
+        var snapshot = readScope();
+        if (snapshot.status !== "ready" || snapshot.writable !== true || conflicted) return Promise.resolve(false);
+        if (teamsDraft.revision !== undefined && snapshot.revision !== teamsDraft.revision) {
+          conflicted = true;
+          publish();
+          return Promise.resolve(false);
+        }
+        var errors = validateTeams(teamsDraft.rows);
+        if (countTeamErrors(errors) > 0) {
+          teamErrors = errors;
+          teamsSaved = false;
+          teamsFailed = false;
+          publish();
+          return Promise.resolve(false);
+        }
+        var expected = teamsDraft.revision;
+        var next = teamsToConfig(teamsDraft.rows);
+        saving = true;
+        teamsSaved = false;
+        teamsFailed = false;
+        teamErrors = [];
+        publish();
+        var request;
+        try {
+          request = scope.mutate([{ op: "set", path: ["teams"], value: next }], expected);
+        } catch (error) {
+          saving = false;
+          teamsFailed = true;
+          publish();
+          return Promise.resolve(false);
+        }
+        return Promise.resolve(request).then(function (accepted) {
+          if (disposed) return false;
+          saving = false;
+          if (accepted === true) {
+            teamsDraft = null;
+            teamsFailed = false;
+            teamsSaved = true;
+            teamsNotice = "";
+            lastValue = undefined;
+          } else {
+            teamsFailed = true;
+          }
+          publish();
+          return accepted === true;
+        }, function () {
+          if (disposed) return false;
+          saving = false;
+          teamsFailed = true;
+          publish();
+          return false;
+        });
+      }
+
       function loadCatalog() {
         catalogGeneration += 1;
         var generation = catalogGeneration;
@@ -1081,7 +1588,15 @@ window.__ModuleLoader__.load({
         addRole: addRole,
         removeRole: removeRole,
         discardRoles: discardRoles,
-        saveRoles: saveRoles
+        saveRoles: saveRoles,
+        toggleTeam: toggleTeam,
+        editTeam: editTeam,
+        toggleTeamMember: toggleTeamMember,
+        addTeam: addTeam,
+        removeTeam: removeTeam,
+        discardTeams: discardTeams,
+        saveTeams: saveTeams,
+        setActiveTeam: setActiveTeam
       };
     }
 
@@ -1142,7 +1657,17 @@ window.__ModuleLoader__.load({
         ".cohub-textarea:disabled{opacity:.6;cursor:default;}",
         // 校验失败的行：只把具体字段标红，行本身不整体变色。
         ".cohub-invalid{border-color:var(--dsw-alias-state-error-primary);}",
-        ".cohub-role-error{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary);}"
+        ".cohub-role-error{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary);}",
+        // ── 团队区块：卡片头部整块可点展开，成员多选用紧凑网格 ──
+        ".cohub-team-toggle{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:1 1 auto;min-width:0;background:transparent;border:none;padding:0;margin:0;cursor:pointer;font:inherit;color:inherit;text-align:left;}",
+        ".cohub-team-toggle:hover .cohub-row-name{text-decoration:underline;}",
+        ".cohub-team-body{margin-top:8px;display:flex;flex-direction:column;gap:8px;}",
+        ".cohub-check-group{display:flex;flex-direction:column;gap:4px;}",
+        ".cohub-checks{display:flex;flex-wrap:wrap;gap:6px 14px;}",
+        ".cohub-check{display:flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);cursor:pointer;}",
+        ".cohub-check input{margin:0;cursor:pointer;}",
+        ".cohub-check-id{color:var(--dsw-alias-label-tertiary);}",
+        ".cohub-invalid-label{color:var(--dsw-alias-state-error-primary);}"
       ].join("\n");
       var tag = document.createElement("style");
       tag.dataset.plugin = "dsh-cohub";
@@ -1383,7 +1908,10 @@ window.__ModuleLoader__.load({
           tierOptions.push(React.createElement("option", { key: ROLE_TIERS[k], value: ROLE_TIERS[k] }, ROLE_TIERS[k]));
         }
         var message = roleMessage(error);
-        var typeLabel = role.name !== "" ? role.name : t("roleUnsaved");
+        // 标题必须显示角色真名：只认「字符串且非空白」的 name，其余（"" / undefined / 纯空格）
+        // 才回退到「未命名角色」。旧写法只比了 ""，undefined 会被直接渲染成空标题。
+        var roleTitle = typeof role.name === "string" ? role.name.trim() : "";
+        var typeLabel = roleTitle !== "" ? role.name : t("roleUnsaved");
         return React.createElement("li", {
           key: "role-" + index,
           className: invalid ? "cohub-row cohub-invalid" : "cohub-row"
@@ -1482,6 +2010,224 @@ window.__ModuleLoader__.load({
         roleStatus = t("readOnly");
       }
 
+      /* ── 团队区块：Config.teams + Config.activeTeam ─────────────── */
+
+      var teams = state.teams || [];
+      var teamErrorsState = state.teamErrors || [];
+      var candidates = memberCandidates(roles);
+
+      /** 角色名 → 展示文案：内置用本地化标题，自定义回退到原名。 */
+      function skillLabel(name) {
+        var translated = t("skill." + name);
+        return translated === "skill." + name ? name : translated;
+      }
+
+      function teamMessage(error) {
+        var parts = [];
+        if (error.name === "nameRequired") parts.push(t("teamErrNameRequired"));
+        if (error.members === "required") parts.push(t("teamErrMembersRequired"));
+        if (error.id === "idFormat") parts.push(t("teamErrIdFormat"));
+        else if (error.id === "idDuplicate") parts.push(t("teamErrIdDuplicate"));
+        return parts.join(" ");
+      }
+
+      /** 成员多选：内置 / 自定义两组，每项一个 checkbox。 */
+      function renderMemberPicker(team, index, knownMembers) {
+        var groups = [
+          { key: "builtin", title: t("teamBuiltinGroup"), items: candidates.builtin },
+          { key: "custom", title: t("teamCustomGroup"), items: candidates.custom }
+        ];
+        var blocks = [];
+        for (var g = 0; g < groups.length; g += 1) {
+          var group = groups[g];
+          if (group.items.length === 0) continue;
+          var boxes = [];
+          for (var b = 0; b < group.items.length; b += 1) {
+            var item = group.items[b];
+            var name = typeof item === "string" ? item : item.name;
+            var checked = team.members.indexOf(name) >= 0;
+            // 已经不在角色库、但团队里还留着的成员（删了角色没删团队）也要能看到并取消勾选。
+            if (!checked && knownMembers.indexOf(name) < 0) continue;
+            boxes.push(React.createElement("label", { key: name, className: "cohub-check" },
+              React.createElement("input", {
+                type: "checkbox",
+                checked: checked,
+                disabled: locked,
+                onChange: function (roleName) {
+                  return function () {
+                    props.toggleTeamMember(index, roleName);
+                  };
+                }(name)
+              }),
+              React.createElement("span", null, skillLabel(name)),
+              React.createElement("span", { className: "cohub-check-id" }, name)
+            ));
+          }
+          if (boxes.length === 0) continue;
+          blocks.push(React.createElement("div", { key: group.key, className: "cohub-check-group" },
+            React.createElement("p", { className: "cohub-label" }, group.title),
+            React.createElement("div", { className: "cohub-checks" }, boxes)
+          ));
+        }
+        return blocks;
+      }
+
+      function renderTeam(team, index) {
+        var error = teamErrorsState[index] && typeof teamErrorsState[index] === "object" ? teamErrorsState[index] : {};
+        var invalid = error.name !== "" || error.members !== "" || error.id !== "";
+        var isActive = team.id !== "" && team.id === state.activeTeam;
+        var expanded = state.expandedTeam === index;
+        var title = typeof team.name === "string" && team.name.trim() !== "" ? team.name : t("teamUnsaved");
+        var knownMembers = [];
+        for (var m = 0; m < team.members.length; m += 1) knownMembers.push(team.members[m]);
+        for (var c = 0; c < candidates.custom.length; c += 1) knownMembers.push(candidates.custom[c].name);
+        for (var bi = 0; bi < candidates.builtin.length; bi += 1) knownMembers.push(candidates.builtin[bi]);
+        var message = teamMessage(error);
+
+        var body = expanded
+          ? React.createElement("div", { className: "cohub-team-body" },
+            React.createElement("div", { className: "cohub-role-fields" },
+              React.createElement("div", { className: "cohub-field" },
+                React.createElement("label", { className: "cohub-label" }, t("teamName")),
+                React.createElement("input", {
+                  className: error.name !== "" ? "cohub-input cohub-invalid" : "cohub-input",
+                  type: "text",
+                  value: team.name,
+                  disabled: locked,
+                  placeholder: "writing",
+                  "aria-label": title + " · " + t("teamName"),
+                  onChange: function (event) {
+                    props.editTeam(index, "name", event.target.value);
+                  }
+                })
+              ),
+              React.createElement("div", { className: "cohub-field" },
+                React.createElement("label", { className: "cohub-label" }, t("teamDescription")),
+                React.createElement("input", {
+                  className: "cohub-input",
+                  type: "text",
+                  value: team.description,
+                  disabled: locked,
+                  "aria-label": title + " · " + t("teamDescription"),
+                  onChange: function (event) {
+                    props.editTeam(index, "description", event.target.value);
+                  }
+                })
+              ),
+              React.createElement("div", { className: "cohub-field cohub-field-wide" },
+                React.createElement("label", {
+                  className: error.members !== "" ? "cohub-label cohub-invalid-label" : "cohub-label"
+                }, t("teamMembers")),
+                renderMemberPicker(team, index, knownMembers),
+                candidates.builtin.length + candidates.custom.length === 0
+                  ? React.createElement("p", { className: "cohub-desc" }, t("teamMembersEmpty"))
+                  : null
+              )
+            ),
+            message !== "" ? React.createElement("p", { className: "cohub-role-error" }, message) : null
+          )
+          : null;
+
+        return React.createElement("li", {
+          key: "team-" + index,
+          className: invalid ? "cohub-row cohub-invalid" : "cohub-row"
+        },
+          React.createElement("div", { className: "cohub-row-head" },
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-team-toggle",
+              "aria-expanded": expanded,
+              onClick: function () {
+                props.toggleTeam(index);
+              }
+            },
+              React.createElement("span", { className: "cohub-row-name" }, title),
+              React.createElement("span", { className: "cohub-row-id" }, team.id),
+              React.createElement("span", { className: "cohub-badge" },
+                t("teamMemberCount", { count: team.members.length }))
+            ),
+            isActive ? React.createElement("span", { className: "cohub-badge cohub-badge-explicit" }, t("teamActiveBadge")) : null,
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-row-reset",
+              disabled: locked || state.activeTeamBusy || team.id === "",
+              onClick: function () {
+                props.setActiveTeam(team.id);
+              }
+            }, isActive ? t("teamUnsetActive") : t("teamSetActive")),
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-row-reset",
+              disabled: locked,
+              "aria-label": t("teamRemove") + " " + title,
+              onClick: function () {
+                props.removeTeam(index);
+              }
+            }, t("teamRemove"))
+          ),
+          body
+        );
+      }
+
+      var teamItems = [];
+      for (var ti = 0; ti < teams.length; ti += 1) teamItems.push(renderTeam(teams[ti], ti));
+
+      var teamErrorCount = countTeamErrors(teamErrorsState);
+      var teamStatus = null;
+      var teamStatusClass = "cohub-status";
+      if (state.teamsFailed) {
+        teamStatus = t("failed");
+        teamStatusClass += " cohub-status-error";
+      } else if (teamErrorCount > 0) {
+        teamStatus = t("teamErrSummary", { count: teamErrorCount });
+        teamStatusClass += " cohub-status-error";
+      } else if (state.teamsSaved) {
+        teamStatus = t("teamSaved");
+        teamStatusClass += " cohub-status-ok";
+      } else if (state.teamsNotice === "activeCleared") {
+        teamStatus = t("teamActiveCleared");
+        teamStatusClass += " cohub-status-warn";
+      } else if (state.teamsDirty) {
+        teamStatus = t("teamDirty");
+      } else if (!state.writable) {
+        teamStatus = t("readOnly");
+      }
+
+      var teamsBlock = React.createElement("div", { className: "cohub-roles" },
+        React.createElement("h3", { className: "cohub-subtitle" }, t("teamsTitle")),
+        React.createElement("p", { className: "cohub-desc" }, t("teamsDescription")),
+        teams.length === 0
+          ? React.createElement("p", { className: "cohub-notice" }, t("teamEmpty"))
+          : React.createElement("ul", { className: "cohub-rows" }, teamItems),
+        React.createElement("div", { className: "cohub-actions" },
+          React.createElement("button", {
+            type: "button",
+            className: "cohub-button cohub-button-ghost",
+            disabled: locked,
+            onClick: function () {
+              props.addTeam();
+            }
+          }, t("teamAdd")),
+          teamStatus !== null ? React.createElement("p", { className: teamStatusClass }, teamStatus) : null,
+          React.createElement("button", {
+            type: "button",
+            className: "cohub-button cohub-button-ghost",
+            disabled: !state.teamsDirty || state.saving,
+            onClick: function () {
+              props.discardTeams();
+            }
+          }, t("discard")),
+          React.createElement("button", {
+            type: "button",
+            className: "cohub-button cohub-button-primary",
+            disabled: !state.teamsDirty || !state.writable || state.saving || state.conflicted,
+            onClick: function () {
+              props.saveTeams();
+            }
+          }, t(state.saving ? "saving" : "teamSavedLabel"))
+        )
+      );
+
       var rolesBlock = React.createElement("div", { className: "cohub-roles" },
         React.createElement("h3", { className: "cohub-subtitle" }, t("rolesTitle")),
         React.createElement("p", { className: "cohub-desc" }, t("rolesDescription")),
@@ -1575,6 +2321,7 @@ window.__ModuleLoader__.load({
             }
           }, t(state.saving ? "saving" : "save"))
         ),
+        teamsBlock,
         rolesBlock
       );
     }
@@ -1635,6 +2382,30 @@ window.__ModuleLoader__.load({
           },
           saveRoles: function () {
             return controller.saveRoles();
+          },
+          addTeam: function () {
+            controller.addTeam();
+          },
+          removeTeam: function (index) {
+            return controller.removeTeam(index);
+          },
+          editTeam: function (index, field, value) {
+            controller.editTeam(index, field, value);
+          },
+          toggleTeam: function (index) {
+            controller.toggleTeam(index);
+          },
+          toggleTeamMember: function (index, name) {
+            controller.toggleTeamMember(index, name);
+          },
+          discardTeams: function () {
+            controller.discardTeams();
+          },
+          saveTeams: function () {
+            return controller.saveTeams();
+          },
+          setActiveTeam: function (id) {
+            return controller.setActiveTeam(id);
           }
         };
       };
@@ -1662,7 +2433,13 @@ window.__ModuleLoader__.load({
     exports.__internals = {
       rowsFromSkills: rowsFromSkills,
       rowsToSkills: rowsToSkills,
-      reasoningEffortsOf: reasoningEffortsOf
+      reasoningEffortsOf: reasoningEffortsOf,
+      kebabIdOf: kebabIdOf,
+      uniqueTeamId: uniqueTeamId,
+      validateTeams: validateTeams,
+      countTeamErrors: countTeamErrors,
+      teamsToConfig: teamsToConfig,
+      memberCandidates: memberCandidates
     };
     return module.exports;
   }
