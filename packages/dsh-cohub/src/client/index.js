@@ -217,6 +217,62 @@ window.__ModuleLoader__.load({
       roleDetailBuiltinHint: "内置，只读",
       roleDetailCustomHint: "自定义，只读",
       roleDetailReadOnly: "仅展示：编辑提示词请用角色卡片里的「提示词」字段。",
+      // ── 模板新建 / 绑定工具 / 运行模型 ──────────────────────────────
+      roleTemplateSection: "选择一个模板开始",
+      roleTemplateHint: "选中模板会自动填好名称（加 -copy 后缀防重名）、职责、提示词、档位与绑定工具。",
+      roleTemplateBlank: "空白角色",
+      roleTemplateBlankDesc: "从零填写名称、职责与提示词。",
+      roleTemplateMain: "co-orchestrator · 通用编排主代理",
+      roleTemplateMainDesc: "通用编排主代理 · 纯调度 · 不绑定档位",
+      roleTemplateBasedOn: "基于模板：{name}",
+      roleTemplateReselect: "重新选择模板",
+      roleTemplateNone: "未选模板：提示词 / 工具 / 模型区暂不可编辑。",
+      roleToolCountSuffix: "{count} 个工具",
+      roleToolsTitle: "绑定工具",
+      roleToolsCount: "已选 {count} 个工具",
+      roleToolsTierHint: "档位快捷组合（点一下批量勾选）",
+      roleToolsEmpty: "还没绑定工具：保存后按档位组合兜底。",
+      roleToolsShellWarn: "勾了 Shell 但没勾文件读写：子代理无法定位或修改文件，建议同时勾上「文件读写」。",
+      roleModelTitle: "运行模型",
+      roleModelBuiltinNote: "提示词与工具由插件维护，模型路由可单独配置。",
+      roleModelInherit: "继承",
+      roleModelProvider: "供应商",
+      roleModelModel: "模型",
+      roleModelProviderDefault: "继承默认（跟随会话）",
+      roleModelPickProvider: "先选供应商",
+      roleModelPickModel: "选择模型",
+      roleModelReasoning: "推理强度",
+      roleModelReasoningHint: "默认 = 跟随会话设置",
+      roleModelMaxOutput: "最大输出",
+      roleModelMaxOutputPlaceholder: "例如 4000",
+      roleModelReset: "恢复默认",
+      roleMainBadge: "通用编排主代理 · 纯调度 · 不绑定档位",
+      roleMainNew: "以此模板新建",
+      roleMainDetail: "查看详情",
+      "effort.default": "默认",
+      "effort.low": "低",
+      "effort.medium": "中",
+      "effort.high": "高",
+      toolGroupFile: "文件",
+      toolGroupNet: "联网",
+      toolGroupExec: "执行",
+      toolGroupOrch: "编排",
+      toolGroupExt: "外部",
+      "tool.tool-fs": "文件读写",
+      "tool.tool-fs-search": "文件搜索",
+      "tool.tool-web": "联网抓取",
+      "tool.tool-bash": "Shell（bash）",
+      "tool.tool-pwsh": "Shell（pwsh）",
+      "tool.tool-skill": "技能",
+      "tool.tool-todo": "待办",
+      "tool.tool-jobs": "后台任务",
+      "tool.tool-goal": "目标",
+      "tool.tool-ask-user": "追问用户",
+      "tool.tool-delegation": "委派",
+      "tool.mcp-github": "GitHub MCP",
+      "gate.posix": "仅 POSIX",
+      "gate.windows": "仅 Windows",
+      "gate.mcp": "需 MCP 授权",
       builtinRolesTitle: "内置角色",
       builtinRolesDescription: "内置角色来自插件目录，提示词与绑定工具只读展示，不能在这里删改。",
       teamTierDistribution: "成员档位分布",
@@ -347,6 +403,61 @@ window.__ModuleLoader__.load({
       roleDetailBuiltinHint: "built-in, read-only",
       roleDetailCustomHint: "custom, read-only",
       roleDetailReadOnly: "Read-only view — edit the prompt in the role card's \"Prompt\" field.",
+      roleTemplateSection: "Start from a template",
+      roleTemplateHint: "Picking a template fills in the name (-copy suffix avoids collisions), description, prompt, tier and bound tools.",
+      roleTemplateBlank: "Blank role",
+      roleTemplateBlankDesc: "Fill in name, description and prompt from scratch.",
+      roleTemplateMain: "co-orchestrator · general orchestrator",
+      roleTemplateMainDesc: "General orchestrator · dispatch only · no tier",
+      roleTemplateBasedOn: "Based on template: {name}",
+      roleTemplateReselect: "Pick another template",
+      roleTemplateNone: "No template yet — prompt / tools / model stay disabled until you pick one.",
+      roleToolCountSuffix: "{count} tools",
+      roleToolsTitle: "Bound tools",
+      roleToolsCount: "{count} tools selected",
+      roleToolsTierHint: "Tier shortcut (click to check them all)",
+      roleToolsEmpty: "No tools bound yet — saving falls back to the tier combination.",
+      roleToolsShellWarn: "Shell is checked without file tools: the child agent cannot locate or edit files. Consider adding \"File access\".",
+      roleModelTitle: "Model",
+      roleModelBuiltinNote: "Prompt and tools are maintained by the plugin; model routing can be configured separately.",
+      roleModelInherit: "Inherited",
+      roleModelProvider: "Provider",
+      roleModelModel: "Model",
+      roleModelProviderDefault: "Inherit default (follow session)",
+      roleModelPickProvider: "Pick a provider first",
+      roleModelPickModel: "Pick a model",
+      roleModelReasoning: "Reasoning effort",
+      roleModelReasoningHint: "Default follows the session setting",
+      roleModelMaxOutput: "Max output",
+      roleModelMaxOutputPlaceholder: "e.g. 4000",
+      roleModelReset: "Reset",
+      roleMainBadge: "General orchestrator · dispatch only · no tier",
+      roleMainNew: "New role from this template",
+      roleMainDetail: "View details",
+      "effort.default": "Default",
+      "effort.low": "Low",
+      "effort.medium": "Medium",
+      "effort.high": "High",
+      toolGroupFile: "Files",
+      toolGroupNet: "Web",
+      toolGroupExec: "Execution",
+      toolGroupOrch: "Orchestration",
+      toolGroupExt: "External",
+      "tool.tool-fs": "File access",
+      "tool.tool-fs-search": "File search",
+      "tool.tool-web": "Web fetch",
+      "tool.tool-bash": "Shell (bash)",
+      "tool.tool-pwsh": "Shell (pwsh)",
+      "tool.tool-skill": "Skills",
+      "tool.tool-todo": "Todo",
+      "tool.tool-jobs": "Background jobs",
+      "tool.tool-goal": "Goal",
+      "tool.tool-ask-user": "Ask user",
+      "tool.tool-delegation": "Delegation",
+      "tool.mcp-github": "GitHub MCP",
+      "gate.posix": "POSIX only",
+      "gate.windows": "Windows only",
+      "gate.mcp": "Needs MCP auth",
       builtinRolesTitle: "Built-in roles",
       builtinRolesDescription: "Built-in roles come from the plugin catalog; their prompts and bound tools are shown read-only and cannot be changed here.",
       teamTierDistribution: "Member tier mix",
@@ -518,15 +629,21 @@ window.__ModuleLoader__.load({
     /* ── 纯数据层：Config.customRoles ↔ 编辑行 ────────────────────── */
 
     function emptyRole() {
-      return { name: "", description: "", prompt: "", tier: "ro" };
+      return { name: "", description: "", prompt: "", tier: "ro", tools: [] };
     }
 
     function copyRole(role) {
+      var tools = [];
+      var list = role && Array.isArray(role.tools) ? role.tools : [];
+      for (var i = 0; i < list.length; i += 1) {
+        if (typeof list[i] === "string" && list[i] !== "" && tools.indexOf(list[i]) < 0) tools.push(list[i]);
+      }
       return {
         name: typeof role.name === "string" ? role.name : "",
         description: typeof role.description === "string" ? role.description : "",
         prompt: typeof role.prompt === "string" ? role.prompt : "",
-        tier: ROLE_TIERS.indexOf(role.tier) >= 0 ? role.tier : "ro"
+        tier: ROLE_TIERS.indexOf(role.tier) >= 0 ? role.tier : "ro",
+        tools: tools
       };
     }
 
@@ -547,7 +664,7 @@ window.__ModuleLoader__.load({
       return rows;
     }
 
-    /** 编辑行 → 待写入的 customRoles 数组（只写四个受控字段，tier 越界退回 ro）。 */
+    /** 编辑行 → 待写入的 customRoles 数组（只写受控字段：name/description/prompt/tier/tools）。 */
     function rolesToCustomRoles(rows) {
       var out = [];
       if (!Array.isArray(rows)) return out;
@@ -557,6 +674,147 @@ window.__ModuleLoader__.load({
         out.push(copyRole(role));
       }
       return out;
+    }
+
+    /* ── 纯数据层：绑定工具分组 / 角色模板（模板新建用） ───────────── */
+
+    /**
+     * 工具分组：id 就是写进 Config.customRoles[].tools 的插件 id
+     * （与 schema index.ts:152 的 `z.array(z.string().min(1))` 同口径，不做形状校验）。
+     * gate 只是展示用的门控说明（bash 仅 POSIX / pwsh 仅 Windows / mcp 需授权）。
+     */
+    var TOOL_GROUPS = [
+      {
+        id: "file",
+        labelKey: "toolGroupFile",
+        items: [
+          { id: "tool-fs", plugin: "dsh-tool-fs" },
+          { id: "tool-fs-search", plugin: "dsh-tool-fs-search" }
+        ]
+      },
+      {
+        id: "net",
+        labelKey: "toolGroupNet",
+        items: [{ id: "tool-web", plugin: "dsh-tool-web" }]
+      },
+      {
+        id: "exec",
+        labelKey: "toolGroupExec",
+        items: [
+          { id: "tool-bash", plugin: "dsh-tool-bash", gate: "posix" },
+          { id: "tool-pwsh", plugin: "dsh-tool-pwsh", gate: "windows" }
+        ]
+      },
+      {
+        id: "orch",
+        labelKey: "toolGroupOrch",
+        items: [
+          { id: "tool-skill", plugin: "dsh-tool-skill" },
+          { id: "tool-todo", plugin: "dsh-tool-todo" },
+          { id: "tool-jobs", plugin: "dsh-tool-jobs" },
+          { id: "tool-goal", plugin: "dsh-tool-goal" },
+          { id: "tool-ask-user", plugin: "dsh-tool-ask-user" },
+          { id: "tool-delegation", plugin: "dsh-tool-delegation" }
+        ]
+      },
+      {
+        id: "ext",
+        labelKey: "toolGroupExt",
+        items: [{ id: "mcp-github", plugin: "mcp-github", gate: "mcp" }]
+      }
+    ];
+
+    /** 单个工具项在 TOOL_GROUPS 里的登记（找不到返回 null）。 */
+    function toolItemOf(id) {
+      for (var g = 0; g < TOOL_GROUPS.length; g += 1) {
+        var items = TOOL_GROUPS[g].items;
+        for (var i = 0; i < items.length; i += 1) if (items[i].id === id) return items[i];
+      }
+      return null;
+    }
+
+    /**
+     * 角色目录里的插件短名 → 本页工具 id。
+     * pluginShortName 已经剥掉 dsh-tool- 前缀（dsh-tool-fs → fs），所以这里补回 tool-；
+     * dsh-tool-web-search / dsh-tool-web-fetch 都归到 tool-web；mcp-github 原样保留。
+     */
+    function toolIdOfPlugin(plugin) {
+      var short = pluginShortName(plugin);
+      if (short.indexOf("mcp-") === 0) return short;
+      if (short.indexOf("web") === 0) return "tool-web";
+      return "tool-" + short;
+    }
+
+    /** 档位对应的工具 id 列表（点档位快捷按钮时批量勾选它）。 */
+    function tierToolIds(tier) {
+      var list = tierToolsOf(tier);
+      var out = [];
+      for (var i = 0; i < list.length; i += 1) {
+        var id = toolIdOfPlugin(list[i] && list[i].plugin ? list[i].plugin : "");
+        if (id !== "" && out.indexOf(id) < 0) out.push(id);
+      }
+      return out;
+    }
+
+    /** 勾了 Shell 却没勾文件工具 → 回调里没法定位文件，给一条黄色提示。 */
+    function shellWithoutFs(tools) {
+      var list = Array.isArray(tools) ? tools : [];
+      var hasShell = list.indexOf("tool-bash") >= 0 || list.indexOf("tool-pwsh") >= 0;
+      return hasShell && list.indexOf("tool-fs") < 0;
+    }
+
+    /**
+     * 模板清单：co-orchestrator 置顶（突出）→ 16 个内置角色 → 空白角色。
+     * 数据全部来自构建期生成的 ROLE_CATALOG，运行期零 IO。
+     */
+    function roleTemplateList() {
+      var roles = ROLE_CATALOG && ROLE_CATALOG.roles ? ROLE_CATALOG.roles : {};
+      var out = [{
+        id: "co-orchestrator",
+        name: "co-orchestrator",
+        main: true,
+        description: "通用编排主代理 · 纯调度 · 不绑定档位",
+        brief: "你是纯调度主代理：只分析需求、委派子代理、审核产出，不直接改文件。每轮只派发当前最必要的一组任务，说明目标、约束与验收标准；收到结果后核对证据再决定下一步。",
+        tier: "",
+        tools: []
+      }];
+      for (var i = 0; i < BUILTIN_ROLE_NAMES.length; i += 1) {
+        var name = BUILTIN_ROLE_NAMES[i];
+        var entry = roles[name] && typeof roles[name] === "object" ? roles[name] : null;
+        var tier = entry && typeof entry.tier === "string" ? entry.tier : "";
+        var tools = tierToolIds(tier);
+        out.push({
+          id: name,
+          name: name,
+          main: false,
+          description: entry && typeof entry.description === "string" ? entry.description : "",
+          brief: entry && typeof entry.brief === "string" ? entry.brief : "",
+          tier: tier,
+          tools: tools
+        });
+      }
+      out.push({ id: "blank", name: "", blank: true, main: false, description: "", brief: "", tier: "", tools: [] });
+      return out;
+    }
+
+    /** 按 id 取模板（空白角色用 id=""）。 */
+    function templateOf(id) {
+      var list = roleTemplateList();
+      for (var i = 0; i < list.length; i += 1) if (list[i].id === id) return list[i];
+      return null;
+    }
+
+    /** 模板新建的默认名：加 -copy 后缀防与内置角色重名，重复时再追加序号。 */
+    function templateRoleName(base, taken) {
+      var raw = typeof base === "string" && base !== "" ? base : "co-role";
+      var used = Array.isArray(taken) ? taken : [];
+      var candidate = raw + "-copy";
+      var n = 2;
+      while (used.indexOf(candidate) >= 0) {
+        candidate = raw + "-copy-" + n;
+        n += 1;
+      }
+      return candidate;
     }
 
     /**
@@ -1026,6 +1284,17 @@ window.__ModuleLoader__.load({
       var rolesSaved = false;
       var rolesFailed = false;
       var roleErrors = [];
+      // 每行「从哪个模板来」：下标与角色行一一对应，"" = 未选/空白角色。
+      // 只存在于本次编辑会话（Config.customRoles 里没有该字段，保存时不写）。
+      var roleTemplates = [];
+      var rolePicker = -1;            // 当前展开模板选择器的行下标，-1 = 全收起
+
+      /** 模板标记数组对齐到角色行数（新增/删除行后补齐或截断）。 */
+      function syncRoleTemplates(size) {
+        var out = [];
+        for (var i = 0; i < size; i += 1) out.push(i < roleTemplates.length ? roleTemplates[i] : "");
+        roleTemplates = out;
+      }
 
       // 团队草稿：写 path:["teams"]。「设为当前」/「删除当前团队」走 path:["activeTeam"]，
       // 是独立的一次 mutate（不同 path，不能塞进同一次提交）。
@@ -1102,6 +1371,8 @@ window.__ModuleLoader__.load({
           rolesSaved: rolesSaved,
           rolesFailed: rolesFailed,
           roleErrors: roleErrors,
+          roleTemplates: roleTemplates,
+          rolePicker: rolePicker,
           teams: teamsDraft !== null ? teamsDraft.rows : currentTeams(),
           activeTeam: currentActiveTeam(),
           teamsDirty: teamsDraft !== null,
@@ -1135,6 +1406,8 @@ window.__ModuleLoader__.load({
           && left.rolesSaved === right.rolesSaved
           && left.rolesFailed === right.rolesFailed
           && left.roleErrors === right.roleErrors
+          && left.roleTemplates === right.roleTemplates
+          && left.rolePicker === right.rolePicker
           && left.teams === right.teams
           && left.activeTeam === right.activeTeam
           && left.teamsDirty === right.teamsDirty
@@ -1183,6 +1456,7 @@ window.__ModuleLoader__.load({
         var source = currentRoles();
         var rows = [];
         for (var i = 0; i < source.length; i += 1) rows.push(copyRole(source[i]));
+        syncRoleTemplates(rows.length);
         rolesDraft = { rows: rows, revision: snapshot.revision };
         return rolesDraft;
       }
@@ -1368,15 +1642,25 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * 改一行的某个字段（name / description / prompt / tier）。
-       * 只写受控四字段，避免把 Config 里别的键带歪；提交过校验后改字段会即时重算标红。
+       * 改一行的某个字段（name / description / prompt / tier / tools）。
+       * 只写受控字段，避免把 Config 里别的键带歪；提交过校验后改字段会即时重算标红。
+       * tools 传整数组（checkbox 勾选结果），一次性替换。
        */
       function editRole(index, field, value) {
-        if (field !== "name" && field !== "description" && field !== "prompt" && field !== "tier") return;
+        if (field !== "name" && field !== "description" && field !== "prompt" && field !== "tier" && field !== "tools") return;
         if (!canEdit()) return;
         var current = beginRolesDraft();
         if (index < 0 || index >= current.rows.length) return;
-        if (current.rows[index][field] === value) return;
+        if (field === "tools") {
+          var picked = [];
+          var list = Array.isArray(value) ? value : [];
+          for (var t = 0; t < list.length; t += 1) {
+            if (typeof list[t] === "string" && list[t] !== "" && picked.indexOf(list[t]) < 0) picked.push(list[t]);
+          }
+          value = picked;
+        } else if (current.rows[index][field] === value) {
+          return;
+        }
         var next = [];
         for (var i = 0; i < current.rows.length; i += 1) {
           var copy = copyRole(current.rows[i]);
@@ -1390,7 +1674,157 @@ window.__ModuleLoader__.load({
         publish();
       }
 
-      /** 追加一个空行（默认 tier=ro，最小权限起步）。 */
+      /**
+       * 用模板填一行：name（加 -copy 防重名）/ description / prompt（brief 全文）/ tier / tools。
+       * 空白角色（id=""）只清空字段，名字留给用户自己填。
+       */
+      function chooseTemplate(index, templateId) {
+        if (!canEdit()) return;
+        var template = templateOf(templateId);
+        if (template === null) return;
+        var current = beginRolesDraft();
+        if (index < 0 || index >= current.rows.length) return;
+        var taken = [];
+        for (var i = 0; i < current.rows.length; i += 1) {
+          if (i !== index && current.rows[i].name !== "") taken.push(current.rows[i].name);
+        }
+        for (var b = 0; b < BUILTIN_ROLE_NAMES.length; b += 1) taken.push(BUILTIN_ROLE_NAMES[b]);
+        var next = [];
+        for (var j = 0; j < current.rows.length; j += 1) {
+          var copy = copyRole(current.rows[j]);
+          if (j === index) {
+            if (template.blank) {
+              copy.name = "";
+              copy.description = "";
+              copy.prompt = "";
+              copy.tier = "ro";
+              copy.tools = [];
+            } else {
+              // 「基于模板」的显示名固定用模板 id：选完再改名也不影响这条提示。
+              copy.name = templateRoleName(template.name, taken);
+              copy.description = template.description !== "" ? template.description : template.name;
+              copy.prompt = template.brief !== "" ? template.brief : template.description;
+              copy.tier = ROLE_TIERS.indexOf(template.tier) >= 0 ? template.tier : "ro";
+              copy.tools = template.tools.slice();
+            }
+          }
+          next.push(copy);
+        }
+        var marks = [];
+        for (var k = 0; k < next.length; k += 1) marks.push(k === index ? template.id : roleTemplates[k]);
+        rolesDraft.rows = next;
+        syncRoleTemplates(next.length);
+        roleTemplates = marks;
+        rolePicker = -1;
+        roleErrors = roleErrors.length > 0 ? validateRoles(next) : [];
+        rolesSaved = false;
+        rolesFailed = false;
+        publish();
+      }
+
+      /** 档位退化为快捷组合：点一下按 ROLE_CATALOG.tiers[tier].tools 批量勾选，返回勾上的 id。 */
+      function applyTierTools(index) {
+        if (!canEdit()) return [];
+        var current = beginRolesDraft();
+        if (index < 0 || index >= current.rows.length) return [];
+        var ids = tierToolIds(current.rows[index].tier);
+        editRole(index, "tools", ids);
+        return ids;
+      }
+
+      /**
+       * 角色卡片 / 内置卡片的模型区：按角色名写 Config.skills（**不是 customRoles**）。
+       * 行不存在就先建一行；provider / model / reasoningEffort 与上方代理行同一套语义，
+       * maxTokens（最大输出）落在 extra 里由 rowsToSkills 原样保留。
+       */
+      function editSkillRow(name, field, value) {
+        if (field !== "provider" && field !== "model" && field !== "reasoningEffort" && field !== "maxTokens") return;
+        if (!canEdit() || typeof name !== "string" || name === "") return;
+        var current = beginDraft();
+        var next = [];
+        var found = false;
+        for (var i = 0; i < current.rows.length; i += 1) {
+          var row = current.rows[i];
+          if (row.name !== name) {
+            next.push(row);
+            continue;
+          }
+          found = true;
+          var copy = copyRow(row);
+          applySkillField(copy, field, value);
+          next.push(copy);
+        }
+        if (!found) {
+          var created = emptyRow(name);
+          applySkillField(created, field, value);
+          next.push(created);
+        }
+        draft.rows = next;
+        saved = false;
+        failed = false;
+        publish();
+      }
+
+      /** 单行改字段：换供应商连带清 model/effort（与 editRow 同口径，避免写出失效路由）。 */
+      function applySkillField(row, field, value) {
+        if (field === "provider") {
+          row.provider = value;
+          row.model = "";
+          row.reasoningEffort = "";
+          return;
+        }
+        if (field === "model") {
+          row.model = value;
+          row.reasoningEffort = reconcileEffort(row.provider, value, effortOf(row));
+          return;
+        }
+        if (field === "reasoningEffort") {
+          row.reasoningEffort = value;
+          return;
+        }
+        var raw = value === undefined || value === null ? "" : String(value).trim();
+        if (raw === "") {
+          if (row.extra) delete row.extra.maxTokens;
+          return;
+        }
+        var number = Number(raw);
+        if (!isFinite(number) || number < 1) return;
+        if (!row.extra) row.extra = {};
+        row.extra.maxTokens = Math.round(number);
+      }
+
+      /** 恢复默认：清供应商 / 模型 / 推理强度 / 最大输出四项，其余未知字段保留。 */
+      function resetSkillRow(name) {
+        if (!canEdit() || typeof name !== "string" || name === "") return;
+        var current = beginDraft();
+        var next = [];
+        var changed = false;
+        for (var i = 0; i < current.rows.length; i += 1) {
+          var row = current.rows[i];
+          if (row.name !== name) {
+            next.push(row);
+            continue;
+          }
+          if (row.provider === "" && row.model === "" && effortOf(row) === "" && row.extra.maxTokens === undefined) {
+            next.push(row);
+            continue;
+          }
+          var copy = copyRow(row);
+          copy.provider = "";
+          copy.model = "";
+          copy.reasoningEffort = "";
+          delete copy.extra.maxTokens;
+          next.push(copy);
+          changed = true;
+        }
+        if (!changed) return;
+        draft.rows = next;
+        saved = false;
+        failed = false;
+        publish();
+      }
+
+      /** 添加角色：先展开「选择一个模板开始」，选中模板后自动填字段。 */
       function addRole() {
         if (!canEdit()) return;
         var current = beginRolesDraft();
@@ -1398,6 +1832,8 @@ window.__ModuleLoader__.load({
         for (var i = 0; i < current.rows.length; i += 1) next.push(copyRole(current.rows[i]));
         next.push(emptyRole());
         rolesDraft.rows = next;
+        syncRoleTemplates(next.length);
+        rolePicker = next.length - 1;
         roleErrors = [];
         rolesSaved = false;
         rolesFailed = false;
@@ -1413,6 +1849,12 @@ window.__ModuleLoader__.load({
         for (var i = 0; i < current.rows.length; i += 1) {
           if (i !== index) next.push(current.rows[i]);
         }
+        var marks = [];
+        for (var m = 0; m < roleTemplates.length; m += 1) if (m !== index) marks.push(roleTemplates[m]);
+        roleTemplates = marks;
+        syncRoleTemplates(next.length);
+        if (rolePicker === index) rolePicker = -1;
+        else if (rolePicker > index) rolePicker -= 1;
         rolesDraft.rows = next;
         roleErrors = [];
         rolesSaved = false;
@@ -1423,10 +1865,31 @@ window.__ModuleLoader__.load({
       function discardRoles() {
         if (saving) return;
         rolesDraft = null;
+        roleTemplates = [];
+        rolePicker = -1;
         rolesSaved = false;
         rolesFailed = false;
         roleErrors = [];
         publish();
+      }
+
+      /** 展开/收起某行的模板选择器。 */
+      function toggleRolePicker(index) {
+        rolePicker = rolePicker === index ? -1 : index;
+        publish();
+      }
+
+      /** 主代理卡「以此模板新建」：加一行并直接套上 co-orchestrator 模板。 */
+      function newRoleFromMain() {
+        if (!canEdit()) return;
+        var current = beginRolesDraft();
+        var next = [];
+        for (var i = 0; i < current.rows.length; i += 1) next.push(copyRole(current.rows[i]));
+        next.push(emptyRole());
+        rolesDraft.rows = next;
+        syncRoleTemplates(next.length);
+        publish();
+        chooseTemplate(next.length - 1, "co-orchestrator");
       }
 
       /**
@@ -1881,6 +2344,12 @@ window.__ModuleLoader__.load({
         removeRole: removeRole,
         discardRoles: discardRoles,
         saveRoles: saveRoles,
+        chooseTemplate: chooseTemplate,
+        applyTierTools: applyTierTools,
+        toggleRolePicker: toggleRolePicker,
+        newRoleFromMain: newRoleFromMain,
+        editSkillRow: editSkillRow,
+        resetSkillRow: resetSkillRow,
         toggleTeam: toggleTeam,
         toggleRoleDetail: toggleRoleDetail,
         editTeam: editTeam,
@@ -1907,6 +2376,15 @@ window.__ModuleLoader__.load({
         ".cohub-notice{margin:0;padding:8px 12px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);}",
         ".cohub-notice-error{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary);}",
         ".cohub-notice-warn{color:var(--dsw-alias-state-warning-primary,#8d6e00);}",
+        ".cohub-badge-muted{opacity:.62;font-weight:400;}",
+        ".cohub-seg-active{background:var(--dsw-alias-bg-active,#233240);border-color:var(--dsw-alias-border-strong,#4b7193);font-weight:650;}",
+        ".cohub-template-head{align-items:center;}",
+        ".cohub-templates .cohub-checks{grid-template-columns:repeat(auto-fill,minmax(220px,1fr));}",
+        ".cohub-template-card{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:9px 11px;border:1px solid var(--dsw-alias-border-weak,#35434d);border-radius:6px;background:var(--dsw-alias-bg-raised,#1d2227);}",
+        ".cohub-template-card:hover{border-color:var(--dsw-alias-border-strong,#4b7193);}",
+        ".cohub-template-main{border-color:var(--dsw-alias-state-info-primary,#3f6f9e);background:var(--dsw-alias-bg-info-weak,#1c2c3b);grid-column:1/-1;}",
+        ".cohub-row-main{border-left:2px solid var(--dsw-alias-state-info-primary,#3f6f9e);}",
+        ".cohub-model-block,.cohub-tool-block{margin-top:10px;}",
         ".cohub-notice-ok{color:var(--dsw-alias-state-success-primary);}",
         ".cohub-rows{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;}",
         ".cohub-row{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:10px 12px;background:var(--dsw-alias-bg-layer-2);}",
@@ -2238,6 +2716,238 @@ window.__ModuleLoader__.load({
        * 详情面板的「完整正文」块：内置角色折叠展示技能 content 全文（默认收起，360px 内滚动），
        * 自定义角色没有内置正文，给一行说明；未知角色整块不渲染（避免空壳）。
        */
+      /* ── 角色编辑区：模板新建 / 绑定工具 / 运行模型（对齐定稿原型结构） ── */
+
+      /** skills 编辑行按名查找（找不到返回 null，模型区按「继承」展示）。 */
+      function skillRowOf(name) {
+        for (var i = 0; i < rows.length; i += 1) if (rows[i].name === name) return rows[i];
+        return null;
+      }
+
+      /** 角色卡片上的模型徽标：显式配置显示 model，未配置显示灰色「继承」。 */
+      function modelPill(name) {
+        var row = skillRowOf(name);
+        var provider = row && typeof row.provider === "string" ? row.provider : "";
+        var model = row && typeof row.model === "string" ? row.model : "";
+        if (provider === "") {
+          return React.createElement("span", { className: "cohub-badge cohub-badge-muted" }, t("roleModelInherit"));
+        }
+        return React.createElement("span", { className: "cohub-badge" }, model !== "" ? model : provider);
+      }
+
+      /** 模板标记 → 展示文案（"" = 空白角色；未知 id 原样显示）。 */
+      function templateLabelOf(templateId) {
+        if (templateId === "" || templateId === "blank") return t("roleTemplateBlank");
+        if (templateId === "co-orchestrator") return t("roleTemplateMain");
+        return skillLabel(templateId);
+      }
+
+      /**
+       * 模型区：供应商（真实目录，取不到只有「继承默认」）→ 模型联动 →
+       * 推理强度分段按钮（默认/低/中/高 = ""/low/medium/high）→ 最大输出 → 恢复默认。
+       * 写的是 Config.skills（不是 customRoles），内置角色与自定义角色共用同一份渲染。
+       */
+      function renderRoleModel(name, disabled) {
+        var row = skillRowOf(name);
+        var provider = row && typeof row.provider === "string" ? row.provider : "";
+        var model = row && typeof row.model === "string" ? row.model : "";
+        var effort = row ? effortOf(row) : "";
+        var maxTokens = row && row.extra && row.extra.maxTokens !== undefined ? String(row.extra.maxTokens) : "";
+        var providerOptions = [React.createElement("option", { key: "__inherit", value: "" }, t("roleModelProviderDefault"))];
+        for (var p = 0; p < providers.length; p += 1) {
+          providerOptions.push(React.createElement("option", { key: providers[p].id, value: providers[p].id }, providers[p].label));
+        }
+        var models = provider !== "" && state.modelsByProvider ? state.modelsByProvider[provider] : null;
+        var modelOptions = [React.createElement("option", { key: "__pick", value: "" },
+          provider === ""
+            ? t("roleModelPickProvider")
+            : (Array.isArray(models) && models.length > 0 ? t("roleModelPickModel") : t("emptyModel")))];
+        if (Array.isArray(models)) {
+          for (var m = 0; m < models.length; m += 1) {
+            modelOptions.push(React.createElement("option", { key: models[m].id, value: models[m].id }, models[m].label));
+          }
+        }
+        var effortChoices = [["", "effort.default"], ["low", "effort.low"], ["medium", "effort.medium"], ["high", "effort.high"]];
+        var effortButtons = [];
+        for (var e = 0; e < effortChoices.length; e += 1) {
+          var choice = effortChoices[e][0];
+          var active = effort === choice;
+          effortButtons.push(React.createElement("button", {
+            key: choice === "" ? "__default" : choice,
+            type: "button",
+            className: active ? "cohub-tier-chip cohub-seg-active" : "cohub-tier-chip",
+            "aria-pressed": active,
+            disabled: disabled,
+            onClick: function (value) {
+              return function () {
+                props.editSkill(name, "reasoningEffort", value);
+              };
+            }(choice)
+          }, t(effortChoices[e][1])));
+        }
+        return React.createElement("div", { className: "cohub-detail-block cohub-model-block" },
+          React.createElement("p", { className: "cohub-label" }, t("roleModelTitle")),
+          React.createElement("div", { className: "cohub-field" },
+            React.createElement("label", { className: "cohub-label" }, t("roleModelProvider")),
+            React.createElement("select", {
+              className: "cohub-select",
+              value: provider,
+              disabled: disabled,
+              "aria-label": name + " · " + t("roleModelProvider"),
+              onChange: function (event) {
+                props.editSkill(name, "provider", event.target.value);
+              }
+            }, providerOptions)
+          ),
+          React.createElement("div", { className: "cohub-field" },
+            React.createElement("label", { className: "cohub-label" }, t("roleModelModel")),
+            React.createElement("select", {
+              className: "cohub-select",
+              value: model,
+              disabled: disabled || provider === "",
+              "aria-label": name + " · " + t("roleModelModel"),
+              onChange: function (event) {
+                props.editSkill(name, "model", event.target.value);
+              }
+            }, modelOptions)
+          ),
+          React.createElement("div", { className: "cohub-field" },
+            React.createElement("span", { className: "cohub-label" }, t("roleModelReasoning")),
+            React.createElement("div", { className: "cohub-actions" }, effortButtons),
+            React.createElement("small", { className: "cohub-desc" }, t("roleModelReasoningHint"))
+          ),
+          React.createElement("div", { className: "cohub-field" },
+            React.createElement("label", { className: "cohub-label" }, t("roleModelMaxOutput")),
+            React.createElement("input", {
+              className: "cohub-input",
+              type: "number",
+              min: 1,
+              step: 1,
+              value: maxTokens,
+              disabled: disabled || provider === "",
+              placeholder: t("roleModelMaxOutputPlaceholder"),
+              "aria-label": name + " · " + t("roleModelMaxOutput"),
+              onChange: function (event) {
+                props.editSkill(name, "maxTokens", event.target.value);
+              }
+            })
+          ),
+          React.createElement("div", { className: "cohub-actions" },
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-button cohub-button-ghost",
+              disabled: disabled,
+              onClick: function () {
+                props.resetSkill(name);
+              }
+            }, t("roleModelReset"))
+          )
+        );
+      }
+
+      /**
+       * 绑定工具：5 组 checkbox（中文名 + 插件短名 + 门控）+ 档位快捷组合按钮 +
+       * 「已选 N 个工具」实时计数 + Shell 缺文件读写时的黄色提示。
+       */
+      function renderToolPicker(index, role, disabled) {
+        var selected = Array.isArray(role.tools) ? role.tools : [];
+        var groups = [];
+        for (var g = 0; g < TOOL_GROUPS.length; g += 1) {
+          var group = TOOL_GROUPS[g];
+          var boxes = [];
+          for (var i = 0; i < group.items.length; i += 1) {
+            var item = group.items[i];
+            var checked = selected.indexOf(item.id) >= 0;
+            boxes.push(React.createElement("label", { key: item.id, className: "cohub-check" },
+              React.createElement("input", {
+                type: "checkbox",
+                checked: checked,
+                disabled: disabled,
+                "aria-label": t("tool." + item.id),
+                onChange: function (id, isChecked) {
+                  return function () {
+                    var next = [];
+                    for (var s = 0; s < selected.length; s += 1) if (selected[s] !== id) next.push(selected[s]);
+                    if (isChecked) next.push(id);
+                    props.editRole(index, "tools", next);
+                  };
+                }(item.id, !checked)
+              }),
+              React.createElement("span", null, t("tool." + item.id)),
+              React.createElement("span", { className: "cohub-check-id" }, item.plugin),
+              item.gate ? React.createElement("span", { className: "cohub-badge cohub-badge-muted" }, t("gate." + item.gate)) : null
+            ));
+          }
+          groups.push(React.createElement("div", { key: group.id, className: "cohub-check-group" },
+            React.createElement("p", { className: "cohub-label" }, t(group.labelKey)),
+            React.createElement("div", { className: "cohub-checks" }, boxes)
+          ));
+        }
+        var tierButtons = [];
+        for (var k = 0; k < ROLE_TIERS.length; k += 1) {
+          var tier = ROLE_TIERS[k];
+          var active = role.tier === tier;
+          tierButtons.push(React.createElement("button", {
+            key: tier,
+            type: "button",
+            className: active ? "cohub-tier-chip cohub-seg-active" : "cohub-tier-chip",
+            "aria-pressed": active,
+            disabled: disabled,
+            onClick: function () {
+              props.applyTierTools(index);
+            }
+          }, tierLabel(tier)));
+        }
+        return React.createElement("div", { className: "cohub-detail-block cohub-tool-block" },
+          React.createElement("p", { className: "cohub-label" },
+            t("roleToolsTitle") + " · " + t("roleToolsCount", { count: selected.length })),
+          React.createElement("p", { className: "cohub-desc" }, t("roleToolsTierHint")),
+          React.createElement("div", { className: "cohub-actions" }, tierButtons),
+          groups,
+          selected.length === 0 ? React.createElement("p", { className: "cohub-desc" }, t("roleToolsEmpty")) : null,
+          shellWithoutFs(selected)
+            ? React.createElement("p", { className: "cohub-notice cohub-notice-warn" }, t("roleToolsShellWarn"))
+            : null
+        );
+      }
+
+      /** 模板选择器：co-orchestrator 置顶突出 → 16 内置角色（名称/一句职责/档位/工具数）→ 空白角色。 */
+      function renderTemplatePicker(index) {
+        var list = roleTemplateList();
+        var cards = [];
+        for (var i = 0; i < list.length; i += 1) {
+          var item = list[i];
+          var className = "cohub-template-card";
+          if (item.main) className += " cohub-template-main";
+          if (item.blank) className += " cohub-template-blank";
+          cards.push(React.createElement("button", {
+            key: item.id === "" ? "__blank" : item.id,
+            type: "button",
+            className: className,
+            disabled: locked,
+            onClick: function (id) {
+              return function () {
+                props.chooseTemplate(index, id);
+              };
+            }(item.id)
+          },
+            React.createElement("span", { className: "cohub-row-name" },
+              item.main ? t("roleTemplateMain") : (item.blank ? t("roleTemplateBlank") : skillLabel(item.name))),
+            React.createElement("span", { className: "cohub-role-summary" },
+              item.blank ? t("roleTemplateBlankDesc") : item.description),
+            item.blank ? null : React.createElement("span", { className: "cohub-badge" },
+              item.main ? t("tier.mainAgent") : tierLabel(item.tier)),
+            item.blank ? null : React.createElement("span", { className: "cohub-badge cohub-badge-muted" },
+              t("roleToolCountSuffix", { count: item.tools.length }))
+          ));
+        }
+        return React.createElement("div", { className: "cohub-detail-block cohub-templates" },
+          React.createElement("p", { className: "cohub-label" }, t("roleTemplateSection")),
+          React.createElement("p", { className: "cohub-desc" }, t("roleTemplateHint")),
+          React.createElement("div", { className: "cohub-checks" }, cards)
+        );
+      }
+
       function renderContentBlock(detail) {
         if (detail.promptSource === "none") return null;
         var body = detail.content !== ""
@@ -2314,6 +3024,8 @@ window.__ModuleLoader__.load({
             React.createElement("span", { className: "cohub-role-summary" },
               detail.description !== "" ? detail.description : name),
             React.createElement("span", { className: "cohub-badge" }, roleTierLabel(detail)),
+            // 内置角色的模型路由可单独配置（写 Config.skills），卡片上直接展示当前徽标。
+            modelPill(name),
             React.createElement("button", {
               type: "button",
               className: "cohub-row-reset",
@@ -2324,7 +3036,13 @@ window.__ModuleLoader__.load({
               }
             }, expanded ? t("roleDetailCollapse") : t("roleDetailToggle"))
           ),
-          expanded ? renderRoleDetail(name) : null
+          expanded
+            ? React.createElement("div", { key: "builtin-detail" },
+              renderRoleDetail(name),
+              React.createElement("p", { className: "cohub-desc" }, t("roleModelBuiltinNote")),
+              renderRoleModel(name, locked)
+            )
+            : null
         );
       }
 
@@ -2340,6 +3058,12 @@ window.__ModuleLoader__.load({
         // 才回退到「未命名角色」。旧写法只比了 ""，undefined 会被直接渲染成空标题。
         var roleTitle = typeof role.name === "string" ? role.name.trim() : "";
         var typeLabel = roleTitle !== "" ? role.name : t("roleUnsaved");
+        // 模板标记："" = 还没选模板（此时提示词 / 工具 / 模型区禁用并提示）。
+        var templateMarks = state.roleTemplates || [];
+        var templateId = index < templateMarks.length ? templateMarks[index] : "";
+        var hasTemplate = templateId !== "";
+        var promptDisabled = locked || !hasTemplate;
+        var pickerOpen = !hasTemplate || state.rolePicker === index;
         return React.createElement("li", {
           key: "role-" + index,
           className: invalid ? "cohub-row cohub-invalid" : "cohub-row"
@@ -2349,6 +3073,7 @@ window.__ModuleLoader__.load({
             React.createElement("span", { className: "cohub-role-summary" },
               role.description !== "" ? role.description : t("roleDescription")),
             React.createElement("span", { className: "cohub-badge" }, tierLabel(role.tier)),
+            roleTitle !== "" ? modelPill(role.name) : null,
             // 未命名的草稿行查不到详情：按钮留着但禁用，避免空键把面板挂到别的角色上。
             React.createElement("button", {
               type: "button",
@@ -2416,7 +3141,7 @@ window.__ModuleLoader__.load({
               React.createElement("textarea", {
                 className: error.prompt !== "" ? "cohub-textarea cohub-invalid" : "cohub-textarea",
                 value: role.prompt,
-                disabled: locked,
+                disabled: promptDisabled,
                 rows: 3,
                 "aria-label": typeLabel + " · " + t("rolePrompt"),
                 onChange: function (event) {
@@ -2425,6 +3150,25 @@ window.__ModuleLoader__.load({
               })
             )
           ),
+          // 模板状态行：已选 → 「基于模板：xxx」+「重新选择模板」；未选 → 禁用提示。
+          React.createElement("div", { className: "cohub-actions cohub-template-head" },
+            hasTemplate
+              ? React.createElement("span", { className: "cohub-badge" },
+                t("roleTemplateBasedOn", { name: templateLabelOf(templateId) }))
+              : React.createElement("span", { className: "cohub-desc" }, t("roleTemplateNone")),
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-row-reset",
+              disabled: locked,
+              "aria-expanded": pickerOpen,
+              onClick: function () {
+                props.toggleRolePicker(index);
+              }
+            }, t("roleTemplateReselect"))
+          ),
+          pickerOpen ? renderTemplatePicker(index) : null,
+          renderToolPicker(index, role, locked || !hasTemplate),
+          roleTitle !== "" ? renderRoleModel(role.name, locked || !hasTemplate) : null,
           message !== "" ? React.createElement("p", { className: "cohub-role-error" }, message) : null,
           roleTitle !== "" && state.expandedRole === role.name ? renderRoleDetail(role.name) : null
         );
@@ -2752,9 +3496,44 @@ window.__ModuleLoader__.load({
         )
       );
 
+      // 角色库顶部固定一张主代理卡：标注纯调度 / 不绑定档位，可直接「以此模板新建」。
+      var mainRoleCard = React.createElement("ul", { className: "cohub-rows" },
+        React.createElement("li", { className: "cohub-row cohub-row-catalog cohub-row-main" },
+          React.createElement("div", { className: "cohub-row-head" },
+            React.createElement("span", { className: "cohub-row-name" }, MAIN_AGENT_NAME),
+            React.createElement("span", { className: "cohub-role-summary" }, t("roleMainBadge")),
+            modelPill(MAIN_AGENT_NAME),
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-row-reset",
+              disabled: locked,
+              "aria-expanded": state.expandedRole === MAIN_AGENT_NAME,
+              onClick: function () {
+                props.toggleRoleDetail(MAIN_AGENT_NAME);
+              }
+            }, state.expandedRole === MAIN_AGENT_NAME ? t("roleDetailCollapse") : t("roleMainDetail")),
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-row-reset",
+              disabled: locked,
+              onClick: function () {
+                props.newRoleFromMain();
+              }
+            }, t("roleMainNew"))
+          ),
+          state.expandedRole === MAIN_AGENT_NAME
+            ? React.createElement("div", { key: "main-detail" },
+              renderRoleDetail(MAIN_AGENT_NAME),
+              React.createElement("p", { className: "cohub-desc" }, t("roleModelBuiltinNote")),
+              renderRoleModel(MAIN_AGENT_NAME, locked))
+            : null
+        )
+      );
+
       var rolesBlock = React.createElement("div", { className: "cohub-roles" },
         React.createElement("h3", { className: "cohub-subtitle" }, t("rolesTitle")),
         React.createElement("p", { className: "cohub-desc" }, t("rolesDescription")),
+        mainRoleCard,
         // 内置角色：只读卡片，与下面的自定义角色共用同一份详情面板。
         React.createElement("div", { className: "cohub-roles" },
           React.createElement("p", { className: "cohub-sublabel" }, t("builtinRolesTitle")),
@@ -2900,6 +3679,24 @@ window.__ModuleLoader__.load({
           },
           editRole: function (index, field, value) {
             controller.editRole(index, field, value);
+          },
+          chooseTemplate: function (index, templateId) {
+            controller.chooseTemplate(index, templateId);
+          },
+          applyTierTools: function (index) {
+            return controller.applyTierTools(index);
+          },
+          toggleRolePicker: function (index) {
+            controller.toggleRolePicker(index);
+          },
+          newRoleFromMain: function () {
+            controller.newRoleFromMain();
+          },
+          editSkill: function (name, field, value) {
+            controller.editSkillRow(name, field, value);
+          },
+          resetSkill: function (name) {
+            controller.resetSkillRow(name);
           },
           addRole: function () {
             controller.addRole();
