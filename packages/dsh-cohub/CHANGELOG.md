@@ -2,6 +2,18 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.6] - 2026-11-25
+
+### 变更
+
+- **预置（agent preset）改为运行时注册**：插件在 `apply()` 内直接 `ctx.agentPresets.register()`，注册后立即挂载、当场可用；新增或调整档位 preset 不再依赖「写进 profile patch 等下次启动加载」。
+- 保留 profile patch 写入逻辑作为兼容备用（由 `installPresets` 控制），运行时注册失败时自动回退。
+
+### 修复
+
+- 修复 `cohub-subagent-write-shell` / `cohub-subagent-readonly-net` 报 `Unknown agent preset` 的问题——根因是声明由插件启动时写入 patch，而 patch 的加载早于插件启动。
+- `!!js` 平台门控表达式按当前进程安全求值（不使用 eval），避免把 `disabled: 'process.platform === "win32"'` 这种非空字符串当 truthy 而误禁工具。
+
 ## [0.13.5] - 2026-11-25
 
 ### 新增
