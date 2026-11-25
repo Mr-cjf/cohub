@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
 import { applyPresetPatchDeclarations, copyTree, installShippedPresets, resolveProfilePatchPath } from "./preset-install";
+import { registerCohubPresets, unregisterCohubPresets } from "./preset-runtime";
 import { CHINESE_LANGUAGE_INSTRUCTION } from "./chinese";
 import { COHUB_SKILLS } from "./skills";
 import { CUSTOM_ROLE_POLL_MS, createCustomSkillRegistry } from "./custom-skills.ts";
@@ -362,6 +363,16 @@ export { ScheduleConfig, ResultBudgetConfig, DelegateBackgroundConfig, CustomRol
 export { copyTree, installShippedPresets, hashTree, removeInstallRecord } from "./preset-install";
 // 测试与维护入口：preset 声明生成 / 幂等写入 profile patch / 活动 profile 解析
 export { applyPresetPatchDeclarations, buildPresetPatchDeclarations, resolveProfilePatchPath } from "./preset-install";
+// 测试与维护入口：档位 preset 的运行时注册（正解）/ 卸载 / 定义读取 / YAML 子集解析
+export {
+  COHUB_PRESETS_DIR,
+  evaluatePlatformExpr,
+  loadCohubPresetDefs,
+  materializeJsTags,
+  parseMiniYaml,
+  registerCohubPresets,
+  unregisterCohubPresets,
+} from "./preset-runtime";
 
 /**
  * 0.1 时代的 settings namespace 段 schema（settings.yaml 的 cohub.* 段）。
@@ -470,8 +481,34 @@ export function apply(ctx: any, config: any) {
     };
   }, "cohub.customRoles()");
 
-  // ③ 内置 agent preset（co-orchestrator / cohub-cordis）安装、升级与孤儿清理
-  //    installPresets=false 时不触碰用户 preset root（B：给部署/用户一个干净出口）
+  // ②c 档位 preset 的**运行时注册**（正解，免除重启）
+  //    ctx.agentPresets.register() 是「当场生效」的：内部立即 activate() → mountPreset()，
+  //    因此不再需要「先把声明写进 profile 的 cordis.patch.yml，等下一次启动才加载」。
+  //    · 事实源仍是包内 presets/<id>/（preset.yml + agent.cordis.yml），与 patch 声明同源；
+  //    · 幂等：注册前先释放同 id 的旧注册（重复 apply / 热重载都不会撞 Duplicate）；
+  //    · fail-soft：agentPresets 缺失或单个档位失败只 warn，绝不阻断插件启动；
+  //    · 卸载：effect 的 dispose 里调 unregisterCohubPresets，插件卸载时清干净。
+  //    注册是 async 且 apply 是同步的，故用 effect 承载 promise，不阻塞挂载。
+  ctx.effect(() => {
+    registerCohubPresets(ctx, ctx.logger).catch((error: unknown) => {
+      ctx.logger?.warn?.("cohub: 运行时注册档位 preset 失败（忽略，回退到 profile patch 声明）", error);
+    });
+    return () => {
+      try {
+        unregisterCohubPresets(ctx, ctx.logger);
+      } catch (error) {
+        ctx.logger?.warn?.("cohub: 卸载运行时 preset 失败（忽略）", error);
+      }
+    };
+  }, "cohub.agentPresets()");
+
+  // ③ 【兼容备用】内置 agent preset（co-orchestrator / cohub-cordis / 3 个子代理档位）
+  //    的目录安装 + profile patch 声明写入。
+  //    ⚠️ 主场景已由 ②c 的**运行时注册**覆盖：注册当场可用，不需要重启。
+  //    这里保留（不删）仅为兼容旧版 DSH（无 agentPresets 服务）与外部工具/部署脚本
+  //    对 patch 声明的依赖（例如用户手工编辑过 cordis.patch.yml，或工具读该文件枚举 preset）。
+  //    开关仍是 config.installPresets：false 时既不复制目录、也不写声明。
+  //    回退路径：万一运行时注册在某个宿主上不可用，这份声明会在下一次启动时接管。
   if (config.installPresets !== false) {
     try {
       const r = installAgentPresets(ctx.logger);
