@@ -141,13 +141,19 @@ window.__ModuleLoader__.load({
       rolesTitle: "角色库",
       rolesDescription: "先在这里建角色，再到上面的「团队」里勾选为成员。保存后运行时注册器约 1 秒内热加载，无需重启。",
       teamsTitle: "团队",
-      teamsDescription: "把角色编成团队：勾选成员后点「设为当前」，本次会话只用当前团队的成员。",
+      teamsDescription: "把角色编成团队：每个团队会自动注册为一个 Agent 预设，在 DSH 的「Agent 预设」里选它即可开局。",
       teamEmpty: "还没有团队。点「新建团队」开始。",
       teamAdd: "新建团队",
       teamRemove: "删除",
-      teamSetActive: "设为当前",
-      teamUnsetActive: "取消当前",
-      teamActiveBadge: "当前",
+      teamPresetUnknown: "当前会话预设：未知（在 Agent 预设里选择后此处会显示）",
+      teamPresetSwitchHint: "切换请在 设置 → Agent 预设 里选择",
+      teamPresetIdBadge: "预设 id：{id}",
+      teamPresetDerived: "预设 id：{id}（由团队名自动生成，创建后不可改）",
+      teamNewPresetHint: "保存后将注册为 Agent 预设，可在 Agent 预设列表中选择。",
+      teamSaveRegisterHint: "保存后立即出现在 Agent 预设选择器中，无需重启。",
+      teamMemberWarn: "成员警告：{names} 为空或已不在角色库中（不阻止保存）。",
+      teamMemberEmpty: "（空成员）",
+      teamActiveBadge: "当前会话",
       teamUnsaved: "未命名团队",
       teamNamePlaceholder: "例如：writing",
       teamLead: "队长",
@@ -166,8 +172,8 @@ window.__ModuleLoader__.load({
       teamMembersEmpty: "先到下方「角色库」创建自定义角色。",
       teamBuiltinGroup: "内置角色",
       teamCustomGroup: "自定义角色",
-      teamSavedLabel: "保存团队",
-      teamSaved: "已保存，约 1 秒后生效，无需重启。",
+      teamSavedLabel: "保存并注册预设",
+      teamSaved: "已保存并注册为 Agent 预设，约 1 秒后可在 Agent 预设选择器中看到，无需重启。",
       teamDirty: "有未保存的修改。",
       teamErrSummary: "有 {count} 处不合法，已标红，未保存。",
       teamErrNameRequired: "团队名不能为空。",
@@ -327,13 +333,19 @@ window.__ModuleLoader__.load({
       rolesTitle: "Role library",
       rolesDescription: "Create roles here first, then tick them as members under \"Teams\" above. The runtime registrar picks changes up in about 1 second — no restart needed.",
       teamsTitle: "Teams",
-      teamsDescription: "Group roles into teams: tick the members, then click \"Set active\" — only the active team's members stay available in this session.",
+      teamsDescription: "Group roles into teams: every team is registered as an Agent preset — pick it in DSH's \"Agent presets\" to start a session.",
       teamEmpty: "No teams yet. Click \"New team\" to start.",
       teamAdd: "New team",
       teamRemove: "Remove",
-      teamSetActive: "Set active",
-      teamUnsetActive: "Clear active",
-      teamActiveBadge: "Active",
+      teamPresetUnknown: "Current session preset: unknown (pick one under Agent presets and it will show here)",
+      teamPresetSwitchHint: "To switch, use Settings → Agent presets",
+      teamPresetIdBadge: "Preset id: {id}",
+      teamPresetDerived: "Preset id: {id} (derived from the team name, cannot change after creation)",
+      teamNewPresetHint: "Saving registers this team as an Agent preset, selectable in the Agent presets list.",
+      teamSaveRegisterHint: "It appears in the Agent presets picker right after saving — no restart needed.",
+      teamMemberWarn: "Member warning: {names} is empty or no longer in the role library (saving is still allowed).",
+      teamMemberEmpty: "(empty member)",
+      teamActiveBadge: "Current session",
       teamUnsaved: "Unnamed team",
       teamNamePlaceholder: "e.g. writing",
       teamLead: "Lead",
@@ -352,8 +364,8 @@ window.__ModuleLoader__.load({
       teamMembersEmpty: "Create a custom role in the Role library below first.",
       teamBuiltinGroup: "Built-in roles",
       teamCustomGroup: "Custom roles",
-      teamSavedLabel: "Save teams",
-      teamSaved: "Saved. Takes effect in about 1 second — no restart needed.",
+      teamSavedLabel: "Save & register preset",
+      teamSaved: "Saved and registered as an Agent preset — visible in the Agent presets picker in about 1 second, no restart needed.",
       teamDirty: "Unsaved changes.",
       teamErrSummary: "{count} invalid field(s), highlighted in red. Nothing was saved.",
       teamErrNameRequired: "Team name is required.",
@@ -865,8 +877,19 @@ window.__ModuleLoader__.load({
     var TEAM_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
     /**
+     * 团队 → Agent 预设 id：与 src/team-presets.ts 的 teamPresetId **同一条规则**：
+     * 显式 presetId 优先，否则按 `cohub-team-<团队 id>` 推导（服务端注册时用的就是它）。
+     * 空串 / 纯空白视为「未配置」。
+     */
+    function teamPresetId(team) {
+      var declared = team && typeof team.presetId === "string" ? team.presetId.trim() : "";
+      if (declared !== "") return declared;
+      return "cohub-team-" + (team && typeof team.id === "string" ? team.id.trim() : "");
+    }
+
+    /**
      * 团队 id 生成：name 转 kebab-case（小写、非字母数字折成单连字符、去首尾连字符）。
-     * 中文名折完可能为空串 → 返回 ""，由 uniqueTeamId 兜底成 "team"。
+     * 中文名折完是空串（ASCII 折叠规则，不做音译）→ 返回 ""，由 uniqueTeamId 兜底成 "team"。
      */
     function kebabIdOf(name) {
       var raw = typeof name === "string" ? name.trim().toLowerCase() : "";
@@ -913,7 +936,7 @@ window.__ModuleLoader__.load({
 
     /** 新建团队的草稿行（id 先占位，isNew 让改名时重算 id；保存时不外泄该标记）。 */
     function emptyTeam(id) {
-      return { id: id, name: "", description: "", members: [], lead: "", isNew: true };
+      return { id: id, name: "", description: "", members: [], lead: "", presetId: "", isNew: true };
     }
 
     /** Config.teams 的一项 → 编辑行；members 只保留非空字符串。 */
@@ -928,6 +951,8 @@ window.__ModuleLoader__.load({
         name: team && typeof team.name === "string" ? team.name : "",
         description: team && typeof team.description === "string" ? team.description : "",
         members: members,
+        // 显式 presetId 原样保留：它覆盖「cohub-team-<id>」的默认推导，不能让一次保存把它丢掉。
+        presetId: team && typeof team.presetId === "string" ? team.presetId : "",
         // lead 悬空（指向已取消勾选的角色）也原样保留：保存时由 validateTeams 拦下并标红。
         lead: team && typeof team.lead === "string" ? team.lead : "",
         isNew: false
@@ -949,7 +974,7 @@ window.__ModuleLoader__.load({
       return rows;
     }
 
-    /** 编辑行 → 待写入的 teams 数组（只写 schema 的四个字段，草稿标记不外泄）。 */
+    /** 编辑行 → 待写入的 teams 数组（只写受控字段，草稿标记不外泄）。 */
     function teamsToConfig(rows) {
       var out = [];
       if (!Array.isArray(rows)) return out;
@@ -957,14 +982,18 @@ window.__ModuleLoader__.load({
         var team = rows[i];
         if (!team || typeof team !== "object") continue;
         var members = Array.isArray(team.members) ? team.members.slice() : [];
-        // lead 与 members 同一次 mutate 写入：空 lead 落成默认队长，配置文件里不留空。
-        out.push({
+        var item = {
           id: typeof team.id === "string" ? team.id : "",
           name: typeof team.name === "string" ? team.name : "",
           description: typeof team.description === "string" ? team.description : "",
           members: members,
+          // lead 与 members 同一次 mutate 写入：空 lead 落成默认队长，配置文件里不留空。
           lead: effectiveTeamLead({ members: members, lead: team.lead })
-        });
+        };
+        // 显式 presetId 只在用户配过时写回（空串=省略，注册器按 cohub-team-<id> 推导）。
+        var presetId = typeof team.presetId === "string" ? team.presetId.trim() : "";
+        if (presetId !== "") item.presetId = presetId;
+        out.push(item);
       }
       return out;
     }
@@ -1243,8 +1272,7 @@ window.__ModuleLoader__.load({
       teamsNotice: "",
       expandedTeam: -1,
       // 角色详情面板（提示词 + 绑定工具）展开的是哪个角色名；"" = 全收起。
-      expandedRole: "",
-      activeTeamBusy: false
+      expandedRole: ""
     });
 
     /**
@@ -1296,16 +1324,14 @@ window.__ModuleLoader__.load({
         roleTemplates = out;
       }
 
-      // 团队草稿：写 path:["teams"]。「设为当前」/「删除当前团队」走 path:["activeTeam"]，
-      // 是独立的一次 mutate（不同 path，不能塞进同一次提交）。
+      // 团队草稿：只写 path:["teams"]（Config.activeTeam 已废弃，本页不再写入）。
       var teamsDraft = null;          // { rows, revision }
       var teamsSaved = false;
       var teamsFailed = false;
       var teamErrors = [];
-      var teamsNotice = "";           // "activeCleared" = 删除当前团队后的一次性提示
+      var teamsNotice = "";           // 一次性提示（保留 "activeCleared" 旧词条，本版不再触发）
       var expandedTeam = -1;          // 展开编辑的团队行下标，-1 = 全收起
       var expandedRole = "";          // 展开详情的角色名，"" = 全收起（角色库/成员/团队三处共用）
-      var activeTeamBusy = false;
 
       function readScope() {
         if (!scope || typeof scope.getSnapshot !== "function") {
@@ -1381,8 +1407,7 @@ window.__ModuleLoader__.load({
           teamErrors: teamErrors,
           teamsNotice: teamsNotice,
           expandedTeam: expandedTeam,
-          expandedRole: expandedRole,
-          activeTeamBusy: activeTeamBusy
+          expandedRole: expandedRole
         };
       }
 
@@ -1416,8 +1441,7 @@ window.__ModuleLoader__.load({
           && left.teamErrors === right.teamErrors
           && left.teamsNotice === right.teamsNotice
           && left.expandedTeam === right.expandedTeam
-          && left.expandedRole === right.expandedRole
-          && left.activeTeamBusy === right.activeTeamBusy;
+          && left.expandedRole === right.expandedRole;
       }
 
       function publish() {
@@ -2100,39 +2124,13 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * 设为当前团队；对已是当前的团队再点一次 = 取消（写空串 = 不限制）。
-       * 立即写 Config.activeTeam，不等「保存团队」。
-       */
-      function setActiveTeam(id) {
-        if (!canEdit()) return Promise.resolve(false);
-        var snapshot = readScope();
-        if (snapshot.status !== "ready" || snapshot.writable !== true) return Promise.resolve(false);
-        var nextValue = id === currentActiveTeam() ? "" : id;
-        activeTeamBusy = true;
-        teamsFailed = false;
-        publish();
-        return mutatePath(["activeTeam"], nextValue, snapshot.revision).then(function (ok) {
-          activeTeamBusy = false;
-          if (ok) {
-            teamsNotice = "";
-            lastValue = undefined;
-          } else {
-            teamsFailed = true;
-          }
-          publish();
-          return ok;
-        });
-      }
-
-      /**
-       * 删除一个团队行。若删的正是当前团队，顺手把 Config.activeTeam 清空
-       * （独立的一次 path:["activeTeam"] 写入），避免「当前」指向不存在的团队。
+       * 删除一个团队行。
+       * 只写 Config.teams：`activeTeam` 已废弃，本页不再写入（会话限制改由 Agent 预设承担）。
        */
       function removeTeam(index) {
         if (!canEdit()) return Promise.resolve(false);
         var current = beginTeamsDraft();
         if (index < 0 || index >= current.rows.length) return Promise.resolve(false);
-        var removed = current.rows[index];
         var next = [];
         for (var i = 0; i < current.rows.length; i += 1) {
           if (i === index) continue;
@@ -2142,20 +2140,7 @@ window.__ModuleLoader__.load({
         }
         expandedTeam = -1;
         pushTeamsRows(next);
-        var removedId = removed && typeof removed.id === "string" ? removed.id : "";
-        if (removedId === "" || removedId !== currentActiveTeam()) return Promise.resolve(true);
-        var snapshot = readScope();
-        if (snapshot.status !== "ready" || snapshot.writable !== true) return Promise.resolve(false);
-        return mutatePath(["activeTeam"], "", snapshot.revision).then(function (ok) {
-          if (ok) {
-            teamsNotice = "activeCleared";
-            lastValue = undefined;
-          } else {
-            teamsFailed = true;
-          }
-          publish();
-          return ok;
-        });
+        return Promise.resolve(true);
       }
 
       function discardTeams() {
@@ -2358,8 +2343,7 @@ window.__ModuleLoader__.load({
         addTeam: addTeam,
         removeTeam: removeTeam,
         discardTeams: discardTeams,
-        saveTeams: saveTeams,
-        setActiveTeam: setActiveTeam
+        saveTeams: saveTeams
       };
     }
 
@@ -2433,6 +2417,9 @@ window.__ModuleLoader__.load({
         // ── 团队区块：卡片头部整块可点展开，成员多选用紧凑网格 ──
         ".cohub-team-toggle{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:1 1 auto;min-width:0;background:transparent;border:none;padding:0;margin:0;cursor:pointer;font:inherit;color:inherit;text-align:left;}",
         ".cohub-team-toggle:hover .cohub-row-name{text-decoration:underline;}",
+        // 预设 id 用等宽字体（id 里有连字符与数字，等宽才好读），并在卡片头部独占一行（名称下方）。
+        ".cohub-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,\"Liberation Mono\",monospace;}",
+        ".cohub-team-toggle .cohub-row-id{flex-basis:100%;order:9;}",
         ".cohub-team-body{margin-top:8px;display:flex;flex-direction:column;gap:8px;}",
         ".cohub-check-group{display:flex;flex-direction:column;gap:4px;}",
         ".cohub-checks{display:flex;flex-wrap:wrap;gap:6px 14px;}",
@@ -3332,6 +3319,20 @@ window.__ModuleLoader__.load({
         for (var c = 0; c < candidates.custom.length; c += 1) knownMembers.push(candidates.custom[c].name);
         for (var bi = 0; bi < candidates.builtin.length; bi += 1) knownMembers.push(candidates.builtin[bi]);
         var message = teamMessage(error);
+        // 「角色库里有这个名字吗」——注意不能用 knownMembers（它含 team.members 自身，
+        // 那样任何悬空成员都会被判为已知，警告永远不触发）。
+        var libraryNames = candidates.builtin.slice();
+        for (var ln = 0; ln < candidates.custom.length; ln += 1) libraryNames.push(candidates.custom[ln].name);
+        // 成员异常（空成员 / 角色已不在角色库）：卡片上黄字提示，**不阻止保存**——
+        // 团队可能有意先保留占位成员，真正的落库校验只有 validateTeams 那几条。
+        var badMembers = [];
+        for (var bm = 0; bm < team.members.length; bm += 1) {
+          var memberName = typeof team.members[bm] === "string" ? team.members[bm].trim() : "";
+          if (memberName === "" || libraryNames.indexOf(memberName) < 0) {
+            badMembers.push(memberName === "" ? t("teamMemberEmpty") : memberName);
+          }
+        }
+        var memberWarning = badMembers.length > 0 ? badMembers.join(t("listSeparator")) : "";
         // 成员档位分布：一眼看出这组权限构成（未知档位/查不到的角色并入「未知档位」）。
         var distribution = tierDistributionOf(team.members, roles);
         var distributionParts = [];
@@ -3341,6 +3342,9 @@ window.__ModuleLoader__.load({
 
         var body = expanded
           ? React.createElement("div", { className: "cohub-team-body" },
+            team.isNew === true
+              ? React.createElement("p", { className: "cohub-notice" }, t("teamNewPresetHint"))
+              : null,
             React.createElement("div", { className: "cohub-role-fields" },
               React.createElement("div", { className: "cohub-field" },
                 React.createElement("label", { className: "cohub-label" }, t("teamName")),
@@ -3354,7 +3358,10 @@ window.__ModuleLoader__.load({
                   onChange: function (event) {
                     props.editTeam(index, "name", event.target.value);
                   }
-                })
+                }),
+                // 只读派生行：随团队名实时变化（新建行每次改名重算 id，已存团队保留原 id）。
+                React.createElement("p", { className: "cohub-desc cohub-mono" },
+                  t("teamPresetDerived", { id: teamPresetId(team) }))
               ),
               React.createElement("div", { className: "cohub-field" },
                 React.createElement("label", { className: "cohub-label" }, t("teamDescription")),
@@ -3404,7 +3411,9 @@ window.__ModuleLoader__.load({
               }
             },
               React.createElement("span", { className: "cohub-row-name" }, title),
-              React.createElement("span", { className: "cohub-row-id" }, team.id),
+              // 名称下方一行的等宽小字：团队注册成 Agent 预设时用的真实 id。
+              React.createElement("span", { className: "cohub-row-id cohub-mono" },
+                t("teamPresetIdBadge", { id: teamPresetId(team) })),
               React.createElement("span", { className: "cohub-badge" },
                 t("teamMemberCount", { count: team.members.length })),
               leadName !== "" ? React.createElement("span", { className: "cohub-badge cohub-badge-lead" },
@@ -3418,14 +3427,6 @@ window.__ModuleLoader__.load({
             React.createElement("button", {
               type: "button",
               className: "cohub-row-reset",
-              disabled: locked || state.activeTeamBusy || team.id === "",
-              onClick: function () {
-                props.setActiveTeam(team.id);
-              }
-            }, isActive ? t("teamUnsetActive") : t("teamSetActive")),
-            React.createElement("button", {
-              type: "button",
-              className: "cohub-row-reset",
               disabled: locked,
               "aria-label": t("teamRemove") + " " + title,
               onClick: function () {
@@ -3433,6 +3434,10 @@ window.__ModuleLoader__.load({
               }
             }, t("teamRemove"))
           ),
+          memberWarning !== ""
+            ? React.createElement("p", { className: "cohub-desc cohub-status-warn" },
+              t("teamMemberWarn", { names: memberWarning }))
+            : null,
           body
         );
       }
@@ -3463,6 +3468,10 @@ window.__ModuleLoader__.load({
 
       var teamsBlock = React.createElement("div", { className: "cohub-roles" },
         React.createElement("h3", { className: "cohub-subtitle" }, t("teamsTitle")),
+        // 只读一行：当前会话预设（客户端拿不到会话的预设 → 稳定的降级文案）+ 切换入口提示。
+        // 旧的「设为当前」下拉/按钮已删除：切换统一走 设置 → Agent 预设（Config.activeTeam 已废弃）。
+        React.createElement("p", { className: "cohub-notice cohub-mono" }, t("teamPresetUnknown")),
+        React.createElement("p", { className: "cohub-desc" }, t("teamPresetSwitchHint")),
         React.createElement("p", { className: "cohub-desc" }, t("teamsDescription")),
         teams.length === 0
           ? React.createElement("p", { className: "cohub-notice" }, t("teamEmpty"))
@@ -3492,7 +3501,8 @@ window.__ModuleLoader__.load({
             onClick: function () {
               props.saveTeams();
             }
-          }, t(state.saving ? "saving" : "teamSavedLabel"))
+          }, t(state.saving ? "saving" : "teamSavedLabel")),
+          React.createElement("p", { className: "cohub-desc" }, t("teamSaveRegisterHint"))
         )
       );
 
@@ -3736,9 +3746,6 @@ window.__ModuleLoader__.load({
           },
           saveTeams: function () {
             return controller.saveTeams();
-          },
-          setActiveTeam: function (id) {
-            return controller.setActiveTeam(id);
           }
         };
       };
@@ -3769,6 +3776,7 @@ window.__ModuleLoader__.load({
       reasoningEffortsOf: reasoningEffortsOf,
       kebabIdOf: kebabIdOf,
       uniqueTeamId: uniqueTeamId,
+      teamPresetId: teamPresetId,
       validateTeams: validateTeams,
       countTeamErrors: countTeamErrors,
       teamsToConfig: teamsToConfig,
