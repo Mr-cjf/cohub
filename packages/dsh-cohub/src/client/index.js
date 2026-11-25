@@ -564,7 +564,30 @@ window.__ModuleLoader__.load({
       roleErrNameBuiltin: "名称与内置角色重名。",
       roleErrNameDuplicate: "名称与其他自定义角色重复。",
       roleErrDescription: "描述不能为空。",
-      roleErrPrompt: "提示词不能为空。"
+      roleErrPrompt: "提示词不能为空。",
+      // ── 角色详情（档位 / 提示词 / 绑定工具）：三处共用同一套词条 ──
+      "tier.ro": "只读",
+      "tier.ro-net": "只读+联网",
+      "tier.rw": "可读写",
+      "tier.rw-shell": "读写+Shell",
+      "tier.cordis": "插件创作",
+      "tier.unknown": "未知档位",
+      roleDetailToggle: "查看详情",
+      roleDetailCollapse: "收起",
+      roleDetailTier: "档位",
+      roleDetailPrompt: "提示词",
+      roleDetailTools: "绑定工具",
+      roleToolCount: "{count} 个工具",
+      roleDetailNoPrompt: "（无提示词）",
+      roleDetailNoTools: "（该档位没有绑定工具）",
+      roleDetailUnknownRole: "未知角色：角色目录与角色库都没有这个名称。",
+      roleDetailBuiltinHint: "内置，只读",
+      roleDetailCustomHint: "自定义，只读",
+      roleDetailReadOnly: "仅展示：编辑提示词请用角色卡片里的「提示词」字段。",
+      builtinRolesTitle: "内置角色",
+      builtinRolesDescription: "内置角色来自插件目录，提示词与绑定工具只读展示，不能在这里删改。",
+      teamTierDistribution: "成员档位分布",
+      listSeparator: "、"
     };
 
     var en = {
@@ -657,7 +680,30 @@ window.__ModuleLoader__.load({
       roleErrNameBuiltin: "Name collides with a built-in role.",
       roleErrNameDuplicate: "Name duplicates another custom role.",
       roleErrDescription: "Description is required.",
-      roleErrPrompt: "Prompt is required."
+      roleErrPrompt: "Prompt is required.",
+      // ── Role details (tier / prompt / bound tools) shared by all three surfaces ──
+      "tier.ro": "Read-only",
+      "tier.ro-net": "Read-only + web",
+      "tier.rw": "Read-write",
+      "tier.rw-shell": "Read-write + shell",
+      "tier.cordis": "Plugin authoring",
+      "tier.unknown": "Unknown tier",
+      roleDetailToggle: "View details",
+      roleDetailCollapse: "Collapse",
+      roleDetailTier: "Tier",
+      roleDetailPrompt: "Prompt",
+      roleDetailTools: "Bound tools",
+      roleToolCount: "{count} tool(s)",
+      roleDetailNoPrompt: "(no prompt)",
+      roleDetailNoTools: "(this tier binds no tools)",
+      roleDetailUnknownRole: "Unknown role: absent from both the catalog and the role library.",
+      roleDetailBuiltinHint: "built-in, read-only",
+      roleDetailCustomHint: "custom, read-only",
+      roleDetailReadOnly: "Read-only view — edit the prompt in the role card's \"Prompt\" field.",
+      builtinRolesTitle: "Built-in roles",
+      builtinRolesDescription: "Built-in roles come from the plugin catalog; their prompts and bound tools are shown read-only and cannot be changed here.",
+      teamTierDistribution: "Member tier mix",
+      listSeparator: ", "
     };
 
     /** 无 locale 服务时的最小翻译（防止 props.t 缺失导致页面白屏）。 */
@@ -1060,6 +1106,122 @@ window.__ModuleLoader__.load({
       return { builtin: builtin, custom: custom };
     }
 
+    /* ── 纯数据层：角色详情（档位 / 提示词 / 绑定工具），三处 UI 共用 ── */
+
+    /**
+     * 插件全名 → 短名。目录里写的是真实插件 id（dsh-tool-fs-search），
+     * 窄卡片里只留工具段（fs-search），去掉 dsh-tool- / dsh- 前缀。
+     */
+    function pluginShortName(plugin) {
+      var name = typeof plugin === "string" ? plugin : "";
+      if (name.slice(0, 9) === "dsh-tool-") return name.slice(9);
+      if (name.slice(0, 4) === "dsh-") return name.slice(4);
+      return name;
+    }
+
+    /**
+     * 档位的绑定工具清单（只读副本）。
+     * 未知档位、目录缺字段、ROLE_CATALOG 缺失都返回空数组，绝不抛错。
+     * @param tier - ro | ro-net | rw | rw-shell | cordis，或配置里写错的任意值。
+     * @returns [{ plugin, pluginShort, label, note }]
+     */
+    function tierToolsOf(tier) {
+      var tiers = ROLE_CATALOG && ROLE_CATALOG.tiers ? ROLE_CATALOG.tiers : {};
+      var entry = typeof tier === "string" && Object.prototype.hasOwnProperty.call(tiers, tier) ? tiers[tier] : null;
+      var list = entry && Array.isArray(entry.tools) ? entry.tools : [];
+      var out = [];
+      for (var i = 0; i < list.length; i += 1) {
+        var tool = list[i] || {};
+        out.push({
+          plugin: typeof tool.plugin === "string" ? tool.plugin : "",
+          pluginShort: pluginShortName(tool.plugin),
+          label: typeof tool.label === "string" ? tool.label : "",
+          note: typeof tool.note === "string" ? tool.note : ""
+        });
+      }
+      return out;
+    }
+
+    /** 档位是否在 ROLE_CATALOG.tiers 里登记过（未知档位要优雅降级，不能裸值直显）。 */
+    function tierKnown(tier) {
+      var tiers = ROLE_CATALOG && ROLE_CATALOG.tiers ? ROLE_CATALOG.tiers : {};
+      return typeof tier === "string" && tier !== "" && Object.prototype.hasOwnProperty.call(tiers, tier);
+    }
+
+    /**
+     * 角色详情视图数据（纯函数，供角色库 / 团队成员 / 团队卡片共用）。
+     *   内置角色 → ROLE_CATALOG.roles[name].brief（只读）
+     *   自定义角色 → Config.customRoles[].prompt（只读）
+     *   两者都没有 → tier/prompt 为空串、promptSource="none"，由 UI 显示未知角色文案。
+     * @param name - 角色名（内置技能名或自定义角色名）。
+     * @param customRows - 「角色库」当前编辑行（未保存的草稿也能查到）。
+     */
+    function roleDetailOf(name, customRows) {
+      var roleName = typeof name === "string" ? name : "";
+      var custom = null;
+      var list = Array.isArray(customRows) ? customRows : [];
+      for (var i = 0; i < list.length; i += 1) {
+        var row = list[i] || {};
+        if (roleName !== "" && row.name === roleName) {
+          custom = row;
+          break;
+        }
+      }
+      var roles = ROLE_CATALOG && ROLE_CATALOG.roles ? ROLE_CATALOG.roles : {};
+      var builtin = roleName !== "" && Object.prototype.hasOwnProperty.call(roles, roleName) ? roles[roleName] : null;
+      var tier = "";
+      var prompt = "";
+      var description = "";
+      var source = "none";
+      // 内置优先：校验层已禁止同名自定义角色（roleErrNameBuiltin），这里保持同一口径。
+      if (builtin) {
+        tier = typeof builtin.tier === "string" ? builtin.tier : "";
+        prompt = typeof builtin.brief === "string" ? builtin.brief : "";
+        description = typeof builtin.description === "string" ? builtin.description : "";
+        source = "builtin";
+      } else if (custom) {
+        tier = typeof custom.tier === "string" ? custom.tier : "";
+        prompt = typeof custom.prompt === "string" ? custom.prompt : "";
+        description = typeof custom.description === "string" ? custom.description : "";
+        source = "custom";
+      }
+      var tools = tierToolsOf(tier);
+      return {
+        name: roleName,
+        tier: tier,
+        tierKnown: tierKnown(tier),
+        toolCount: tools.length,
+        tools: tools,
+        prompt: prompt,
+        promptSource: source,
+        description: description
+      };
+    }
+
+    /**
+     * 团队成员的档位分布：[{ tier, known, count }]，按 ROLE_TIERS 顺序，未知档位收尾。
+     * 成员名查不到角色时归入 tier="unknown"，不会因为配置里多写一个名字而崩。
+     */
+    function tierDistributionOf(members, customRows) {
+      var counts = {};
+      var list = Array.isArray(members) ? members : [];
+      for (var i = 0; i < list.length; i += 1) {
+        var detail = roleDetailOf(list[i], customRows);
+        var key = detail.tierKnown ? detail.tier : "unknown";
+        counts[key] = Object.prototype.hasOwnProperty.call(counts, key) ? counts[key] + 1 : 1;
+      }
+      var sorted = [];
+      for (var t = 0; t < ROLE_TIERS.length; t += 1) {
+        if (Object.prototype.hasOwnProperty.call(counts, ROLE_TIERS[t])) {
+          sorted.push({ tier: ROLE_TIERS[t], known: true, count: counts[ROLE_TIERS[t]] });
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(counts, "unknown")) {
+        sorted.push({ tier: "unknown", known: false, count: counts.unknown });
+      }
+      return sorted;
+    }
+
     /* ── 极简 observable store（uSES：快照未变必须返回同一引用） ──── */
 
     function createStateStore(initial) {
@@ -1119,6 +1281,8 @@ window.__ModuleLoader__.load({
       teamErrors: [],
       teamsNotice: "",
       expandedTeam: -1,
+      // 角色详情面板（提示词 + 绑定工具）展开的是哪个角色名；"" = 全收起。
+      expandedRole: "",
       activeTeamBusy: false
     });
 
@@ -1168,6 +1332,7 @@ window.__ModuleLoader__.load({
       var teamErrors = [];
       var teamsNotice = "";           // "activeCleared" = 删除当前团队后的一次性提示
       var expandedTeam = -1;          // 展开编辑的团队行下标，-1 = 全收起
+      var expandedRole = "";          // 展开详情的角色名，"" = 全收起（角色库/成员/团队三处共用）
       var activeTeamBusy = false;
 
       function readScope() {
@@ -1242,6 +1407,7 @@ window.__ModuleLoader__.load({
           teamErrors: teamErrors,
           teamsNotice: teamsNotice,
           expandedTeam: expandedTeam,
+          expandedRole: expandedRole,
           activeTeamBusy: activeTeamBusy
         };
       }
@@ -1274,6 +1440,7 @@ window.__ModuleLoader__.load({
           && left.teamErrors === right.teamErrors
           && left.teamsNotice === right.teamsNotice
           && left.expandedTeam === right.expandedTeam
+          && left.expandedRole === right.expandedRole
           && left.activeTeamBusy === right.activeTeamBusy;
       }
 
@@ -1657,6 +1824,16 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * 展开/收起某个角色的详情面板（档位 + 提示词 + 绑定工具）。
+       * 纯 UI 状态、不写配置：角色库卡片、团队成员、团队卡片点开的都是同一份面板。
+       */
+      function toggleRoleDetail(name) {
+        var key = typeof name === "string" ? name : "";
+        expandedRole = expandedRole === key ? "" : key;
+        publish();
+      }
+
+      /**
        * 改团队字段（name / description）。
        * name 变更时：**新建行**（isNew）重算 id 并自动消歧；**已存团队保留原 id**，
        * 否则改名会把 Config.activeTeam 指向的 id 弄悬空。
@@ -1981,6 +2158,7 @@ window.__ModuleLoader__.load({
         discardRoles: discardRoles,
         saveRoles: saveRoles,
         toggleTeam: toggleTeam,
+        toggleRoleDetail: toggleRoleDetail,
         editTeam: editTeam,
         toggleTeamMember: toggleTeamMember,
         addTeam: addTeam,
@@ -2058,7 +2236,22 @@ window.__ModuleLoader__.load({
         ".cohub-check{display:flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);cursor:pointer;}",
         ".cohub-check input{margin:0;cursor:pointer;}",
         ".cohub-check-id{color:var(--dsw-alias-label-tertiary);}",
-        ".cohub-invalid-label{color:var(--dsw-alias-state-error-primary);}"
+        ".cohub-invalid-label{color:var(--dsw-alias-state-error-primary);}",
+        // ── 角色详情：档位 / 提示词（等宽只读块）/ 绑定工具；成员格 + 档位分布摘要 ──
+        ".cohub-sublabel{margin:0;font-size:13px;font-weight:600;line-height:20px;color:var(--dsw-alias-label-secondary);}",
+        ".cohub-role-detail{margin-top:8px;padding:8px 10px;border-radius:8px;border:1px dashed var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);display:flex;flex-direction:column;gap:8px;}",
+        ".cohub-detail-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}",
+        ".cohub-detail-line .cohub-badge{margin-left:0;}",
+        ".cohub-badge-tier{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);}",
+        ".cohub-detail-block{display:flex;flex-direction:column;gap:4px;min-width:0;}",
+        ".cohub-prompt-readonly{margin:0;padding:8px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-family:var(--dsw-alias-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:12px;line-height:18px;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;}",
+        ".cohub-readonly-tools{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2px;}",
+        ".cohub-tool-item{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);}",
+        ".cohub-tool-plugin{margin-left:6px;color:var(--dsw-alias-label-tertiary);}",
+        ".cohub-check-item{display:flex;flex-direction:column;gap:4px;flex:1 1 220px;min-width:0;}",
+        ".cohub-tier-chip{align-self:flex-start;background:transparent;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:0 8px;font:inherit;font-size:11px;line-height:17px;color:var(--dsw-alias-label-tertiary);cursor:pointer;}",
+        ".cohub-tier-chip:hover{color:var(--dsw-alias-label-primary);}",
+        ".cohub-tier-dist{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;}"
       ].join("\n");
       var tag = document.createElement("style");
       tag.dataset.plugin = "dsh-cohub";
@@ -2291,6 +2484,82 @@ window.__ModuleLoader__.load({
         return parts.join(" ");
       }
 
+      /** 档位标签：未在目录登记的档位统一显示「未知档位」，不把裸值甩给用户。 */
+      function tierLabel(tier) {
+        if (!tierKnown(tier)) return t("tier.unknown");
+        var label = t("tier." + tier);
+        return label === "tier." + tier ? t("tier.unknown") : label;
+      }
+
+      /**
+       * 详情面板：档位 → 提示词（只读等宽块，保留换行）→ 绑定工具（中文名（note）· 插件短名）。
+       * 角色库卡片、团队成员、团队卡片点开的都是这一份，措辞与降级行为完全一致。
+       */
+      function renderRoleDetail(name) {
+        var detail = roleDetailOf(name, roles);
+        var toolItems = [];
+        for (var i = 0; i < detail.tools.length; i += 1) {
+          var tool = detail.tools[i];
+          var toolText = tool.label !== "" ? tool.label : tool.plugin;
+          if (tool.note !== "") toolText += "（" + tool.note + "）";
+          toolItems.push(React.createElement("li", { key: "tool-" + i, className: "cohub-tool-item" }, toolText,
+            tool.pluginShort !== ""
+              ? React.createElement("span", { className: "cohub-tool-plugin" }, "· " + tool.pluginShort)
+              : null));
+        }
+        var promptHint = detail.promptSource === "custom"
+          ? t("roleDetailCustomHint")
+          : detail.promptSource === "builtin" ? t("roleDetailBuiltinHint") : "";
+        return React.createElement("div", { className: "cohub-role-detail" },
+          React.createElement("div", { className: "cohub-detail-line" },
+            React.createElement("span", { className: "cohub-label" }, t("roleDetailTier")),
+            React.createElement("span", { className: "cohub-badge cohub-badge-tier" }, tierLabel(detail.tier)),
+            detail.promptSource === "none"
+              ? React.createElement("span", { className: "cohub-desc" }, t("roleDetailUnknownRole"))
+              : null
+          ),
+          React.createElement("div", { className: "cohub-detail-block" },
+            React.createElement("p", { className: "cohub-label" },
+              promptHint === "" ? t("roleDetailPrompt") : t("roleDetailPrompt") + " · " + promptHint),
+            React.createElement("pre", { className: "cohub-prompt-readonly" },
+              detail.prompt !== "" ? detail.prompt : t("roleDetailNoPrompt"))
+          ),
+          React.createElement("div", { className: "cohub-detail-block" },
+            React.createElement("p", { className: "cohub-label" },
+              t("roleDetailTools") + " · " + t("roleToolCount", { count: detail.toolCount })),
+            toolItems.length > 0
+              ? React.createElement("ul", { className: "cohub-readonly-tools" }, toolItems)
+              : React.createElement("p", { className: "cohub-desc" }, t("roleDetailNoTools"))
+          ),
+          React.createElement("p", { className: "cohub-desc" }, t("roleDetailReadOnly"))
+        );
+      }
+
+      /** 内置角色卡片：只读，没有编辑字段，只有「查看详情」与详情面板。 */
+      function renderBuiltinRole(name) {
+        var detail = roleDetailOf(name, roles);
+        var expanded = state.expandedRole === name;
+        // 只读目录卡：多一个类名，避免被「代理行 = .cohub-row」的既有契约当成可配置行。
+        return React.createElement("li", { key: "builtin-" + name, className: "cohub-row cohub-row-catalog" },
+          React.createElement("div", { className: "cohub-row-head" },
+            React.createElement("span", { className: "cohub-row-name" }, skillLabel(name)),
+            React.createElement("span", { className: "cohub-role-summary" },
+              detail.description !== "" ? detail.description : name),
+            React.createElement("span", { className: "cohub-badge" }, tierLabel(detail.tier)),
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-row-reset",
+              disabled: locked,
+              "aria-expanded": expanded,
+              onClick: function () {
+                props.toggleRoleDetail(name);
+              }
+            }, expanded ? t("roleDetailCollapse") : t("roleDetailToggle"))
+          ),
+          expanded ? renderRoleDetail(name) : null
+        );
+      }
+
       function renderRole(role, index) {
         var error = roleErrorOf(index);
         var invalid = error.name !== "" || error.description !== "" || error.prompt !== "";
@@ -2311,7 +2580,19 @@ window.__ModuleLoader__.load({
             React.createElement("span", { className: "cohub-row-name" }, typeLabel),
             React.createElement("span", { className: "cohub-role-summary" },
               role.description !== "" ? role.description : t("roleDescription")),
-            React.createElement("span", { className: "cohub-badge" }, role.tier),
+            React.createElement("span", { className: "cohub-badge" }, tierLabel(role.tier)),
+            // 未命名的草稿行查不到详情：按钮留着但禁用，避免空键把面板挂到别的角色上。
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-row-reset",
+              disabled: locked || roleTitle === "",
+              "aria-expanded": roleTitle !== "" && state.expandedRole === role.name,
+              onClick: function () {
+                props.toggleRoleDetail(role.name);
+              }
+            }, roleTitle !== "" && state.expandedRole === role.name
+              ? t("roleDetailCollapse")
+              : t("roleDetailToggle")),
             React.createElement("button", {
               type: "button",
               className: "cohub-row-reset",
@@ -2376,12 +2657,18 @@ window.__ModuleLoader__.load({
               })
             )
           ),
-          message !== "" ? React.createElement("p", { className: "cohub-role-error" }, message) : null
+          message !== "" ? React.createElement("p", { className: "cohub-role-error" }, message) : null,
+          roleTitle !== "" && state.expandedRole === role.name ? renderRoleDetail(role.name) : null
         );
       }
 
       var roleItems = [];
       for (var r = 0; r < roles.length; r += 1) roleItems.push(renderRole(roles[r], r));
+
+      var builtinRoleItems = [];
+      for (var br = 0; br < BUILTIN_ROLE_NAMES.length; br += 1) {
+        builtinRoleItems.push(renderBuiltinRole(BUILTIN_ROLE_NAMES[br]));
+      }
 
       var roleErrorCount = countRoleErrors(roleErrors);
       var roleStatus = null;
@@ -2422,7 +2709,7 @@ window.__ModuleLoader__.load({
         return parts.join(" ");
       }
 
-      /** 成员多选：内置 / 自定义两组，每项一个 checkbox。 */
+      /** 成员多选：内置 / 自定义两组，每项一个 checkbox + 档位/工具数小标签（点击展开同一份详情）。 */
       function renderMemberPicker(team, index, knownMembers) {
         var groups = [
           { key: "builtin", title: t("teamBuiltinGroup"), items: candidates.builtin },
@@ -2439,19 +2726,35 @@ window.__ModuleLoader__.load({
             var checked = team.members.indexOf(name) >= 0;
             // 已经不在角色库、但团队里还留着的成员（删了角色没删团队）也要能看到并取消勾选。
             if (!checked && knownMembers.indexOf(name) < 0) continue;
-            boxes.push(React.createElement("label", { key: name, className: "cohub-check" },
-              React.createElement("input", {
-                type: "checkbox",
-                checked: checked,
+            var memberDetail = roleDetailOf(name, roles);
+            boxes.push(React.createElement("div", { key: name, className: "cohub-check-item" },
+              React.createElement("label", { className: "cohub-check" },
+                React.createElement("input", {
+                  type: "checkbox",
+                  checked: checked,
+                  disabled: locked,
+                  onChange: function (roleName) {
+                    return function () {
+                      props.toggleTeamMember(index, roleName);
+                    };
+                  }(name)
+                }),
+                React.createElement("span", null, skillLabel(name)),
+                React.createElement("span", { className: "cohub-check-id" }, name)
+              ),
+              // 勾选区旁边常驻一行：档位 · N 个工具；点它展开与角色库同一份详情面板。
+              React.createElement("button", {
+                type: "button",
+                className: "cohub-tier-chip",
                 disabled: locked,
-                onChange: function (roleName) {
+                "aria-expanded": state.expandedRole === name,
+                onClick: function (roleName) {
                   return function () {
-                    props.toggleTeamMember(index, roleName);
+                    props.toggleRoleDetail(roleName);
                   };
                 }(name)
-              }),
-              React.createElement("span", null, skillLabel(name)),
-              React.createElement("span", { className: "cohub-check-id" }, name)
+              }, tierLabel(memberDetail.tier) + " · " + t("roleToolCount", { count: memberDetail.toolCount })),
+              state.expandedRole === name ? renderRoleDetail(name) : null
             ));
           }
           if (boxes.length === 0) continue;
@@ -2474,6 +2777,12 @@ window.__ModuleLoader__.load({
         for (var c = 0; c < candidates.custom.length; c += 1) knownMembers.push(candidates.custom[c].name);
         for (var bi = 0; bi < candidates.builtin.length; bi += 1) knownMembers.push(candidates.builtin[bi]);
         var message = teamMessage(error);
+        // 成员档位分布：一眼看出这组权限构成（未知档位/查不到的角色并入「未知档位」）。
+        var distribution = tierDistributionOf(team.members, roles);
+        var distributionParts = [];
+        for (var d = 0; d < distribution.length; d += 1) {
+          distributionParts.push(tierLabel(distribution[d].tier) + " ×" + distribution[d].count);
+        }
 
         var body = expanded
           ? React.createElement("div", { className: "cohub-team-body" },
@@ -2537,6 +2846,10 @@ window.__ModuleLoader__.load({
               React.createElement("span", { className: "cohub-badge" },
                 t("teamMemberCount", { count: team.members.length }))
             ),
+            distributionParts.length > 0
+              ? React.createElement("span", { className: "cohub-tier-dist" },
+                t("teamTierDistribution") + " · " + distributionParts.join(t("listSeparator")))
+              : null,
             isActive ? React.createElement("span", { className: "cohub-badge cohub-badge-explicit" }, t("teamActiveBadge")) : null,
             React.createElement("button", {
               type: "button",
@@ -2622,6 +2935,12 @@ window.__ModuleLoader__.load({
       var rolesBlock = React.createElement("div", { className: "cohub-roles" },
         React.createElement("h3", { className: "cohub-subtitle" }, t("rolesTitle")),
         React.createElement("p", { className: "cohub-desc" }, t("rolesDescription")),
+        // 内置角色：只读卡片，与下面的自定义角色共用同一份详情面板。
+        React.createElement("div", { className: "cohub-roles" },
+          React.createElement("p", { className: "cohub-sublabel" }, t("builtinRolesTitle")),
+          React.createElement("p", { className: "cohub-desc" }, t("builtinRolesDescription")),
+          React.createElement("ul", { className: "cohub-rows" }, builtinRoleItems)
+        ),
         roles.length === 0
           ? React.createElement("p", { className: "cohub-notice" }, t("roleEmpty"))
           : React.createElement("ul", { className: "cohub-rows" }, roleItems),
@@ -2786,6 +3105,9 @@ window.__ModuleLoader__.load({
           toggleTeam: function (index) {
             controller.toggleTeam(index);
           },
+          toggleRoleDetail: function (name) {
+            controller.toggleRoleDetail(name);
+          },
           toggleTeamMember: function (index, name) {
             controller.toggleTeamMember(index, name);
           },
@@ -2830,7 +3152,12 @@ window.__ModuleLoader__.load({
       validateTeams: validateTeams,
       countTeamErrors: countTeamErrors,
       teamsToConfig: teamsToConfig,
-      memberCandidates: memberCandidates
+      memberCandidates: memberCandidates,
+      pluginShortName: pluginShortName,
+      tierKnown: tierKnown,
+      tierToolsOf: tierToolsOf,
+      roleDetailOf: roleDetailOf,
+      tierDistributionOf: tierDistributionOf
     };
     return module.exports;
   }
