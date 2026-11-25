@@ -148,7 +148,9 @@ window.__ModuleLoader__.load({
       teamPresetUnknown: "当前会话预设：未知（在 Agent 预设里选择后此处会显示）",
       teamPresetSwitchHint: "切换请在 设置 → Agent 预设 里选择",
       teamPresetIdBadge: "预设 id：{id}",
-      teamPresetDerived: "预设 id：{id}（由团队名自动生成，创建后不可改）",
+      teamPresetSlug: "预设 id（slug，可改）",
+      teamPresetIdFinal: "最终预设 id：{id}",
+      teamSlugPlaceholder: "例如：writing",
       teamNewPresetHint: "保存后将注册为 Agent 预设，可在 Agent 预设列表中选择。",
       teamSaveRegisterHint: "保存后立即出现在 Agent 预设选择器中，无需重启。",
       teamMemberWarn: "成员警告：{names} 为空或已不在角色库中（不阻止保存）。",
@@ -340,7 +342,9 @@ window.__ModuleLoader__.load({
       teamPresetUnknown: "Current session preset: unknown (pick one under Agent presets and it will show here)",
       teamPresetSwitchHint: "To switch, use Settings → Agent presets",
       teamPresetIdBadge: "Preset id: {id}",
-      teamPresetDerived: "Preset id: {id} (derived from the team name, cannot change after creation)",
+      teamPresetSlug: "Preset id (slug, editable)",
+      teamPresetIdFinal: "Final preset id: {id}",
+      teamSlugPlaceholder: "e.g. writing",
       teamNewPresetHint: "Saving registers this team as an Agent preset, selectable in the Agent presets list.",
       teamSaveRegisterHint: "It appears in the Agent presets picker right after saving — no restart needed.",
       teamMemberWarn: "Member warning: {names} is empty or no longer in the role library (saving is still allowed).",
@@ -876,6 +880,9 @@ window.__ModuleLoader__.load({
     /** 团队 id 的合法形状，与服务端 Team.id 的 pattern 一致。 */
     var TEAM_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+    /** 团队预设 id 的固定前缀：注册器把团队落成一个叫 `cohub-team-<slug>` 的 Agent 预设。 */
+    var TEAM_PRESET_PREFIX = "cohub-team-";
+
     /**
      * 团队 → Agent 预设 id：与 src/team-presets.ts 的 teamPresetId **同一条规则**：
      * 显式 presetId 优先，否则按 `cohub-team-<团队 id>` 推导（服务端注册时用的就是它）。
@@ -884,7 +891,34 @@ window.__ModuleLoader__.load({
     function teamPresetId(team) {
       var declared = team && typeof team.presetId === "string" ? team.presetId.trim() : "";
       if (declared !== "") return declared;
-      return "cohub-team-" + (team && typeof team.id === "string" ? team.id.trim() : "");
+      return TEAM_PRESET_PREFIX + (team && typeof team.id === "string" ? team.id.trim() : "");
+    }
+
+    /**
+     * 编辑面板里那个 **可改的** slug 输入框的值：
+     *   1. 用户手改过（slugEdited）→ 原样返回他填的（允许暂时不合法，交给 validateTeams 标红）；
+     *   2. 否则显式 presetId 剥掉 `cohub-team-` 前缀（配置里手写过 prefix 形式时）；
+     *   3. 再退到团队 id —— 中文名折成空串时 id 已被 uniqueTeamId 兜底成 "team"，所以这里是 "team"。
+     * 这就是根修点：中文团队名默认 slug 只能是 "team"，现在用户可以亲手填成 writing。
+     */
+    function teamSlugOf(team) {
+      if (team && team.slugEdited === true) return typeof team.slug === "string" ? team.slug : "";
+      var declared = team && typeof team.presetId === "string" ? team.presetId.trim() : "";
+      if (declared.indexOf(TEAM_PRESET_PREFIX) === 0 && declared.length > TEAM_PRESET_PREFIX.length) {
+        return declared.slice(TEAM_PRESET_PREFIX.length);
+      }
+      var id = team && typeof team.id === "string" ? team.id.trim() : "";
+      return id !== "" ? id : "team";
+    }
+
+    /**
+     * 卡片徽标与输入框右侧提示共用的「最终预设 id」：
+     * 手改过 → `cohub-team-<手填值>`；否则沿用 teamPresetId（显式 presetId，或 cohub-team-<id>）。
+     * 落库规则见 teamsToConfig —— 三处口径必须一致，否则「提示的 id」和「注册出来的 id」会漂。
+     */
+    function teamPresetIdOf(team) {
+      if (team && team.slugEdited === true) return TEAM_PRESET_PREFIX + teamSlugOf(team);
+      return teamPresetId(team);
     }
 
     /**
@@ -934,9 +968,15 @@ window.__ModuleLoader__.load({
       return members.length > 0 && typeof members[0] === "string" ? members[0] : "";
     }
 
-    /** 新建团队的草稿行（id 先占位，isNew 让改名时重算 id；保存时不外泄该标记）。 */
+    /**
+     * 新建团队的草稿行（id 先占位，isNew 让改名时重算 id；保存时不外泄这些草稿标记）。
+     * slug 初值 = 占位 id（中文名折空后 id 就是 "team"）；slugEdited=false 表示「还没手改，跟随推导」。
+     */
     function emptyTeam(id) {
-      return { id: id, name: "", description: "", members: [], lead: "", presetId: "", isNew: true };
+      return {
+        id: id, name: "", description: "", members: [], lead: "", presetId: "",
+        slug: typeof id === "string" ? id : "", slugEdited: false, isNew: true
+      };
     }
 
     /** Config.teams 的一项 → 编辑行；members 只保留非空字符串。 */
@@ -953,6 +993,11 @@ window.__ModuleLoader__.load({
         members: members,
         // 显式 presetId 原样保留：它覆盖「cohub-team-<id>」的默认推导，不能让一次保存把它丢掉。
         presetId: team && typeof team.presetId === "string" ? team.presetId : "",
+        // slug 输入框的值：手改过就原样带着（改名不再覆盖），没改过则跟着 id 重新推导。
+        slug: team && team.slugEdited === true
+          ? (typeof team.slug === "string" ? team.slug : "")
+          : teamSlugOf(team),
+        slugEdited: team && team.slugEdited === true,
         // lead 悬空（指向已取消勾选的角色）也原样保留：保存时由 validateTeams 拦下并标红。
         lead: team && typeof team.lead === "string" ? team.lead : "",
         isNew: false
@@ -990,8 +1035,14 @@ window.__ModuleLoader__.load({
           // lead 与 members 同一次 mutate 写入：空 lead 落成默认队长，配置文件里不留空。
           lead: effectiveTeamLead({ members: members, lead: team.lead })
         };
-        // 显式 presetId 只在用户配过时写回（空串=省略，注册器按 cohub-team-<id> 推导）。
+        // 预设 id 落库规则（不新增 schema 字段，全走已有的 presetId）：
+        //   - 用户手改过 slug → 写显式 presetId = `cohub-team-<手填值>`；
+        //   - 没改过 → 沿用原显式 presetId（若有），否则省略，让注册器按 cohub-team-<id> 推导。
         var presetId = typeof team.presetId === "string" ? team.presetId.trim() : "";
+        if (team.slugEdited === true) {
+          var slug = typeof team.slug === "string" ? team.slug.trim() : "";
+          presetId = slug !== "" ? TEAM_PRESET_PREFIX + slug : "";
+        }
         if (presetId !== "") item.presetId = presetId;
         out.push(item);
       }
@@ -1002,7 +1053,7 @@ window.__ModuleLoader__.load({
      * 团队校验（对齐服务端 Team schema，另加页面才判得了的 id 重复）：
      *   - name 去空白后非空；
      *   - members 至少 1 个；
-     *   - id 合法（kebab-case）且表内不重复。
+     *   - 预设 id 的 slug 合法（kebab-case）且表内不重复（按最终 slug 判，手改过的也算）。
      * @returns 与 rows 等长的错误数组，空串表示该字段合法。
      */
     function validateTeams(rows) {
@@ -1010,8 +1061,9 @@ window.__ModuleLoader__.load({
       var counts = {};
       var errors = [];
       var i;
+      // 重名按 **最终 slug**（预设 id 的终段）统计：手填的 slug 撞上别人的 id 同样要拦。
       for (i = 0; i < list.length; i += 1) {
-        var seeded = list[i] && typeof list[i].id === "string" ? list[i].id : "";
+        var seeded = teamSlugOf(list[i]).trim();
         if (seeded === "") continue;
         counts[seeded] = (counts[seeded] || 0) + 1;
       }
@@ -1019,11 +1071,12 @@ window.__ModuleLoader__.load({
         var team = list[i] || {};
         var error = { name: "", members: "", id: "", lead: "" };
         var teamName = typeof team.name === "string" ? team.name.trim() : "";
-        var id = typeof team.id === "string" ? team.id : "";
+        // 面板上标红的是 slug 输入框（沿用 error.id 这个键，渲染层与文案不用改）。
+        var slug = teamSlugOf(team).trim();
         if (teamName === "") error.name = "nameRequired";
         if (!Array.isArray(team.members) || team.members.length === 0) error.members = "required";
-        if (id === "" || !TEAM_ID_PATTERN.test(id)) error.id = "idFormat";
-        else if (counts[id] > 1) error.id = "idDuplicate";
+        if (slug === "" || !TEAM_ID_PATTERN.test(slug)) error.id = "idFormat";
+        else if (counts[slug] > 1) error.id = "idDuplicate";
         // 队长必须是本团队已勾选的成员；空 lead 合法（保存时按默认规则补成有效值）。
         var lead = typeof team.lead === "string" ? team.lead : "";
         if (lead !== "" && (!Array.isArray(team.members) || team.members.indexOf(lead) < 0)) {
@@ -1987,12 +2040,14 @@ window.__ModuleLoader__.load({
         return teamsDraft;
       }
 
-      /** 除第 index 行以外已被占用的团队 id（id 消歧用）。 */
+      /** 除第 index 行以外已被占用的团队 id / slug（自动消歧用：别人手填的 slug 也算占用）。 */
       function takenIdsExcept(rows, index) {
         var out = [];
         for (var i = 0; i < rows.length; i += 1) {
           if (i === index) continue;
           if (typeof rows[i].id === "string" && rows[i].id !== "") out.push(rows[i].id);
+          var slug = teamSlugOf(rows[i]);
+          if (slug !== "" && out.indexOf(slug) < 0) out.push(slug);
         }
         return out;
       }
@@ -2024,12 +2079,13 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * 改团队字段（name / description）。
+       * 改团队字段（name / description / slug）。
        * name 变更时：**新建行**（isNew）重算 id 并自动消歧；**已存团队保留原 id**，
        * 否则改名会把 Config.activeTeam 指向的 id 弄悬空。
+       * slug 变更 = 用户亲手指定预设 id：打上 slugEdited，此后改名不再覆盖它。
        */
       function editTeam(index, field, value) {
-        if (field !== "name" && field !== "description") return;
+        if (field !== "name" && field !== "description" && field !== "slug") return;
         if (!canEdit()) return;
         var current = beginTeamsDraft();
         if (index < 0 || index >= current.rows.length) return;
@@ -2041,8 +2097,11 @@ window.__ModuleLoader__.load({
           copy.isNew = row.isNew === true;
           if (i === index) {
             copy[field] = value;
+            if (field === "slug") copy.slugEdited = true;
             if (field === "name" && copy.isNew === true) {
               copy.id = uniqueTeamId(value, takenIdsExcept(current.rows, index));
+              // 没手改过的行让输入框跟着新 id 走；手改过就保持用户填的值不动。
+              if (copy.slugEdited !== true) copy.slug = copy.id;
             }
           }
           next.push(copy);
@@ -2420,7 +2479,10 @@ window.__ModuleLoader__.load({
         // 预设 id 用等宽字体（id 里有连字符与数字，等宽才好读），并在卡片头部独占一行（名称下方）。
         ".cohub-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,\"Liberation Mono\",monospace;}",
         ".cohub-team-toggle .cohub-row-id{flex-basis:100%;order:9;}",
-        ".cohub-team-body{margin-top:8px;display:flex;flex-direction:column;gap:8px;}",
+        ".cohub-slug-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}",
+         ".cohub-slug-row .cohub-input{flex:1 1 160px;width:auto;min-width:0;}",
+         ".cohub-slug-row .cohub-desc{flex:0 0 auto;}",
+         ".cohub-team-body{margin-top:8px;display:flex;flex-direction:column;gap:8px;}",
         ".cohub-check-group{display:flex;flex-direction:column;gap:4px;}",
         ".cohub-checks{display:flex;flex-wrap:wrap;gap:6px 14px;}",
         ".cohub-check{display:flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);cursor:pointer;}",
@@ -3358,10 +3420,28 @@ window.__ModuleLoader__.load({
                   onChange: function (event) {
                     props.editTeam(index, "name", event.target.value);
                   }
-                }),
-                // 只读派生行：随团队名实时变化（新建行每次改名重算 id，已存团队保留原 id）。
-                React.createElement("p", { className: "cohub-desc cohub-mono" },
-                  t("teamPresetDerived", { id: teamPresetId(team) }))
+                })
+              ),
+              // 预设 id 终段（slug）：可改。初值 = 推导结果（中文名折空 → "team"），手改后不再被改名覆盖。
+              React.createElement("div", { className: "cohub-field" },
+                React.createElement("label", {
+                  className: error.id !== "" ? "cohub-label cohub-invalid-label" : "cohub-label"
+                }, t("teamPresetSlug")),
+                React.createElement("div", { className: "cohub-slug-row" },
+                  React.createElement("input", {
+                    className: error.id !== "" ? "cohub-input cohub-mono cohub-invalid" : "cohub-input cohub-mono",
+                    type: "text",
+                    value: teamSlugOf(team),
+                    disabled: locked,
+                    placeholder: t("teamSlugPlaceholder"),
+                    "aria-label": title + " · " + t("teamPresetSlug"),
+                    onChange: function (event) {
+                      props.editTeam(index, "slug", event.target.value);
+                    }
+                  }),
+                  React.createElement("span", { className: "cohub-desc cohub-mono" },
+                    t("teamPresetIdFinal", { id: teamPresetIdOf(team) }))
+                )
               ),
               React.createElement("div", { className: "cohub-field" },
                 React.createElement("label", { className: "cohub-label" }, t("teamDescription")),
@@ -3413,7 +3493,7 @@ window.__ModuleLoader__.load({
               React.createElement("span", { className: "cohub-row-name" }, title),
               // 名称下方一行的等宽小字：团队注册成 Agent 预设时用的真实 id。
               React.createElement("span", { className: "cohub-row-id cohub-mono" },
-                t("teamPresetIdBadge", { id: teamPresetId(team) })),
+                t("teamPresetIdBadge", { id: teamPresetIdOf(team) })),
               React.createElement("span", { className: "cohub-badge" },
                 t("teamMemberCount", { count: team.members.length })),
               leadName !== "" ? React.createElement("span", { className: "cohub-badge cohub-badge-lead" },
@@ -3777,6 +3857,8 @@ window.__ModuleLoader__.load({
       kebabIdOf: kebabIdOf,
       uniqueTeamId: uniqueTeamId,
       teamPresetId: teamPresetId,
+      teamSlugOf: teamSlugOf,
+      teamPresetIdOf: teamPresetIdOf,
       validateTeams: validateTeams,
       countTeamErrors: countTeamErrors,
       teamsToConfig: teamsToConfig,
