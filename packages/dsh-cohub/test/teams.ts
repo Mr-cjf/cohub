@@ -1,18 +1,26 @@
-// dsh-cohub/test/teams.ts —— 派发层按 Config.activeTeam 过滤可派角色的离线验证
+// dsh-cohub/test/teams.ts —— 派发层团队限员的离线验证
 // 用法：node test/teams.ts（node >= 24 类型剥离）；由 scripts/test-all.mjs 自动发现。
 //
-// 被测对象（src/roles.ts 的三个纯函数 + 一处文案）：
-//   resolveActiveTeam / isRoleAllowed / listAllowedRoles / describeRoleNotAllowed
+// 被测对象（src/roles.ts 的纯函数 + 一处文案 + src/delegate.ts 的预设 id 取法）：
+//   teamPresetId / resolveSessionTeam / resolveTeamFilter / isRoleAllowed /
+//   listAllowedRoles / resolveActiveTeam / describeRoleNotAllowed / resolveAgentPresetId
 //
-// 核心关注点：**向后兼容** —— activeTeam 为空时必须恒允许（与接线前逐字一致）；
-// 团队生效时只有 members 内的角色可派，且错误文案要同时给出团队名与可用角色，
-// 让主代理能自己改派而不是猜。
+// 两条路径都要锁死：
+//   - 新语义（主路径）：当前会话的 Agent 预设 id → 团队 → members 限员（用例 5/6）；
+//   - 旧语义（兼容）：Config.activeTeam（已废弃，仅作旧配置兼容）→ 同一条判定链（用例 1-4）。
+// 核心关注点：**向后兼容** —— 取不到预设 / 非团队预设时必须回退为「不限制」，不能把
+// 「配置还没迁移」变成每次派发都失败；团队生效时只有 members 内的角色可派，且错误文案要
+// 同时给出团队名与可用角色，让主代理能自己改派而不是猜。
 import { COHUB_SKILLS } from "../src/skills.ts";
+import { resolveAgentPresetId } from "../src/delegate.ts";
 import {
   describeRoleNotAllowed,
   isRoleAllowed,
   listAllowedRoles,
   resolveActiveTeam,
+  resolveSessionTeam,
+  resolveTeamFilter,
+  teamPresetId,
   type TeamConfig,
 } from "../src/roles.ts";
 
@@ -97,6 +105,85 @@ check("自定义角色在 members → listAllowedRoles 原样返回它",
 check("内置角色 co-writer 不在该团队 → 拒绝", isRoleAllowed("co-writer", customCfg) === false);
 check("自定义角色未进 members 的另一团队 → 拒绝",
   isRoleAllowed("my-writer", { ...customCfg, activeTeam: "writing", teams: TEAMS }) === false);
+
+// ── 用例 5：当前会话预设 → 团队（新语义主路径） ───────────────────────────
+group("用例 5：当前会话预设判定团队（推导 id / 显式 presetId / 非团队预设）");
+const presetCfg = { teams: TEAMS };
+check("teamPresetId 推导 = cohub-team-<id>", teamPresetId(WRITING) === "cohub-team-writing");
+check("teamPresetId 显式 presetId 优先",
+  teamPresetId({ ...WRITING, presetId: "my-writing-preset" }) === "my-writing-preset");
+check("teamPresetId 显式值为空白 → 回退推导",
+  teamPresetId({ ...WRITING, presetId: "   " }) === "cohub-team-writing");
+const sessionTeam = resolveSessionTeam(presetCfg, "cohub-team-writing");
+check("① presetId=cohub-team-writing → 命中写作组（id / name / members）",
+  sessionTeam !== null && sessionTeam.id === "writing" && sessionTeam.name === "写作组"
+  && JSON.stringify(sessionTeam.members) === JSON.stringify(["co-writer", "co-editor"]));
+check("① co-writer 允许", isRoleAllowed("co-writer", presetCfg, "cohub-team-writing") === true);
+check("① co-editor 允许", isRoleAllowed("co-editor", presetCfg, "cohub-team-writing") === true);
+check("① co-fixer 拒绝", isRoleAllowed("co-fixer", presetCfg, "cohub-team-writing") === false);
+check("① 错误文案与任务书示例逐字一致",
+  describeRoleNotAllowed("co-fixer", presetCfg, "cohub-team-writing")
+    === '角色 "co-fixer" 不在当前团队 "写作组"(writing) 内；该团队可用角色：co-writer, co-editor');
+check("① resolveTeamFilter source=preset（命中预设路径）",
+  resolveTeamFilter(presetCfg, "cohub-team-writing").source === "preset");
+check("② presetId=standard（非团队预设）→ 不限制",
+  isRoleAllowed("co-fixer", presetCfg, "standard") === true
+  && resolveTeamFilter(presetCfg, "standard").team === null);
+check("② 非团队预设 + activeTeam 仍配置 → 回退旧行为（兼容未迁移配置）",
+  isRoleAllowed("co-fixer", writingCfg, "standard") === false
+  && resolveTeamFilter(writingCfg, "standard").source === "legacy");
+check("③ presetId 为空串 → 不限制", isRoleAllowed("co-fixer", writingCfg, "") === true);
+check("③ presetId 为纯空白 → 不限制",
+  isRoleAllowed("co-fixer", writingCfg, "   ") === true
+  && resolveSessionTeam(writingCfg, "   ") === null);
+check("③ presetId 未传（undefined）→ 沿用旧 activeTeam 判定（不等于不限制）",
+  isRoleAllowed("co-fixer", writingCfg) === false);
+check("④ 团队显式 presetId 生效：命中自定义预设 id",
+  isRoleAllowed("co-fixer", { teams: [{ ...WRITING, presetId: "my-writing-preset" }] }, "my-writing-preset") === false
+  && resolveSessionTeam({ teams: [{ ...WRITING, presetId: "my-writing-preset" }] }, "my-writing-preset")?.id === "writing");
+check("④ 显式 presetId 时推导 id 不再命中（回退不限制）",
+  resolveSessionTeam({ teams: [{ ...WRITING, presetId: "my-writing-preset" }] }, "cohub-team-writing") === null);
+
+// ── 用例 6：取不到 agentPresets 服务 → 不抛且不限制（fail-soft） ──────────
+group("用例 6：预设解析 fail-soft");
+const warns: string[] = [];
+const fakeLogger = { warn: (msg: string) => { warns.push(msg); } };
+const noReflectCtx = {};
+const emptyReflectCtx = { reflect: { get: () => undefined }, logger: fakeLogger };
+check("⑤ agentPresets 服务缺失 → 返回 \"\" 且 warn 一次",
+  resolveAgentPresetId(emptyReflectCtx, { ctx: {}, session: {} }) === "" && warns.length === 1);
+check("⑤ warn 文案含 [cohub team-filter] 前缀", (warns[0] ?? "").includes("[cohub team-filter]"));
+check("⑤ ctx 无 reflect → 返回 \"\" 且不抛", resolveAgentPresetId(noReflectCtx, {}) === "");
+check("⑤ 预设为空 → 不限制（co-fixer 放行）",
+  isRoleAllowed("co-fixer", writingCfg, resolveAgentPresetId(emptyReflectCtx, {})) === true);
+const throwingCtx = {
+  reflect: { get: () => ({ composedPreset: () => { throw new Error("boom"); } }) },
+  logger: fakeLogger,
+};
+check("⑤ composedPreset 抛错 → 不抛且回落（无 session → 返回 \"\"）",
+  resolveAgentPresetId(throwingCtx, { ctx: {} }) === "");
+const sessionCtx = {
+  reflect: {
+    get: () => ({
+      composedPreset: () => { throw new Error("boom"); },
+      presetForSession: () => "cohub-team-writing",
+    }),
+  },
+  logger: fakeLogger,
+};
+check("⑤ composedPreset 失败 → 用 presetForSession 兜底（命中团队预设）",
+  resolveAgentPresetId(sessionCtx, { ctx: {}, session: { id: "s1" } }) === "cohub-team-writing");
+const composedCtx = {
+  reflect: {
+    get: () => ({
+      composedPreset: () => "cohub-team-writing",
+      presetForSession: () => "standard",
+    }),
+  },
+  logger: fakeLogger,
+};
+check("⑤ composedPreset 优先于 presetForSession",
+  resolveAgentPresetId(composedCtx, { ctx: {}, session: { id: "s1" } }) === "cohub-team-writing");
 
 // ── 汇总 ────────────────────────────────────────────────────────────────
 console.log("");

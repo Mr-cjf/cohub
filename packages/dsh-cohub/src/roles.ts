@@ -272,6 +272,11 @@ export interface TeamConfig {
   /** 成员角色名（内置角色或 customRoles 的 name） */
   readonly members: readonly string[];
   /**
+   * 该团队注册成的 Agent 预设 id（schema 在 index.ts）：省略时按 {@link teamPresetId} 推导为
+   * `cohub-team-<id>`。派发层据此把「当前会话预设」映射回团队，见 {@link resolveSessionTeam}。
+   */
+  readonly presetId?: string;
+  /**
    * 队长角色名（可省略）：决定**主代理**运行时人格（见 {@link resolveLeadPersona}）。
    *
    * 与「派发过滤」无关——lead 不自动获得派发豁免：若 lead 不在 members 里，它只是不能被派发，
@@ -322,11 +327,93 @@ export function resolveActiveTeam(config?: TeamFilterConfig): ActiveTeam | null 
   if (id.length === 0) return null;
   const matched = (config?.teams ?? []).find((team) => (team?.id ?? "").trim() === id);
   if (matched === undefined) return null;
+  return buildActiveTeam(matched, id);
+}
+
+/**
+ * 团队 → Agent 预设 id（唯一推导规则）：`team.presetId` 显式非空时优先，否则 `cohub-team-<id>`。
+ *
+ * 与 index.ts 的团队 preset 注册保持同一约定；显式字段的存在意义是用户可以把团队挂在
+ * 自己的预设 id 上（例如与 cohub-subagent-write 共用一个预设）。
+ *
+ * @param team - 团队配置
+ * @returns 预设 id（团队 id 为空时返回 `cohub-team-`，由调用方按「无匹配」处理）
+ */
+export function teamPresetId(team: TeamConfig): string {
+  const explicit = (team.presetId ?? "").trim();
+  return explicit.length > 0 ? explicit : "cohub-team-" + (team.id ?? "").trim();
+}
+
+/** 把一条团队配置规范化成 {@link ActiveTeam}（members 去空白、lead 走回退规则） */
+function buildActiveTeam(matched: TeamConfig, id: string): ActiveTeam {
   const members = (matched.members ?? [])
     .map((member) => (typeof member === "string" ? member.trim() : ""))
     .filter((member) => member.length > 0);
   const name = (matched.name ?? "").trim();
   return { id, name: name.length > 0 ? name : id, members, lead: resolveTeamLead(matched, members) };
+}
+
+/**
+ * 按**当前会话的 Agent 预设 id** 解析所属团队（团队限员的唯一入口）。
+ *
+ * 约定：预设 id 与团队通过 {@link teamPresetId} 对齐（`presetId` 优先，否则 `cohub-team-<id>`）。
+ * 返回 null 的两种情形（= 不是团队预设，由 {@link resolveTeamFilter} 决定是否回退旧行为）：
+ *   ① presetId 为空 / 纯空白（取不到当前预设，例如旧宿主或服务缺失）；
+ *   ② presetId 非空但没有任何团队的预设 id 与之匹配（如 `standard`、`cohub-subagent-write`）。
+ *
+ * @param config - 团队过滤配置（可缺省）
+ * @param presetId - 当前会话的 Agent 预设 id（可缺省）
+ * @returns `{ id, name, members, lead }`；null = 不是团队预设
+ */
+export function resolveSessionTeam(
+  config: TeamFilterConfig | undefined,
+  presetId: string | undefined,
+): ActiveTeam | null {
+  const preset = (presetId ?? "").trim();
+  if (preset.length === 0) return null;
+  const matched = (config?.teams ?? []).find((team) => teamPresetId(team) === preset);
+  if (matched === undefined) return null;
+  return buildActiveTeam(matched, (matched.id ?? "").trim());
+}
+
+/** {@link resolveTeamFilter} 的返回值：生效团队 + 来源（便于调用方按需留痕） */
+export interface SessionTeamFilter {
+  /** 生效团队；null = 不限制（全部角色可用） */
+  readonly team: ActiveTeam | null;
+  /**
+   * 团队来源：
+   *   - `preset`：当前会话预设命中某个团队（新语义，主路径）；
+   *   - `legacy`：预设不是团队 → 回退旧的 activeTeam 行为（兼容尚未迁移的配置）；
+   *   - `none`：两路都没命中 → 不限制。
+   */
+  readonly source: "preset" | "legacy" | "none";
+  /** 解析所用的预设 id（trim 后；空串 = 未提供） */
+  readonly presetId: string;
+}
+
+/**
+ * 会话团队过滤：**预设优先、activeTeam 兜底**。
+ *
+ * 规则（fail-soft，任何一路失败都不会让派发瘫痪）：
+ *   ① 预设 id 为空 → 不限制（source=none）。取不到预设就无法判断，按最宽松处理；
+ *   ② 预设命中团队（{@link resolveSessionTeam}）→ 按该团队 members 限员；
+ *   ③ 预设非空但不是团队 → 回退 {@link resolveActiveTeam}（旧的 activeTeam 行为，
+ *      activeTeam 已废弃且默认空串 → 实际仍是不限制）。
+ *
+ * @param config - 团队过滤配置（可缺省）
+ * @param presetId - 当前会话的 Agent 预设 id（可缺省）
+ * @returns 生效团队与来源
+ */
+export function resolveTeamFilter(
+  config: TeamFilterConfig | undefined,
+  presetId: string | undefined,
+): SessionTeamFilter {
+  const preset = (presetId ?? "").trim();
+  if (preset.length === 0) return { team: null, source: "none", presetId: "" };
+  const byPreset = resolveSessionTeam(config, preset);
+  if (byPreset !== null) return { team: byPreset, source: "preset", presetId: preset };
+  const legacy = resolveActiveTeam(config);
+  return { team: legacy, source: legacy === null ? "none" : "legacy", presetId: preset };
 }
 
 /**
@@ -426,14 +513,26 @@ function orchestratorBrief(): string {
 }
 
 /**
- * 角色是否允许被派发。
+ * 角色是否允许被派发（团队限员的唯一判据）。
+ *
+ * 团队来源取决于是否传入 `presetId`：
+ *   - 传入（含空串，新路径）→ {@link resolveTeamFilter}：当前会话预设命中团队则按 members 限员，
+ *     非团队预设回退 activeTeam，都未命中 → 不限制；
+ *   - 未传（undefined，旧调用 / 单测）→ {@link resolveActiveTeam} 的旧行为，逐字不变。
  *
  * @param roleName - 角色名（空白会被 trim；空名的判定结果是「不允许」——空名本来就不可派发）
- * @param config - 团队过滤配置（缺省 / activeTeam 为空 / 团队不存在 → 恒 true）
+ * @param config - 团队过滤配置（缺省 / 不限制 → 恒 true）
+ * @param presetId - 当前会话的 Agent 预设 id（缺省 = 沿用旧 activeTeam 行为）
  * @returns 允许与否
  */
-export function isRoleAllowed(roleName: string | undefined, config?: TeamFilterConfig): boolean {
-  const team = resolveActiveTeam(config);
+export function isRoleAllowed(
+  roleName: string | undefined,
+  config?: TeamFilterConfig,
+  presetId?: string,
+): boolean {
+  const team = presetId === undefined
+    ? resolveActiveTeam(config)
+    : resolveTeamFilter(config, presetId).team;
   if (team === null) return true;
   const key = (roleName ?? "").trim();
   return key.length > 0 && team.members.includes(key);
@@ -462,13 +561,41 @@ export function listAllowedRoles(config?: TeamFilterConfig): string[] {
  *
  * @param roleName - 被拒的角色名
  * @param config - 团队过滤配置
+ * @param presetId - 当前会话的 Agent 预设 id（缺省 = 沿用旧 activeTeam 行为）
  * @returns 错误文案（调用方据此构造 Error / task error）
  */
-export function describeRoleNotAllowed(roleName: string, config?: TeamFilterConfig): string {
-  const team = resolveActiveTeam(config);
-  if (team === null) return `角色 "${roleName}" 允许派发（当前未设置 activeTeam）`;
+export function describeRoleNotAllowed(
+  roleName: string,
+  config?: TeamFilterConfig,
+  presetId?: string,
+): string {
+  const team = presetId === undefined
+    ? resolveActiveTeam(config)
+    : resolveTeamFilter(config, presetId).team;
+  if (team === null) {
+    const preset = (presetId ?? "").trim();
+    return preset.length > 0
+      ? `角色 "${roleName}" 允许派发（当前预设 "${preset}" 不是团队预设）`
+      : `角色 "${roleName}" 允许派发（当前未设置 activeTeam）`;
+  }
   const available = team.members.length > 0 ? team.members.join(", ") : "（该团队没有任何可用角色）";
   return `角色 "${roleName}" 不在当前团队 "${team.name}"(${team.id}) 内；该团队可用角色：${available}`;
+}
+
+/**
+ * 当前会话团队限员的角色名单（用于错误提示与 orchestrator 名单）。
+ *
+ * 与 {@link isRoleAllowed} 同源：传 presetId 走 {@link resolveTeamFilter}，不传走旧 activeTeam。
+ *
+ * @param config - 团队过滤配置（可缺省）
+ * @param presetId - 当前会话的 Agent 预设 id（缺省 = 沿用旧 activeTeam 行为）
+ * @returns 角色名数组（每次新建，调用方可安全修改）
+ */
+export function listSessionRoles(config?: TeamFilterConfig, presetId?: string): string[] {
+  if (presetId === undefined) return listAllowedRoles(config);
+  const team = resolveTeamFilter(config, presetId).team;
+  if (team !== null) return [...team.members];
+  return [...resolveSkillSnapshot(config).names];
 }
 
 /** 统一技能快照：一次解析，派发层各处共用同一份名单与档位 */

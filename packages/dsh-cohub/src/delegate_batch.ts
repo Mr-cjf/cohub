@@ -26,6 +26,7 @@ import {
   resolveRouteOutputContract,
   buildOutputContractBlock,
   CONTRACT_REWRITE_MAX_CHARS,
+  resolveAgentPresetId,
   type SkillRouteSource,
   type DelegateConfig,
   type SkillRouteConfig,
@@ -40,6 +41,7 @@ import {
   listAllowedRoles,
   resolveActiveTeam,
   resolveSkillSnapshot,
+  resolveTeamFilter,
   type SkillSnapshot,
   type TeamFilterConfig,
 } from "./roles.ts";
@@ -86,13 +88,16 @@ export function assertKnownSkill(
   raw: string,
   snapshot: SkillSnapshot,
   teamConfig?: TeamFilterConfig,
+  presetId?: string,
 ): { ok: true } | { ok: false; error: string } {
   if (raw.length === 0) return { ok: true };
   const lookup = snapshot.resolve(raw);
   if (lookup.ok) return { ok: true };
-  // 可用名单按 listAllowedRoles 动态生成：设置了 activeTeam 时只列该团队成员，
+  // 可用名单按团队限员动态生成：当前会话预设命中团队（或旧 activeTeam 生效）时只列该团队成员，
   // 否则列统一快照的全部角色（内置 ∪ customRoles）——文案与 orchestrator 看到的名单保持同源。
-  const activeTeam = teamConfig === undefined ? null : resolveActiveTeam(teamConfig);
+  const activeTeam = teamConfig === undefined
+    ? null
+    : (presetId === undefined ? resolveActiveTeam(teamConfig) : resolveTeamFilter(teamConfig, presetId).team);
   const scoped = activeTeam === null
     ? [...snapshot.names]
     : snapshot.names.filter((name) => activeTeam.members.includes(name));
@@ -428,6 +433,11 @@ export function createDelegateBatchTool(
         return `delegate_batch: 任务数 ${tasks.length} 超过上限 ${maxParallelBatch}，请分批执行。`;
       }
 
+      // 团队限员的输入：**当前会话的 Agent 预设 id**（预设取不到 → ""，按「不限制」处理）。
+      // 每批只解析一次：agentPresets 服务调用不便宜，且同一批内预设不会变化。
+      const presetId = resolveAgentPresetId(ctx, parent);
+      const teamScope = resolveTeamFilter(teamFilter, presetId);
+
       // 批次计时起点：统计行「总耗时」的两个时间点之一（并发的 Promise.allSettled 从这里之后启动）
       const batchStartedAt = Date.now();
 
@@ -479,7 +489,7 @@ export function createDelegateBatchTool(
           // 不合法时**只让该 task 失败**（返回 skillError，由收集阶段转成 status:"error"），
           // 绝不抛全局异常——同批其它 task 照常派发，不被一个写错的 skill 名拖垮。
           // 空串/缺失仍走上方的兜底（:382-394 不变），这里只拦「非空但不合法 / 已禁用」。
-          const skillCheck = assertKnownSkill(requestedSkill, skillSnapshot, teamFilter);
+          const skillCheck = assertKnownSkill(requestedSkill, skillSnapshot, teamFilter, presetId);
           if (!skillCheck.ok) {
             ctx.logger?.warn?.(
               "[cohub delegate_batch] task \"" + taskId + "\" 的 skill 名 \"" + requestedSkill
@@ -493,12 +503,13 @@ export function createDelegateBatchTool(
               startError: undefined, skillError: skillCheck.error,
             };
           }
-          // ② 团队过滤（Config.teams / activeTeam）：白名单之后、路由与 spawn 之前逐 task 校验。
+          // ② 团队过滤（当前会话预设 → 团队 → members）：白名单之后、路由与 spawn 之前逐 task 校验。
           //    与白名单同一纪律——只让该 task 落 error，同批其它 task 照常派发，绝不整批失败。
-          //    activeTeam 为空 → isRoleAllowed 恒 true，历史调用零行为变化。
-          if (!isRoleAllowed(requestedSkill, teamFilter)) {
-            const rejection = describeRoleNotAllowed(requestedSkill, teamFilter);
-            ctx.logger?.warn?.("[cohub team-filter] delegate_batch task \"" + taskId + "\"：" + rejection);
+          //    预设不是团队（或取不到）→ 回退旧 activeTeam 行为（默认不限制），历史调用零行为变化。
+          if (teamScope.team !== null && !isRoleAllowed(requestedSkill, teamFilter, presetId)) {
+            const rejection = describeRoleNotAllowed(requestedSkill, teamFilter, presetId);
+            ctx.logger?.warn?.("[cohub team-filter] delegate_batch task \"" + taskId + "\"：" + rejection
+              + "（预设 " + presetId + " → 团队 " + teamScope.team.id + "）");
             return {
               taskId, skillName: requestedSkill, skillTag: requestedSkill, task,
               taskNotes: [], run: undefined, ac: undefined, onExecAbort: null, startedAt,

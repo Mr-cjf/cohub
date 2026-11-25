@@ -22,8 +22,8 @@ import {
   describeRoleNotAllowed,
   isRoleAllowed,
   presetForTier,
-  resolveActiveTeam,
   resolveSkillSnapshot,
+  resolveTeamFilter,
   resolveTier,
   TIER_TOOLS,
   TIER_TO_PRESET,
@@ -1530,6 +1530,62 @@ function describeDepthCandidate(value: unknown): string {
   return shown + "(" + kind + ")";
 }
 
+/** 取当前 Agent 预设 id 失败时的节流标记：进程内只 warn 一次，避免每次派发刷屏 */
+let presetIdWarned = false;
+
+/**
+ * 取**当前会话的 Agent 预设 id**（团队限员的输入）。全程 fail-soft：任何一步取不到都返回 ""。
+ *
+ * 取法（按可靠性降序）：
+ *   ① `ctx.reflect.get("agentPresets", false)` 拿宿主服务——不能走 inject：agentPresets 是可选
+ *      服务，缺失时插件仍须正常启动；
+ *   ② `agentPresets.composedPreset(agent.ctx)`：当前 agent 实际在跑的 preset id；
+ *   ③ `agentPresets.presetForSession(agent.session)`：会话日志里最后记录的 preset id（兜底，
+ *      用于 ② 不可用或抛错的宿主版本）。
+ *
+ * 返回 "" 的语义 = 无法判定，调用方按「不是团队预设 → 不限制」处理（与 fail-soft 纪律一致）。
+ * 首次失败会 warn 一次（`[cohub team-filter]` 前缀），后续同类失败静默（节流）。
+ *
+ * @param ctx 插件上下文（import 的 ctx；只用 reflect.get）
+ * @param agent 调用方 agent（`exec.agent`）
+ * @param logger 可选日志器（缺省回落 ctx.logger）
+ * @returns 预设 id（已 trim）；"" = 无法判定
+ */
+export function resolveAgentPresetId(ctx: any, agent: any, logger?: any): string {
+  const warnOnce = (detail: string): void => {
+    if (presetIdWarned) return;
+    presetIdWarned = true;
+    (logger ?? ctx?.logger)?.warn?.("[cohub team-filter] 取当前 Agent 预设失败（" + detail
+      + "），本次按「不限制团队」处理；后续同类告警已节流");
+  };
+  try {
+    const presets = ctx?.reflect?.get?.("agentPresets", false);
+    if (!presets) {
+      warnOnce("agentPresets 服务不可用");
+      return "";
+    }
+    if (agent?.ctx !== undefined && typeof presets.composedPreset === "function") {
+      try {
+        const composed = presets.composedPreset(agent.ctx);
+        if (typeof composed === "string" && composed.trim().length > 0) return composed.trim();
+      } catch (error) {
+        warnOnce("composedPreset 抛错：" + (error instanceof Error ? error.message : String(error)));
+      }
+    }
+    if (agent?.session !== undefined && typeof presets.presetForSession === "function") {
+      try {
+        const stored = presets.presetForSession(agent.session);
+        if (typeof stored === "string" && stored.trim().length > 0) return stored.trim();
+      } catch (error) {
+        warnOnce("presetForSession 抛错：" + (error instanceof Error ? error.message : String(error)));
+      }
+    }
+  } catch (error) {
+    warnOnce(error instanceof Error ? error.message : String(error));
+  }
+  return "";
+}
+
 /**
  * 嵌套委派守卫：子代理（depth ≥ MAX_DELEGATION_DEPTH）再派子代理时返回拒绝文案。
  *
@@ -1995,16 +2051,20 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       });
       const { skill, role: skillRole, route, fallback: skillFallback, note: skillNote } =
         resolveSkillAndRoute(args.skill, getRoutes, ctx, ctx.logger, skillSnapshot);
-      // ①b 团队过滤（Config.teams / activeTeam）：skill 名解析之后、任何 spawn 之前硬性校验。
-      //    无活动团队时 isRoleAllowed 恒 true → 与接线前行为逐字一致；团队生效时不合法直接抛错
+      // ①b 团队过滤（当前会话的 Agent 预设 → 团队 → members）：skill 名解析之后、任何 spawn
+      //    之前硬性校验。预设取不到 / 不是团队预设 → 回退旧 activeTeam 行为（默认不限制），
+      //    因此未迁移配置的部署行为与接线前逐字一致；团队生效时越界直接抛错
       //    （返回成功文本会让主代理误以为已派出）。兜底来的 co-fixer 同样受团队约束。
-      if (!isRoleAllowed(skill.name, teamFilter)) {
-        const rejection = describeRoleNotAllowed(skill.name, teamFilter);
-        ctx.logger?.warn?.("[cohub team-filter] delegate：" + rejection);
+      const presetId = resolveAgentPresetId(ctx, parent);
+      const teamScope = resolveTeamFilter(teamFilter, presetId);
+      if (teamScope.team !== null && !isRoleAllowed(skill.name, teamFilter, presetId)) {
+        const rejection = describeRoleNotAllowed(skill.name, teamFilter, presetId);
+        ctx.logger?.warn?.("[cohub team-filter] delegate：" + rejection
+          + "（预设 " + presetId + " → 团队 " + teamScope.team.id + "）");
         throw new Error(rejection);
       }
-      // 配置暂时不一致（activeTeam 指向不存在的 id）时 fail-soft 为「不限制」，但必须留痕可诊断
-      if (resolveActiveTeam(teamFilter) === null && (teamFilter.activeTeam ?? "").trim().length > 0) {
+      // fail-soft 留痕：预设不是团队、而 activeTeam 指向不存在的 id 时，说明配置暂时不一致
+      if (teamScope.source === "none" && (teamFilter.activeTeam ?? "").trim().length > 0) {
         ctx.logger?.warn?.("[cohub team-filter] activeTeam \"" + teamFilter.activeTeam
           + "\" 在 teams 中不存在，本次按「不限制」处理（全部角色可用），请修正配置");
       }
