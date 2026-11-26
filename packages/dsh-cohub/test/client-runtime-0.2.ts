@@ -200,8 +200,14 @@ let zhDict: Record<string, string> = {};
     { get(target, prop) { accessed.push(String(prop)); return (target as any)[prop]; } },
   );
 
-  mod.apply(ctx);
-  check("apply 执行成功（不抛错）", true);
+  // apply 是同步函数（src/client/index.js:3673 无 return 值）：宿主不会 await 它，
+  // 一旦改成 async，注册与注入就被静默吞掉。这里校验同一 tick 内可读的同步副作用：
+  // 返回值无意义、slots.inject 恰好一次 settings.section、register 恰好一条。
+  const applyReturn: unknown = mod.apply(ctx);
+  check("apply 同步返回 undefined，且当场完成 settings.section 注入与注册",
+    applyReturn === undefined
+    && slotInjected.length === 1 && slotInjected[0] === "settings.section"
+    && registrations.length === 1 && registrations[0].name === "settings.section");
   check("locale.register 注册 cohub 字典（zh/en）",
     registerCalls.length === 1 && registerCalls[0].ns === "cohub" && !!registerCalls[0].dict?.zh && !!registerCalls[0].dict?.en);
   {

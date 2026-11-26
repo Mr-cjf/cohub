@@ -222,6 +222,52 @@ async function delegateError(outcome: any): Promise<any> {
   check("上游残留 error 不顶替宿主 diagnostic", !String(err2?.cause?.diagnostic ?? "").includes(RAW_ERROR));
 }
 
+// ── 用例 6：脱敏 —— 敏感值掩码，正常错误文本逐字不变 ──
+{
+  group("用例 6：脱敏（OpenAI 密钥 / Bearer / 键值 / URL）且不误伤");
+  const skKey = "sk-abcdefgh12345678";
+  const withKey = "provider 400: invalid api key " + skKey + " (retry)";
+  const masked = String(describeFailureDetail(withKey));
+  check("OpenAI 风格密钥被掩码为 sk-***", masked.includes("sk-***"));
+  check("密钥原文不再出现（abcdefgh12345678）", !masked.includes("abcdefgh12345678"));
+  check("密钥前后的普通文本保留",
+    masked.startsWith("provider 400") && masked.endsWith("(retry)"));
+
+  const bearer = "Authorization: Bearer abc.def-1234567890 rejected";
+  const maskedBearer = String(describeFailureDetail(bearer));
+  check("Bearer token 被掩码为 Bearer ***", maskedBearer.includes("Bearer ***"));
+  check("Bearer token 原文不再出现（1234567890）", !maskedBearer.includes("1234567890"));
+  check("Bearer 之外的文本保留", maskedBearer.startsWith("Authorization: Bearer *** rejected"));
+
+  const kv = "request failed: api_key=secretvalue123&model=gpt-4";
+  const maskedKv = String(describeFailureDetail(kv));
+  check("api_key 保留键名、值变 ***", maskedKv.includes("api_key=***"));
+  check("键值形式的原值不再出现（secretvalue123）", !maskedKv.includes("secretvalue123"));
+  check("同串里的非敏感参数保留（model=gpt-4）", maskedKv.includes("model=gpt-4"));
+
+  const url = "GET https://api.example.com/v1/chat?key=abcdef123456&x=1 failed";
+  const maskedUrl = String(describeFailureDetail(url));
+  check("URL 查询串里的 key 值被掩码（?key=***）", maskedUrl.includes("?key=***"));
+  check("URL 主机路径与非敏感参数保留",
+    maskedUrl.includes("https://api.example.com/v1/chat") && maskedUrl.includes("x=1"));
+
+  // 防误伤：不含敏感词的普通错误必须逐字不变
+  check("普通错误逐字不变（Concurrency limit …）", describeFailureDetail(RAW_ERROR) === RAW_ERROR);
+  const plainNet = "ECONNREFUSED 127.0.0.1:5432 — connection refused by peer";
+  check("普通网络错误逐字不变", describeFailureDetail(plainNet) === plainNet);
+  const plainLongWord = "ERR_MODULE_NOT_FOUND: cannot resolve packages/dsh-cohub/src/delegate.ts";
+  check("含短横线路径的普通错误逐字不变", describeFailureDetail(plainLongWord) === plainLongWord);
+
+  // 顺序契约：脱敏在单行化之后、截断之前；输出仍 ≤201 且不含明文
+  const multilineSecret = "first line\napi_key=secretvalue123\nlast line";
+  const maskedMulti = String(describeFailureDetail(multilineSecret));
+  check("脱敏后仍单行化（无换行）", !maskedMulti.includes("\n") && !maskedMulti.includes("\r"));
+  const longSecret = skKey + " " + "z".repeat(400);
+  const longCut = String(describeFailureDetail(longSecret));
+  check("脱敏先于截断：>200 输入仍 ≤201 且不含密钥原文",
+    longCut.length <= 201 && !longCut.includes("abcdefgh12345678"));
+}
+
 console.log("");
 const allOk = fail === 0;
 console.log(`结果: ${pass} PASS / ${fail} FAIL`);

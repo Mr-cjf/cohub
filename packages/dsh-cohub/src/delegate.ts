@@ -1022,11 +1022,33 @@ function normalizeArguments(args: unknown): string {
 }
 
 /**
+ * 错误文本脱敏（单点、纯函数、可单测）：
+ * 上游 provider 常把请求头或 env 原文回显进错误文本，而该文本会进 error.message / err.cause
+ * 与模型上下文 —— 一律把值换成 `***`。只做替换，不改长度以外的任何格式（裁剪在调用方）。
+ * 覆盖四类：OpenAI 风格密钥、Bearer 头、`key=value` 形式（保留键名）、URL 查询串里的值。
+ */
+export function maskSecrets(text: string): string {
+  return text
+    // ① OpenAI 风格密钥：sk-abcdefgh12345678
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "sk-***")
+    // ② Authorization: Bearer <token>
+    .replace(/\bBearer\s+[A-Za-z0-9._-]{8,}/g, "Bearer ***")
+    // ③ 键值形式（保留键名）：api_key=xxx / token: xxx / secret=… / password=…
+    .replace(
+      /\b(api[_-]?key|token|secret|password)(\s*[:=]\s*)[^\s&,"']{6,}/gi,
+      (_m: string, key: string, sep: string) => key + sep + "***",
+    )
+    // ④ URL 查询串：?key=… / &token=…（值为空或过短时不误伤）
+    .replace(/([?&](?:api[_-]?key|key|token|secret|password)=)[^&\s"']{6,}/gi,
+      (_m: string, prefix: string) => prefix + "***");
+}
+
+/**
  * 真实失败原因归一（delegate / delegate_batch 共用）：
  * 宿主把子代理失败归一成 stopReason="error" 时会丢掉 error 载荷 → 本地进程内 spawn 拿不到
  * diagnostic。这里从「catch 到的 err」或「结算结果对象上残留的 error/message/cause」剥壳取出
- * 可读文本：单行化（复用既有 `replace(/\s+/g, " ")` 写法）后截断到 200 字符，
- * 避免一整页 HTML/堆栈进入模型上下文。
+ * 可读文本：单行化（复用既有 `replace(/\s+/g, " ")` 写法）→ 脱敏（maskSecrets）→
+ * 截断到 200 字符，避免一整页 HTML/堆栈（或明文密钥）进入模型上下文。
  */
 export function describeFailureDetail(value: unknown): string | undefined {
   const seen = new Set<unknown>();
@@ -1041,7 +1063,8 @@ export function describeFailureDetail(value: unknown): string | undefined {
   if (typeof cur === "string") text = cur;
   else if (cur !== null && cur !== undefined && typeof cur !== "object") text = String(cur);
   if (text === undefined) return undefined;
-  const oneLine = text.replace(/\s+/g, " ").trim();
+  // 顺序固定：先单行化（换行折成空格，「键名: 值」规则才认得出）→ 再脱敏 → 最后截断。
+  const oneLine = maskSecrets(text.replace(/\s+/g, " ").trim());
   if (oneLine.length === 0) return undefined;
   return oneLine.length > 200 ? oneLine.slice(0, 200) + "…" : oneLine;
 }
@@ -2286,9 +2309,6 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         // P5：SubagentResult.diagnostic 原样保留（官方 run-settlement.js 用它拼错误详情）。
         // 必须与 lastReason 分开：lastReason 参与 RETRYABLE 精确匹配，拼接会破坏重试判定。
         let lastDiagnostic: string | undefined;
-        // 真实失败原因（per-run 局部变量：runAttempts 每次调用一个闭包，多 run 并发互不串）。
-        // 宿主归一 stopReason="error" 时不产出 diagnostic，只能从 catch 到的原始 err 取值兜底。
-        let lastRunError: string | undefined;
         let lastPartial = "";
         // P1-3：被丢弃的大段 partial 的预算内版本（只进 err.cause，不进 error.message）
         let lastPartialBudget = "";
@@ -2432,9 +2452,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
               await new Promise(r => setTimeout(r, retry.retryDelayMs));
               continue;
             }
-            // P4：spawn 失败（非中止）—— 异常路径同样上报一次
-            // 兜底取真实错误：宿主不产出 diagnostic，spawn 抛出的原始 err 是唯一错误文本来源
-            lastRunError = describeFailureDetail(error) ?? lastRunError;
+            // P4：spawn 失败（非中止）—— 异常路径同样上报一次；原始 err 原样上抛
+            // （真实错误文本随 error.message 到达调用方，不需要额外的 per-run 兜底变量）
             reportAttempt("", "failed", String((error as any)?.message ?? error));
             throw error;
           }
@@ -2478,10 +2497,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
               // 诊断信息：race 输掉时 run.result 未结算，output 拿不到 —— 显式标记，保住 partial 归因可辨性
               outcome = { stopReason: "aborted", output: [], diagnostic: "raced abort（result 未结算）" };
             } else {
-              // P4：运行期拒绝也是失败出口（finally 已负责清理资源）
-              // 兜底取真实错误：run.result 的拒绝原因常含宿主侧失败详情，先留在 per-run 变量里，
-              // 再按原样 throw（不改变既有抛错语义，信息随 error.message 上抛给调用方）。
-              lastRunError = describeFailureDetail(error) ?? lastRunError;
+              // P4：运行期拒绝也是失败出口（finally 已负责清理资源）；拒绝原因原样 throw，
+              // 抛错语义与改造前逐字一致（信息随 error.message 上抛给调用方）。
               reportAttempt(String(run?.id ?? ""), "failed", "error");
               throw error;
             }
@@ -2546,17 +2563,15 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           lastReason = String(outcome?.stopReason ?? "unknown");
           // 兜底取真实错误（宿主把失败归一成 stopReason="error" 时 diagnostic 恒为 undefined）：
           // ① outcome.diagnostic 原样保留（有则行为不变）
-          // ② 结算结果对象上残留的 error/message/cause 载荷
-          // ③ 本 run 内 catch 到的原始 err（per-run 变量，多 run 并发不串）
-          // ②③ 加来源前缀，便于区分「宿主空壳」与真实错误文本。
+          // ② 结算结果对象上残留的 error/message/cause 载荷，加来源前缀便于区分「宿主空壳」与真实错误文本。
+          // 原 ③「本 run 内 catch 到的原始 err」已删除：两处 catch 都是「赋值后立即 throw」（spawn 期与
+          // run.result 拒绝），控制流直接离开 runAttempts 闭包 → 读点恒为 undefined，属不可达死分支。
           const outcomeDiag = typeof outcome?.diagnostic === "string" && outcome.diagnostic.length > 0
             ? outcome.diagnostic
             : undefined;
           const residualDetail = describeFailureDetail(outcome);
           lastDiagnostic = outcomeDiag
-            ?? (residualDetail !== undefined
-              ? "subagent error: " + residualDetail
-              : (lastRunError === undefined ? undefined : "run error: " + lastRunError));
+            ?? (residualDetail === undefined ? undefined : "subagent error: " + residualDetail);
           const partialRaw = contentText(outcome?.output ?? []);
           // 保留既有 slice(0, 500) 行为（error.message 与 retryNote 用它，绝不加长）
           lastPartial = partialRaw.slice(0, 500);
