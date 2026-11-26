@@ -450,168 +450,142 @@ let zhDict: Record<string, string> = {};
       useCohubSkills: (selector: (value: any) => unknown) => selector(state),
       editRow: () => {},
       resetRow: () => {},
+      editSkill: () => {},
+      resetSkill: () => {},
+      toggleRoleDetail: () => {},
+      newRoleFromMain: () => {},
+      addRole: () => {},
+      removeRole: () => {},
+      editRole: () => {},
+      saveRoles: () => {},
+      discardRoles: () => {},
+      addTeam: () => {},
+      saveTeams: () => {},
+      discardTeams: () => {},
       discard: () => {},
       save: () => {},
       retryCatalog: () => {},
     });
   }
+  /** 按类名定位元素（一个元素可能有多个类名）。 */
+  function blocksOf(tree: any, className: string): El[] {
+    const out: El[] = [];
+    walk(tree, (el) => {
+      const names = typeof el.props?.className === "string" ? el.props.className.split(/\s+/) : [];
+      if (names.includes(className)) out.push(el);
+    });
+    return out;
+  }
 
-  // ① provider 为空 → 模型控件禁用并提示「请先选择供应商」，供应商下拉必须有 value="" 空选项
-  const emptyProvider = render(baseState());
-  const emptyProviderRow = rowsOf(emptyProvider)[0];
-  const emptyProviderSelects = collect(emptyProviderRow, "select");
-  check("① provider 为空：供应商下拉含 value=\"\" 的继承项（否则浏览器把第一项当成已选）",
-    String(emptyProviderSelects[0]?.props?.value) === ""
-    && collect(emptyProviderSelects[0], "option").some((o) => o.props.value === ""));
-  check("① provider 为空：模型下拉 disabled 且提示「请先选择供应商」",
-    emptyProviderSelects[1]?.props?.disabled === true
-    && textOf(emptyProviderSelects[1]) === zhDict["selectProviderFirst"]);
-  check("① provider 为空：不渲染 model 手填框", collect(emptyProviderRow, "input").length === 0);
+  // ── 顶部「每个代理一行」的全局模型区块已在 55c6f13 移除（与角色详情重复）：
+  //    13 个代理的模型配置统一在角色库的「运行模型」区，展开角色详情时渲染。
+  //    下面把原来针对已删区块的断言平移到这里，覆盖语义不变（占位项 / 禁用 / 回显 / 只读）。 ──
+  const BUILTIN_NAMES = [
+    "co-orchestrator", "co-planner", "co-oracle", "co-explorer", "co-librarian", "co-observer",
+    "co-fixer", "co-designer", "co-council", "co-rule-user", "co-rule-project", "co-rule-app", "co-cordis",
+  ];
+  const plain = render(baseState());
+  check("角色库渲染 13 个内置角色卡（含 co-cordis）",
+    BUILTIN_NAMES.every((name) => textOf(plain).includes(zhDict["skill." + name])));
+  check("折叠态不渲染运行模型区（模型配置收进角色详情，不再有顶部全局区块）",
+    blocksOf(plain, "cohub-model-block").length === 0);
+  check("角色库顶部固定一张主代理卡（co-orchestrator）",
+    blocksOf(plain, "cohub-row-main").length === 1
+    && textOf(blocksOf(plain, "cohub-row-main")[0]).includes("co-orchestrator"));
 
-  // ⑤ 空 model 占位：provider 已选、目录就绪 → 模型 select 第一个 option 必须是 value=""
-  const withProvider = render(baseState({ rows: [{ name: "co-fixer", provider: "p1", model: "", extra: {} }] }));
-  const modelSelect = collect(rowsOf(withProvider)[0], "select")[1];
-  const modelOptions = collect(modelSelect, "option");
-  check("⑤ 空 model：模型下拉首项是 value=\"\" 的继承占位项", modelOptions[0]?.props?.value === ""
-    && textOf(modelOptions[0]) === zhDict["modelInherit"]);
-  check("⑤ 空 model：占位项之后是目录里的模型", modelOptions[1]?.props?.value === "m1");
-  check("⑤ 空 model：下拉未被禁用（可选择）", modelSelect?.props?.disabled === false);
+  // provider 为空 → 模型下拉禁用并提示「先选供应商」；供应商下拉必须有 value="" 的继承默认项
+  const mainExpanded = render(baseState({ expandedRole: "co-orchestrator" }));
+  const modelBlocks = blocksOf(mainExpanded, "cohub-model-block");
+  check("展开角色详情才渲染运行模型区（标题 + 供应商/模型/强度/最大输出）",
+    modelBlocks.length >= 1 && modelBlocks.every((b) => textOf(b).includes(zhDict["roleModelTitle"])));
+  const mainSelects = collect(modelBlocks[0], "select");
+  const providerOptions = collect(mainSelects[0], "option");
+  check("模型区供应商下拉首项是 value=\"\" 的继承默认项（否则浏览器把第一项当成已选）",
+    String(mainSelects[0]?.props?.value) === ""
+    && providerOptions[0]?.props?.value === ""
+    && textOf(providerOptions[0]) === zhDict["roleModelProviderDefault"]);
+  check("provider 为空：模型下拉 disabled 且提示「先选供应商」",
+    mainSelects[1]?.props?.disabled === true && textOf(mainSelects[1]) === zhDict["roleModelPickProvider"]);
 
-  // ── 第三个下拉框：推理强度 ──────────────────────────────────────
-  // 每行三个 select：0=供应商 / 1=模型 / 2=推理强度；重置按钮在最后。
-  const effortState = (row: any, overrides: Record<string, any> = {}) => render(baseState({
-    rows: [row],
-    modelsByProvider: { p1: [{ id: "m1", label: "Model 1" }, { id: "m2", label: "Model 2" }] },
-    effortsByModel: { p1: { m1: [{ id: "low", label: "低" }, { id: "high", label: "高" }] } },
-    ...overrides,
+  // provider 已选、目录就绪 → 模型下拉可点，且选项来自目录（首项是 value="" 的选择占位）
+  const withProvider = render(baseState({
+    expandedRole: "co-fixer",
+    rows: [{ name: "co-fixer", provider: "p1", model: "", reasoningEffort: "", extra: {} }],
   }));
-  const effortSelectOf = (tree: any) => collect(rowsOf(tree)[0], "select")[2];
+  const withProviderSelects = collect(blocksOf(withProvider, "cohub-model-block")[0], "select");
+  const modelOptions = collect(withProviderSelects[1], "option");
+  check("已选供应商：模型下拉可点且首项是 value=\"\" 的选择占位",
+    withProviderSelects[1]?.props?.disabled === false
+    && modelOptions[0]?.props?.value === ""
+    && textOf(modelOptions[0]) === zhDict["roleModelPickModel"]);
+  check("已选供应商：模型选项来自模型目录", modelOptions.some((o) => o.props.value === "m1"));
 
-  check("每行渲染三个下拉框（供应商/模型/推理强度）",
-    collect(rowsOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} }))[0], "select").length === 3);
-  check("推理强度有独立的中文标签", textOf(rowsOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} }))[0])
-    .includes(zhDict["reasoningEffort"]));
+  // ── 运行模型区的推理强度：4 档分段按钮（默认/低/中/高），当前值高亮 ──
+  const effortTree = render(baseState({
+    expandedRole: "co-fixer",
+    rows: [{ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "high", extra: {} }],
+  }));
+  const effortBlock = blocksOf(effortTree, "cohub-model-block")[0];
+  const chips = collect(effortBlock, "button")
+    .filter((b) => String(b.props?.className ?? "").includes("cohub-tier-chip"));
+  check("推理强度是 4 档分段按钮（默认/低/中/高）",
+    chips.length === 4
+    && JSON.stringify(chips.map((c) => textOf(c))) === JSON.stringify([
+      zhDict["effort.default"], zhDict["effort.low"], zhDict["effort.medium"], zhDict["effort.high"],
+    ]));
+  check("已配强度回显为唯一高亮的那一档（aria-pressed）",
+    chips.filter((c) => c.props["aria-pressed"] === true).length === 1
+    && chips[3]?.props["aria-pressed"] === true);
+  check("未配强度时高亮「默认」档（继承会话设置）", (() => {
+    const noEffort = blocksOf(render(baseState({
+      expandedRole: "co-fixer",
+      rows: [{ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} }],
+    })), "cohub-model-block")[0];
+    const list = collect(noEffort, "button").filter((b) => String(b.props?.className ?? "").includes("cohub-tier-chip"));
+    return list.filter((c) => c.props["aria-pressed"] === true).length === 1 && list[0]?.props["aria-pressed"] === true;
+  })());
+  check("运行模型区展示最大输出输入框并回显已存值", (() => {
+    const withMax = blocksOf(render(baseState({
+      expandedRole: "co-fixer",
+      rows: [{ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: { maxTokens: 4000 } }],
+    })), "cohub-model-block")[0];
+    const input = collect(withMax, "input")[0];
+    return input?.props?.type === "number" && String(input?.props?.value) === "4000";
+  })());
 
-  // 有档位：可点，首项是 value="" 的继承占位项，之后是各档位（用 effort.name 显示）
-  const withEfforts = effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} }));
-  const effortOptions = collect(withEfforts, "option");
-  check("推理强度下拉首项是 value=\"\" 的继承占位项",
-    effortOptions[0]?.props?.value === "" && textOf(effortOptions[0]) === zhDict["effortInherit"]);
-  check("档位选项来自模型目录且用 effort.name 显示",
-    effortOptions[1]?.props?.value === "low" && textOf(effortOptions[1]) === "低"
-    && effortOptions[2]?.props?.value === "high" && textOf(effortOptions[2]) === "高");
-  check("有档位时推理强度下拉可点", withEfforts?.props?.disabled === false);
-  check("已选强度回显在下拉上",
-    effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "high", extra: {} }))?.props?.value === "high");
+  // 只读态下运行模型区全部控件禁用
+  const readOnlyModel = blocksOf(render(baseState({ writable: false, expandedRole: "co-orchestrator" })), "cohub-model-block")[0];
+  check("只读态：运行模型区的下拉/按钮/输入全部禁用",
+    readOnlyModel !== undefined
+    && collect(readOnlyModel, "select").every((s) => s.props.disabled === true)
+    && collect(readOnlyModel, "button").every((b) => b.props.disabled === true)
+    && collect(readOnlyModel, "input").every((i) => i.props.disabled === true));
 
-  // 档位随模型变化：换到 m2（目录里没有 reasoning 信息）→ 禁用「该模型不支持」
-  const unsupported = effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m2", reasoningEffort: "", extra: {} }));
-  check("模型不支持推理强度 → 下拉禁用并提示「该模型不支持」",
-    unsupported?.props?.disabled === true && textOf(unsupported) === zhDict["effortUnsupported"]);
-
-  // 换模型后档位选项确实跟着变（不是静态渲染）
-  const onM1 = collect(effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} })), "option");
-  const onM2 = collect(effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m2", reasoningEffort: "", extra: {} })), "option");
-  check("档位随模型变化（m1 有 2 档 + 继承项，m2 只有占位）",
-    onM1.length === 3 && onM2.length === 1);
-
-  // 已配强度不在当前模型档位里 → 插入 disabled 回显项「xxx（当前模型不支持）」
-  const staleEffort = effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "ultra", extra: {} }));
-  const staleOption = collect(staleEffort, "option").find((o) => o.props.value === "ultra");
-  check("已配强度不在当前模型档位里 → 渲染 disabled 回显项并标注不支持",
-    staleOption !== undefined && staleOption.props.disabled === true
-    && textOf(staleOption) === zhDict["effortUnsupportedOption"].replace("{value}", "ultra"));
-  check("失效强度不会把下拉改成第一档（value 仍回显已配值）", staleEffort?.props?.value === "ultra");
-
-  // 未选供应商 / 未选模型 / 目录加载中 → 各自的禁用提示
-  const noProviderEffort = effortSelectOf(effortState({ name: "co-fixer", provider: "", model: "", reasoningEffort: "", extra: {} }));
-  check("provider 为空 → 推理下拉禁用并提示「请先选择供应商」",
-    noProviderEffort?.props?.disabled === true && textOf(noProviderEffort) === zhDict["selectProviderFirst"]);
-
-  const noModelEffort = effortSelectOf(effortState({ name: "co-fixer", provider: "p1", model: "", reasoningEffort: "", extra: {} }));
-  check("model 为空 → 推理下拉禁用并提示「请先选择模型」",
-    noModelEffort?.props?.disabled === true && textOf(noModelEffort) === zhDict["effortSelectModelFirst"]);
-
-  const loadingEffort = effortSelectOf(effortState(
-    { name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} },
-    { catalogStatus: "loading", modelsByProvider: {}, effortsByModel: {} },
-  ));
-  check("目录加载中 → 推理下拉禁用并显示「加载中…」",
-    loadingEffort?.props?.disabled === true && textOf(loadingEffort) === zhDict["loading"]);
-
-  // 手填 model（目录里没有该 model）→ 无法证明支持，按不支持禁用
-  const manualTree = effortState(
-    { name: "co-fixer", provider: "p1", model: "hand-typed", reasoningEffort: "", extra: {} },
-    { modelsByProvider: { p1: [] } },
-  );
-  const manualSelects = collect(rowsOf(manualTree)[0], "select");
-  const manualEffort = manualSelects[manualSelects.length - 1];
-  check("手填 model（目录无 reasoning 信息）→ 降级手填框 + 推理下拉禁用并提示不支持",
-    collect(rowsOf(manualTree)[0], "input").length === 1
-    && manualSelects.length === 2
-    && manualEffort?.props?.disabled === true
-    && textOf(manualEffort) === zhDict["effortUnsupported"]);
-
-  // 只读态下推理下拉也禁用
-  const readOnlyEffort = effortSelectOf(effortState(
-    { name: "co-fixer", provider: "p1", model: "m1", reasoningEffort: "", extra: {} },
-    { writable: false },
-  ));
-  check("只读态：推理强度下拉同样禁用", readOnlyEffort?.props?.disabled === true);
-
-  // ② 目录加载中 → 模型下拉 disabled 并显示「加载中…」
-  const loadingState = render(baseState({
+  // ② provider 无模型目录（或目录加载中）→ 模型下拉不伪造选项，首项给出明确文案
+  const loadingTree = render(baseState({
+    expandedRole: "co-fixer",
     catalogStatus: "loading",
-    providers: [],
     modelsByProvider: {},
-    rows: [{ name: "co-fixer", provider: "p1", model: "", extra: {} }],
+    rows: [{ name: "co-fixer", provider: "p1", model: "", reasoningEffort: "", extra: {} }],
   }));
-  const loadingModel = collect(rowsOf(loadingState)[0], "select")[1];
-  check("② 目录加载中：模型下拉 disabled 且显示「加载中…」",
-    loadingModel?.props?.disabled === true && textOf(loadingModel) === zhDict["loading"]);
+  const loadingModel = collect(blocksOf(loadingTree, "cohub-model-block")[0], "select")[1];
+  check("② provider 无模型目录（含加载中）：模型下拉首项说明「该供应商未提供模型目录」",
+    textOf(collect(loadingModel, "option")[0]) === zhDict["emptyModel"]);
 
-  // ③ provider 无模型目录（或目录加载失败）→ 降级为手填 input
-  const noCatalog = render(baseState({
-    modelsByProvider: { p1: [] },
-    rows: [{ name: "co-fixer", provider: "p1", model: "custom-model", extra: {} }],
-  }));
-  const noCatalogInputs = collect(rowsOf(noCatalog)[0], "input");
-  check("③ provider 无模型目录：降级为手填 input 且回显已存的 model id",
-    noCatalogInputs.length === 1
-    && noCatalogInputs[0].props.type === "text"
-    && String(noCatalogInputs[0].props.value) === "custom-model"
-    && String(noCatalogInputs[0].props.placeholder).includes(zhDict["customModel"]));
-
+  // ③ 目录加载失败：页面顶部错误提示 + 重试按钮（页面级反馈，与已删的行区块无关）
   const catalogError = render(baseState({
     catalogStatus: "error",
     catalogError: "boom",
     providers: [],
     modelsByProvider: {},
-    rows: [{ name: "co-fixer", provider: "p1", model: "", extra: {} }],
   }));
-  check("③ 目录加载失败：同样降级手填 + 顶部错误提示 + 重试按钮",
-    collect(rowsOf(catalogError)[0], "input").length === 1
-    && textOf(catalogError).includes(zhDict["loadProvidersFailed"])
+  check("③ 目录加载失败：顶部错误提示 + 重试按钮",
+    textOf(catalogError).includes(zhDict["loadProvidersFailed"])
     && collect(catalogError, "button").some((b) => textOf(b) === zhDict["retry"]));
 
-  // ④ 已存但当前不可用 → <option disabled> 回显（供应商与模型各一处）
-  const unavailable = render(baseState({
-    rows: [{ name: "co-fixer", provider: "gone-provider", model: "", extra: {} }],
-  }));
-  const unavailableProviderSelect = collect(rowsOf(unavailable)[0], "select")[0];
-  const deadProviderOption = collect(unavailableProviderSelect, "option").find((o) => o.props.value === "gone-provider");
-  check("④ 供应商已存但目录里没有：渲染 disabled 回显项并标注不可用",
-    deadProviderOption !== undefined && deadProviderOption.props.disabled === true
-    && textOf(deadProviderOption).includes(zhDict["unavailableOption"].replace("{value}", "gone-provider").replace("（不可用）", "").trim()));
-
-  const unavailableModel = render(baseState({
-    rows: [{ name: "co-fixer", provider: "p1", model: "gone-model", extra: {} }],
-  }));
-  const deadModelOption = collect(collect(rowsOf(unavailableModel)[0], "select")[1], "option")
-    .find((o) => o.props.value === "gone-model");
-  check("④ 模型已存但当前目录不可用：渲染 disabled 回显项（不再显示成第一项）",
-    deadModelOption !== undefined && deadModelOption.props.disabled === true
-    && textOf(deadModelOption).includes("gone-model"));
+  // ④ 已存但当前不可用 → 主代理卡的模型徽标显示「继承」而不显示成已配置
+  const inheritedPill = render(baseState());
+  check("④ 未配置模型的主代理卡徽标显示「继承」", textOf(inheritedPill).includes(zhDict["roleModelInherit"]));
 
   // 状态提示：只读 / 冲突 / 失败 / 未保存
   const readOnly = render(baseState({ writable: false, rows: [{ name: "co-fixer", provider: "p1", model: "m1", extra: {} }] }));
@@ -628,8 +602,9 @@ let zhDict: Record<string, string> = {};
   const failed = render(baseState({ failed: true, dirty: true }));
   check("保存失败：提示保存失败", textOf(failed).includes(zhDict["failed"]));
   const dirtyHint = render(baseState({ dirty: true, rows: [{ name: "co-fixer", provider: "p1", model: "m1", extra: {} }] }));
-  check("有未保存修改：提示 + 保存按钮可用", textOf(dirtyHint).includes(zhDict["dirty"])
-    && collect(dirtyHint, "button").find((b) => textOf(b) === zhDict["save"])?.props.disabled === false);
+  const saveButtons = collect(dirtyHint, "button").filter((b) => textOf(b) === zhDict["save"]);
+  check("有未保存修改：提示 + 底部保存按钮可用", textOf(dirtyHint).includes(zhDict["dirty"])
+    && saveButtons.length > 0 && saveButtons[saveButtons.length - 1]?.props.disabled === false);
 
   // 13 行都在（含 co-cordis），且行标签走字典
   const allRows = render(baseState({
@@ -638,7 +613,14 @@ let zhDict: Record<string, string> = {};
       "co-fixer", "co-designer", "co-council", "co-rule-user", "co-rule-project", "co-rule-app", "co-cordis",
     ].map((name) => ({ name, provider: "", model: "", extra: {} })),
   }));
-  check("渲染 13 行代理（含 co-cordis）", rowsOf(allRows).length === 13);
+  // 只读目录卡：16 个内置角色 + 顶部主代理卡都带「查看详情」（aria-expanded）；团队卡没有。
+  const detailCards = blocksOf(allRows, "cohub-row-catalog")
+    .filter((el) => collect(el, "button").some((b) => "aria-expanded" in (b.props ?? {})));
+  const builtinCards = detailCards
+    .filter((el) => !String(el.props?.className ?? "").split(/\s+/).includes("cohub-row-main"))
+    .filter((el) => BUILTIN_NAMES.some((name) => textOf(el).includes(zhDict["skill." + name])));
+  check("16 个内置角色 + 主代理卡都可展开详情", detailCards.length === 17);
+  check("13 个可委派技能各渲染一张内置角色卡（含 co-cordis）", builtinCards.length === 13);
   check("行标签用中文字典（co-cordis → Cordis 插件）", textOf(allRows).includes(zhDict["skill.co-cordis"]));
 
   // 未加载完 / 不可用：只给标题与状态，不渲染半截表单
