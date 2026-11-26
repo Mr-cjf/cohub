@@ -21,6 +21,7 @@ import {
   guardDelegationDepth,
   DELEGATE_PERSONA,
   DEFAULT_SPAWN_TRANSPORT,
+  describeFailureDetail,
   startSubagentRun,
   DELEGATE_OUTPUT_CONFIG,
   resolveRouteOutputContract,
@@ -257,8 +258,16 @@ function pushBatchEvent(events: BatchEvent[], event: BatchEvent): boolean {
 }
 
 /**
+ * 单 task 的真实完成时刻槽：由并行 map 闭包在 `run.result` settle 的**那一刻**就地写入。
+ * 收集阶段（逐个 await 的串行循环）只读取它——读取时刻 ≠ 完成时刻，队头阻塞会把后者拖高。
+ * 超时 / 父级 abort 时 result 可能永不 settle → 保持 undefined，消费点自行兜底取当前时刻。
+ */
+type TaskTiming = { endedAt?: number };
+
+/**
  * 结果条目补时间字段（startedAt / endedAt / durationMs / runId）。
  * startedAt 缺失时整组字段省略——旧调用与测试桩的行为零变化（向后兼容）。
+ * endedAt 必须传 task 的**真实完成时刻**（闭包内 TaskTiming.endedAt），不得传收集时刻。
  * 只用 Date.now() 的差值，不插入任何 await / sleep（stall-p3 有 5-8ms 级时序断言）。
  */
 function withTiming(
@@ -622,8 +631,18 @@ export function createDelegateBatchTool(
                 degradeNotes: taskNotes,
               });
             const run = await spawnAgain(promptText, ac.signal);
+            // ◈ 完成时刻就地取：run.result settle 的那一刻记录 endedAt，而不是等到下面的
+            // 串行收集循环逐个 await 时才取——收集是排队进行的，队头 task 慢会把后面**早已完成**
+            // 的 task 的取时点一起往后拖，durationMs / completed 事件 at 因此虚高。
+            // 只挂一条旁路 then：不参与 race、不影响超时判定、不改事件顺序，纯粹记录时间。
+            // 超时/父级 abort 时 result 可能永不 settle → endedAt 保持 undefined，由消费点兜底。
+            const timing: TaskTiming = {};
+            const markSettled = (): void => {
+              if (timing.endedAt === undefined) timing.endedAt = Date.now();
+            };
+            void run.result.then(markSettled, markSettled);
             return {
-              taskId, skillName: skill.name, skillTag, task, taskNotes, run, ac, onExecAbort, startedAt,
+              taskId, skillName: skill.name, skillTag, task, taskNotes, run, ac, onExecAbort, startedAt, timing,
               startError: undefined, skillError: undefined,
               outputContract, buildPrompt, spawnAgain,
             };
@@ -641,7 +660,7 @@ export function createDelegateBatchTool(
       const results: DelegateBatchResult[] = [];
       /** 与 results 下标一一对应的事件流（渲染 task 时间线用；不依赖 taskId 唯一） */
       const resultEvents: BatchEvent[][] = [];
-      const runs: Array<{ run: any; safeDispose: () => void; ac: AbortController; onExecAbort: (() => void) | null; taskId: string; skillName: string; skillTag: string; taskNotes: DegradeNote[]; startedAt: number; taskEvents: BatchEvent[]; outputContract: ReturnType<typeof resolveRouteOutputContract>; buildPrompt: (rewriteNote?: string) => string; spawnAgain: (text: string, signal: AbortSignal) => Promise<any> }> = [];
+      const runs: Array<{ run: any; safeDispose: () => void; ac: AbortController; onExecAbort: (() => void) | null; taskId: string; skillName: string; skillTag: string; taskNotes: DegradeNote[]; startedAt: number; timing: TaskTiming; taskEvents: BatchEvent[]; outputContract: ReturnType<typeof resolveRouteOutputContract>; buildPrompt: (rewriteNote?: string) => string; spawnAgain: (text: string, signal: AbortSignal) => Promise<any> }> = [];
       // 每任务的降级原因（按 starts 顺序），供末尾统一合并成一段提示
       const perTaskNotes: Array<{ taskId: string; notes: DegradeNote[] }> = [];
       // 结果对象上的 degrade 字段：渲染后逐字 trim（末尾合并提示另走 formatDegradeNotes 原样前缀）
@@ -745,7 +764,7 @@ export function createDelegateBatchTool(
             }, val.startedAt, startErrAt));
             continue;
           }
-          const { run, taskId, skillName, skillTag, taskNotes, ac, onExecAbort, startedAt, outputContract, buildPrompt, spawnAgain } = val;
+          const { run, taskId, skillName, skillTag, taskNotes, ac, onExecAbort, startedAt, timing, outputContract, buildPrompt, spawnAgain } = val;
           // events 沿用闭包内那条流（queued → started 已在其中），终态事件由下面的收集循环追加
           const taskEvents: BatchEvent[] = batchEvents[index] ?? [];
           // 幂等 dispose：race 的超时/abort 分支与末尾统一清理共用同一个，重复调用安全。
@@ -756,7 +775,7 @@ export function createDelegateBatchTool(
             // 同步调用的 reject 无人接（unhandledRejection）：显式吞掉并异步等释放完成
             void Promise.resolve().then(() => run.dispose()).catch(() => { /* 已释放 */ });
           };
-          runs.push({ run, safeDispose, taskId, skillName, skillTag, taskNotes, ac, onExecAbort, startedAt, taskEvents, outputContract, buildPrompt, spawnAgain });
+          runs.push({ run, safeDispose, taskId, skillName, skillTag, taskNotes, ac, onExecAbort, startedAt, timing, taskEvents, outputContract, buildPrompt, spawnAgain });
           perTaskNotes.push({ taskId, notes: taskNotes });
 
           // 防 unhandledRejection
@@ -764,7 +783,9 @@ export function createDelegateBatchTool(
         }
 
         // 逐个 await run.result（带独立超时和独立 AbortController；父级 abort 也参与竞速）
-        for (const { run, safeDispose, taskId, skillName, skillTag, taskNotes, ac, startedAt, taskEvents, outputContract, buildPrompt, spawnAgain } of runs) {
+        // 注意：本循环是**串行排队**的，这里的 Date.now() 是「轮到这个 task」的时刻而非它的完成时刻。
+        // 所有对外耗时字段一律取 timing.endedAt（闭包内 settle 时就地记录的真实完成时刻）。
+        for (const { run, safeDispose, taskId, skillName, skillTag, taskNotes, ac, startedAt, timing, taskEvents, outputContract, buildPrompt, spawnAgain } of runs) {
           let outcome: any;
           let timer: ReturnType<typeof setTimeout> | null = null;
           // 子运行 id（run.id 契约上等于宿主 childId）；拿不到就省略 runId 字段
@@ -888,8 +909,10 @@ export function createDelegateBatchTool(
                     + outputContract.level + "）：" + check.errors.join("；"));
                 }
               }
-              // 任务实际结束时刻：在预算裁剪的 await **之前**取，durationMs 只反映子代理耗时
-              const endedAt = Date.now();
+              // 真实完成时刻：闭包内 run.result settle 时就地记录的 timing.endedAt。
+              // 契约重写耗时不计入（重写是收尾补救，不改变「首版子代理何时完成」这一事实）；
+              // 兜底 Date.now() 只服务 result 未 settle 的异常路径，不参与正常计时。
+              const endedAt = timing.endedAt ?? Date.now();
               pushBatchEvent(taskEvents, {
                 taskId, phase: "completed", at: endedAt,
                 detail: "stopReason: completed · 输出 " + rawText.length + " 字符"
@@ -915,8 +938,15 @@ export function createDelegateBatchTool(
                 ...(contractViolated ? { contractViolated: true as const } : {}),
               }, startedAt, endedAt, runId));
             } else {
-              const endedAt = Date.now();
-              const diag = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
+              // 同上：非 completed 的 stopReason 也取 result settle 时刻（timeout/abort 时兜底当前时刻）
+              const endedAt = timing.endedAt ?? Date.now();
+              // 兜底取真实错误（与 delegate 同口径）：宿主把失败归一成 stopReason="error" 时
+              // 不产出 diagnostic，只能从结算对象残留的 error/message/cause 剥壳取值；
+              // 有 diagnostic 时行为不变，两者都没有时保持旧行为（不伪造文本）。
+              const residual = describeFailureDetail(outcome);
+              const diag = typeof outcome?.diagnostic === "string" && outcome.diagnostic.length > 0
+                ? outcome.diagnostic
+                : (residual === undefined ? undefined : "subagent error: " + residual);
               // 打点：非 completed 的 stopReason（aborted / error / timeout…）也必须留痕
               pushBatchEvent(taskEvents, {
                 taskId, phase: "failed", at: endedAt,
@@ -935,9 +965,15 @@ export function createDelegateBatchTool(
               }, startedAt, endedAt, runId));
             }
           } catch (e) {
-            // 打点：超时 / 父级 abort / result 抛错都在这里收口——终态事件 + endedAt 一个都不能少
-            const endedAt = Date.now();
-            const message = e instanceof Error ? e.message : String(e);
+            // 打点：超时 / 父级 abort / result 抛错都在这里收口——终态事件 + endedAt 一个都不能少。
+            // result 自己 reject 时 timing.endedAt 已在 settle 那刻写好；超时/abort 没有 settle，
+            // 回退当前时刻（与改动前一致）。错误文案里的「实际耗时」是超时发生那一瞬的实时值，
+            // 语义本就正确，保持不动。
+            const endedAt = timing.endedAt ?? Date.now();
+            // 真实错误可能是整页 HTML/堆栈：单行化 + 200 字截断（复用 delegate.describeFailureDetail，
+            // 与成败出口同一口径）。截断只切尾部，`startsWith("超时")` 的超时归类不受影响。
+            const rawMessage = e instanceof Error ? e.message : String(e);
+            const message = describeFailureDetail(rawMessage) ?? rawMessage;
             pushBatchEvent(taskEvents, {
               taskId, phase: message.startsWith("超时") ? "timeout" : "failed", at: endedAt, detail: message,
             });

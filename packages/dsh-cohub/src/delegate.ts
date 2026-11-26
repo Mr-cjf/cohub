@@ -989,6 +989,31 @@ function normalizeArguments(args: unknown): string {
 }
 
 /**
+ * 真实失败原因归一（delegate / delegate_batch 共用）：
+ * 宿主把子代理失败归一成 stopReason="error" 时会丢掉 error 载荷 → 本地进程内 spawn 拿不到
+ * diagnostic。这里从「catch 到的 err」或「结算结果对象上残留的 error/message/cause」剥壳取出
+ * 可读文本：单行化（复用既有 `replace(/\s+/g, " ")` 写法）后截断到 200 字符，
+ * 避免一整页 HTML/堆栈进入模型上下文。
+ */
+export function describeFailureDetail(value: unknown): string | undefined {
+  const seen = new Set<unknown>();
+  let cur: any = value;
+  let text: string | undefined;
+  while (cur !== null && cur !== undefined && typeof cur === "object" && !seen.has(cur)) {
+    seen.add(cur);
+    const next = cur.error ?? cur.errorMessage ?? cur.failure ?? cur.message ?? cur.cause;
+    if (next === cur || next === null || next === undefined) break;
+    cur = next;
+  }
+  if (typeof cur === "string") text = cur;
+  else if (cur !== null && cur !== undefined && typeof cur !== "object") text = String(cur);
+  if (text === undefined) return undefined;
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (oneLine.length === 0) return undefined;
+  return oneLine.length > 200 ? oneLine.slice(0, 200) + "…" : oneLine;
+}
+
+/**
  * N2 停滞看门狗（P3-1）：spawn 前挂到全局 session/event 总线，按 run.id 归属子代理事件，
  * 增量维护 S1-S4 信号状态，事件驱动 + 定时判定「停滞」，触发时经回调中止（ac.abort()）。
  * 纯观测器：不修改子代理内容，只决定「是否提前中止」（控制侧动作）。
@@ -2159,6 +2184,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
         // P5：SubagentResult.diagnostic 原样保留（官方 run-settlement.js 用它拼错误详情）。
         // 必须与 lastReason 分开：lastReason 参与 RETRYABLE 精确匹配，拼接会破坏重试判定。
         let lastDiagnostic: string | undefined;
+        // 真实失败原因（per-run 局部变量：runAttempts 每次调用一个闭包，多 run 并发互不串）。
+        // 宿主归一 stopReason="error" 时不产出 diagnostic，只能从 catch 到的原始 err 取值兜底。
+        let lastRunError: string | undefined;
         let lastPartial = "";
         // P1-3：被丢弃的大段 partial 的预算内版本（只进 err.cause，不进 error.message）
         let lastPartialBudget = "";
@@ -2298,6 +2326,8 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
               continue;
             }
             // P4：spawn 失败（非中止）—— 异常路径同样上报一次
+            // 兜底取真实错误：宿主不产出 diagnostic，spawn 抛出的原始 err 是唯一错误文本来源
+            lastRunError = describeFailureDetail(error) ?? lastRunError;
             reportAttempt("", "failed", String((error as any)?.message ?? error));
             throw error;
           }
@@ -2342,6 +2372,9 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
               outcome = { stopReason: "aborted", output: [], diagnostic: "raced abort（result 未结算）" };
             } else {
               // P4：运行期拒绝也是失败出口（finally 已负责清理资源）
+              // 兜底取真实错误：run.result 的拒绝原因常含宿主侧失败详情，先留在 per-run 变量里，
+              // 再按原样 throw（不改变既有抛错语义，信息随 error.message 上抛给调用方）。
+              lastRunError = describeFailureDetail(error) ?? lastRunError;
               reportAttempt(String(run?.id ?? ""), "failed", "error");
               throw error;
             }
@@ -2404,7 +2437,19 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
             return budgeted + formatDegradeNotes(degradeNotes) + contractMark;
           }
           lastReason = String(outcome?.stopReason ?? "unknown");
-          lastDiagnostic = typeof outcome?.diagnostic === "string" ? outcome.diagnostic : undefined;
+          // 兜底取真实错误（宿主把失败归一成 stopReason="error" 时 diagnostic 恒为 undefined）：
+          // ① outcome.diagnostic 原样保留（有则行为不变）
+          // ② 结算结果对象上残留的 error/message/cause 载荷
+          // ③ 本 run 内 catch 到的原始 err（per-run 变量，多 run 并发不串）
+          // ②③ 加来源前缀，便于区分「宿主空壳」与真实错误文本。
+          const outcomeDiag = typeof outcome?.diagnostic === "string" && outcome.diagnostic.length > 0
+            ? outcome.diagnostic
+            : undefined;
+          const residualDetail = describeFailureDetail(outcome);
+          lastDiagnostic = outcomeDiag
+            ?? (residualDetail !== undefined
+              ? "subagent error: " + residualDetail
+              : (lastRunError === undefined ? undefined : "run error: " + lastRunError));
           const partialRaw = contentText(outcome?.output ?? []);
           // 保留既有 slice(0, 500) 行为（error.message 与 retryNote 用它，绝不加长）
           lastPartial = partialRaw.slice(0, 500);
