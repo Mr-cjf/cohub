@@ -2,6 +2,14 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.8] - 2026-11-25
+
+### 新增
+
+- **内置团队**：随插件提供两套团队并注册为 Agent 预设——`cohub-team-dev`（开发团队，队长 co-orchestrator，含 12 个子代理）与 `cohub-team-writing`（写作团队，含 co-writer / co-editor / co-outliner）。
+- 设置页团队区块**先列内置团队**（带「内置」徽标、成员数、队长、档位分布、预设 id），不可编辑或删除，支持「复制为我的团队」后改成员与队长。
+- 内置团队同样受团队限员约束：在其预设下只能派该团队成员。
+
 ## [0.13.7] - 2026-11-25
 
 ### 新增
