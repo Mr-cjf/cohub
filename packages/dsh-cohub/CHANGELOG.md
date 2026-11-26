@@ -2,6 +2,14 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.9] - 2026-11-26
+
+### 变更
+
+- **设置页移除「CoHub 代理模型」全局区块**：它按角色列出的供应商/模型/推理强度与角色详情里的「运行模型」重复，现在模型配置统一在角色详情里做。
+- **子代理失败时透传真实错误详情**：新增 `describeFailureDetail` 剥掉框架错误外壳（error → errorMessage → failure → message → cause，防环、空白折行、超长截断），单发与批量两条失败出口接入。
+- **批量路径记录 per-task 真实完成时刻**：避免队头阻塞把后续 task 的 `endedAt` 拉高。
+
 ## [0.13.8] - 2026-11-25
 
 ### 新增
