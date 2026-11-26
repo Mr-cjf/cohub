@@ -38,7 +38,7 @@ function group(title: string): void {
 }
 
 /** 写作组：只允许写稿与审校 */
-const WRITING: TeamConfig = { id: "writing", name: "写作组", members: ["co-writer", "co-editor"] };
+const WRITING: TeamConfig = { id: "writing-group", name: "写作组", members: ["co-writer", "co-editor"] };
 const TEAMS: readonly TeamConfig[] = [WRITING];
 
 // ── 用例 1：activeTeam 为空 → 全允许（向后兼容） ──────────────────────────
@@ -59,10 +59,10 @@ check("无 activeTeam → 自定义角色也在名单里（内置 ∪ customRole
 
 // ── 用例 2：activeTeam=writing → 只有成员可派，错误文案含团队名与可用角色 ──
 group("用例 2：activeTeam 指向 writing（members=[co-writer, co-editor]）");
-const writingCfg = { teams: TEAMS, activeTeam: "writing" };
+const writingCfg = { teams: TEAMS, activeTeam: "writing-group" };
 const resolved = resolveActiveTeam(writingCfg);
 check("resolveActiveTeam 返回 { id, name, members }",
-  resolved !== null && resolved.id === "writing" && resolved.name === "写作组"
+  resolved !== null && resolved.id === "writing-group" && resolved.name === "写作组"
   && resolved.members.length === 2 && resolved.members[0] === "co-writer");
 check("co-writer 允许", isRoleAllowed("co-writer", writingCfg) === true);
 check("co-editor 允许", isRoleAllowed("co-editor", writingCfg) === true);
@@ -74,7 +74,7 @@ check("错误文案含团队 id「writing」", rejection.includes("writing"));
 check("错误文案含被拒角色「co-fixer」", rejection.includes("co-fixer"));
 check("错误文案含可用角色清单", rejection.includes("co-writer, co-editor"));
 check("错误文案格式与任务书示例一致",
-  rejection === '角色 "co-fixer" 不在当前团队 "写作组"(writing) 内；该团队可用角色：co-writer, co-editor');
+  rejection === '角色 "co-fixer" 不在当前团队 "写作组"(writing-group) 内；该团队可用角色：co-writer, co-editor');
 check("listAllowedRoles 只返回团队成员（保留配置顺序）",
   JSON.stringify(listAllowedRoles(writingCfg)) === JSON.stringify(["co-writer", "co-editor"]));
 check("members 两侧空白被 trim（脏配置不误伤）",
@@ -104,28 +104,28 @@ check("自定义角色在 members → listAllowedRoles 原样返回它",
   JSON.stringify(listAllowedRoles(customCfg)) === JSON.stringify(["my-writer"]));
 check("内置角色 co-writer 不在该团队 → 拒绝", isRoleAllowed("co-writer", customCfg) === false);
 check("自定义角色未进 members 的另一团队 → 拒绝",
-  isRoleAllowed("my-writer", { ...customCfg, activeTeam: "writing", teams: TEAMS }) === false);
+  isRoleAllowed("my-writer", { ...customCfg, activeTeam: "writing-group", teams: TEAMS }) === false);
 
 // ── 用例 5：当前会话预设 → 团队（新语义主路径） ───────────────────────────
 group("用例 5：当前会话预设判定团队（推导 id / 显式 presetId / 非团队预设）");
 const presetCfg = { teams: TEAMS };
-check("teamPresetId 推导 = cohub-team-<id>", teamPresetId(WRITING) === "cohub-team-writing");
+check("teamPresetId 推导 = cohub-team-<id>", teamPresetId(WRITING) === "cohub-team-writing-group");
 check("teamPresetId 显式 presetId 优先",
   teamPresetId({ ...WRITING, presetId: "my-writing-preset" }) === "my-writing-preset");
 check("teamPresetId 显式值为空白 → 回退推导",
-  teamPresetId({ ...WRITING, presetId: "   " }) === "cohub-team-writing");
-const sessionTeam = resolveSessionTeam(presetCfg, "cohub-team-writing");
-check("① presetId=cohub-team-writing → 命中写作组（id / name / members）",
-  sessionTeam !== null && sessionTeam.id === "writing" && sessionTeam.name === "写作组"
+  teamPresetId({ ...WRITING, presetId: "   " }) === "cohub-team-writing-group");
+const sessionTeam = resolveSessionTeam(presetCfg, "cohub-team-writing-group");
+check("① presetId=cohub-team-writing-group → 命中写作组（id / name / members）",
+  sessionTeam !== null && sessionTeam.id === "writing-group" && sessionTeam.name === "写作组"
   && JSON.stringify(sessionTeam.members) === JSON.stringify(["co-writer", "co-editor"]));
-check("① co-writer 允许", isRoleAllowed("co-writer", presetCfg, "cohub-team-writing") === true);
-check("① co-editor 允许", isRoleAllowed("co-editor", presetCfg, "cohub-team-writing") === true);
-check("① co-fixer 拒绝", isRoleAllowed("co-fixer", presetCfg, "cohub-team-writing") === false);
+check("① co-writer 允许", isRoleAllowed("co-writer", presetCfg, "cohub-team-writing-group") === true);
+check("① co-editor 允许", isRoleAllowed("co-editor", presetCfg, "cohub-team-writing-group") === true);
+check("① co-fixer 拒绝", isRoleAllowed("co-fixer", presetCfg, "cohub-team-writing-group") === false);
 check("① 错误文案与任务书示例逐字一致",
-  describeRoleNotAllowed("co-fixer", presetCfg, "cohub-team-writing")
-    === '角色 "co-fixer" 不在当前团队 "写作组"(writing) 内；该团队可用角色：co-writer, co-editor');
+  describeRoleNotAllowed("co-fixer", presetCfg, "cohub-team-writing-group")
+    === '角色 "co-fixer" 不在当前团队 "写作组"(writing-group) 内；该团队可用角色：co-writer, co-editor');
 check("① resolveTeamFilter source=preset（命中预设路径）",
-  resolveTeamFilter(presetCfg, "cohub-team-writing").source === "preset");
+  resolveTeamFilter(presetCfg, "cohub-team-writing-group").source === "preset");
 check("② presetId=standard（非团队预设）→ 不限制",
   isRoleAllowed("co-fixer", presetCfg, "standard") === true
   && resolveTeamFilter(presetCfg, "standard").team === null);
@@ -140,9 +140,9 @@ check("③ presetId 未传（undefined）→ 沿用旧 activeTeam 判定（不�
   isRoleAllowed("co-fixer", writingCfg) === false);
 check("④ 团队显式 presetId 生效：命中自定义预设 id",
   isRoleAllowed("co-fixer", { teams: [{ ...WRITING, presetId: "my-writing-preset" }] }, "my-writing-preset") === false
-  && resolveSessionTeam({ teams: [{ ...WRITING, presetId: "my-writing-preset" }] }, "my-writing-preset")?.id === "writing");
+  && resolveSessionTeam({ teams: [{ ...WRITING, presetId: "my-writing-preset" }] }, "my-writing-preset")?.id === "writing-group");
 check("④ 显式 presetId 时推导 id 不再命中（回退不限制）",
-  resolveSessionTeam({ teams: [{ ...WRITING, presetId: "my-writing-preset" }] }, "cohub-team-writing") === null);
+  resolveSessionTeam({ teams: [{ ...WRITING, presetId: "my-writing-preset" }] }, "cohub-team-writing-group") === null);
 
 // ── 用例 6：取不到 agentPresets 服务 → 不抛且不限制（fail-soft） ──────────
 group("用例 6：预设解析 fail-soft");
@@ -166,24 +166,24 @@ const sessionCtx = {
   reflect: {
     get: () => ({
       composedPreset: () => { throw new Error("boom"); },
-      presetForSession: () => "cohub-team-writing",
+      presetForSession: () => "cohub-team-writing-group",
     }),
   },
   logger: fakeLogger,
 };
 check("⑤ composedPreset 失败 → 用 presetForSession 兜底（命中团队预设）",
-  resolveAgentPresetId(sessionCtx, { ctx: {}, session: { id: "s1" } }) === "cohub-team-writing");
+  resolveAgentPresetId(sessionCtx, { ctx: {}, session: { id: "s1" } }) === "cohub-team-writing-group");
 const composedCtx = {
   reflect: {
     get: () => ({
-      composedPreset: () => "cohub-team-writing",
+      composedPreset: () => "cohub-team-writing-group",
       presetForSession: () => "standard",
     }),
   },
   logger: fakeLogger,
 };
 check("⑤ composedPreset 优先于 presetForSession",
-  resolveAgentPresetId(composedCtx, { ctx: {}, session: { id: "s1" } }) === "cohub-team-writing");
+  resolveAgentPresetId(composedCtx, { ctx: {}, session: { id: "s1" } }) === "cohub-team-writing-group");
 
 // ── 汇总 ────────────────────────────────────────────────────────────────
 console.log("");

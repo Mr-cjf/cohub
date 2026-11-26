@@ -17,6 +17,7 @@
 //
 // fail-soft：没有 agentPresets 服务、单个团队注册失败 → 只 warn，绝不抛（不阻断插件启动）。
 
+import { BUILTIN_TEAMS } from "./builtin-teams.ts";
 import { resolveSkillSnapshot } from "./roles.ts";
 import type { CohubPresetDef } from "./preset-runtime";
 
@@ -28,6 +29,9 @@ interface Logger {
 
 /** 团队预设的排序起点：排在包内档位预设（order < 50）之后 */
 export const TEAM_PRESET_ORDER_BASE = 50;
+
+/** 内置团队的排序起点：排在包内档位预设之后、用户团队（50 起）之前 */
+export const BUILTIN_TEAM_ORDER_BASE = 40;
 
 /** 团队配置的最小结构（与 index.ts 的 Team schema、roles.ts 的 TeamConfig 同形） */
 export interface TeamPresetSource {
@@ -96,11 +100,15 @@ export function teamPresetId(team: TeamPresetSource): string {
 
 /**
  * 队长回退规则（与 roles.ts 的 resolveTeamLead 同义，此处不导出该函数故就地实现）：
- *   ① lead 非空且 ∈ members；② members 含 co-orchestrator；③ members[0]；④ ""。
+ *   ① lead 非空且 ∈ members **或就是 co-orchestrator**；② members 含 co-orchestrator；
+ *   ③ members[0]；④ ""。
+ *
+ * ① 里的 co-orchestrator 例外是为内置团队服务的：它们的 members 只列专职子代理，lead 写主代理，
+ * 不放宽就会把内置团队的队长静默回退成 members[0]（见 builtin-teams.ts）。
  */
 function resolveTeamLead(team: TeamPresetSource, members: readonly string[]): string {
   const declared = typeof team.lead === "string" ? team.lead.trim() : "";
-  if (declared.length > 0 && members.includes(declared)) return declared;
+  if (declared.length > 0 && (members.includes(declared) || declared === "co-orchestrator")) return declared;
   if (members.includes("co-orchestrator")) return "co-orchestrator";
   return members[0] ?? "";
 }
@@ -183,20 +191,43 @@ export function buildTeamPresetPlugins(persona: string): unknown[] {
   ];
 }
 
+/** 单个团队 → 预设定义（内置团队与用户团队共用同一组装逻辑，避免两套分支漂移） */
+function buildTeamDef(team: TeamPresetSource, order: number, customRoles: readonly TeamPresetCustomRole[]): CohubPresetDef {
+  const teamId = typeof team.id === "string" ? team.id.trim() : "";
+  const members = cleanMembers(team);
+  const lead = resolveTeamLead(team, members);
+  const name = (typeof team.name === "string" && team.name.trim().length > 0 ? team.name.trim() : teamId);
+  const description =
+    `cohub 团队「${name}」：队长 ${lead || "（未指定）"}，成员 ${members.length > 0 ? members.join(", ") : "（无）"}`;
+  return {
+    id: teamPresetId(team),
+    name,
+    description,
+    order,
+    plugins: buildTeamPresetPlugins(buildTeamPersona(team, members, lead, customRoles)),
+  };
+}
+
 /**
- * 遍历 `config.teams` 生成可注册的预设定义。
+ * 生成可注册的预设定义：**内置团队 ∪ config.teams**（内置在前）。
  *
- * 跳过规则（fail-soft，只 warn 不抛）：
- *   · 团队 id 为空 → 无法推断预设 id；
- *   · 预设 id 与前面团队重复（含 presetId 手工撞车）→ 保留第一个。
- * order：`TEAM_PRESET_ORDER_BASE + 序号`（稳定顺序，排在包内档位预设之后）。
+ * 合并规则：
+ *   · 内置团队先产出，order = `BUILTIN_TEAM_ORDER_BASE + 序号`（40 / 41）；
+ *   · 用户团队在后，order = `TEAM_PRESET_ORDER_BASE + 序号`（50 起）；
+ *   · **id 冲突时用户优先**：用户团队的预设 id 一旦与内置团队相同（如用户自建 id=dev），
+ *     内置该条整体跳过——用户可用同名 id 覆盖内置团队（成员 / 名称 / presetId 全按用户版）；
+ *   · 用户团队之间的 id 重复仍按「保留第一个」处理（与改动前一致）。
+ *
+ * 跳过规则（fail-soft，只 warn 不抛）：团队 id 为空 → 无法推断预设 id。
+ * 内置团队不读配置，故「Config.teams 清空」不会让它们消失，只有插件 dispose 才统一卸载。
  */
 export function buildTeamPresetDefs(config?: TeamPresetConfig, logger?: Logger): CohubPresetDef[] {
   const teams = readList<TeamPresetSource>(config?.teams as never);
   const customRoles = readList<TeamPresetCustomRole>(config?.customRoles as never);
-  const defs: CohubPresetDef[] = [];
-  const used = new Set<string>();
 
+  // ① 用户团队（先算出 id 集合，供 ② 判冲突）
+  const userDefs: CohubPresetDef[] = [];
+  const used = new Set<string>();
   for (const [index, team] of teams.entries()) {
     const teamId = typeof team?.id === "string" ? team.id.trim() : "";
     if (teamId === "") {
@@ -209,22 +240,21 @@ export function buildTeamPresetDefs(config?: TeamPresetConfig, logger?: Logger):
       continue;
     }
     used.add(id);
-
-    const members = cleanMembers(team);
-    const lead = resolveTeamLead(team, members);
-    const name = (typeof team.name === "string" && team.name.trim().length > 0 ? team.name.trim() : teamId);
-    const description =
-      `cohub 团队「${name}」：队长 ${lead || "（未指定）"}，成员 ${members.length > 0 ? members.join(", ") : "（无）"}`;
-
-    defs.push({
-      id,
-      name,
-      description,
-      order: TEAM_PRESET_ORDER_BASE + index,
-      plugins: buildTeamPresetPlugins(buildTeamPersona(team, members, lead, customRoles)),
-    });
+    userDefs.push(buildTeamDef(team, TEAM_PRESET_ORDER_BASE + index, customRoles));
   }
-  return defs;
+
+  // ② 内置团队（用户优先：id 已被用户占用 → 跳过该条内置团队）
+  const builtinDefs: CohubPresetDef[] = [];
+  for (const [index, team] of BUILTIN_TEAMS.entries()) {
+    const id = teamPresetId(team);
+    if (used.has(id)) {
+      logger?.info?.(`cohub: 团队 ${team.id} 已被用户配置的同名团队覆盖（预设 id ${id}），跳过内置版本`);
+      continue;
+    }
+    builtinDefs.push(buildTeamDef(team, BUILTIN_TEAM_ORDER_BASE + index, customRoles));
+  }
+
+  return [...builtinDefs, ...userDefs];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -478,8 +508,10 @@ export async function syncTeamPresets(ctx: any, logger: Logger | undefined, conf
     if (typeof team?.id !== "string" || team.id.trim().length === 0) continue;
     sources.set(teamPresetId(team), team);
   }
+  // 内置团队没有配置来源：成员数从内置表取（日志用）；用户同名覆盖时以 sources 为准。
+  const builtinById = new Map<string, TeamPresetSource>(BUILTIN_TEAMS.map((team) => [teamPresetId(team), team]));
   const membersOf = (id: string) => {
-    const team = sources.get(id);
+    const team = sources.get(id) ?? builtinById.get(id);
     return team === undefined ? 0 : cleanMembers(team).length;
   };
 

@@ -408,8 +408,9 @@ export {
   registerCohubPresets,
   unregisterCohubPresets,
 } from "./preset-runtime";
-// 测试与维护入口：团队 preset（Config.teams → Agent 预设）的定义生成 / 幂等同步 / 卸载
+// 测试与维护入口：团队 preset（内置团队 ∪ Config.teams → Agent 预设）的定义生成 / 幂等同步 / 卸载
 export {
+  BUILTIN_TEAM_ORDER_BASE,
   TEAM_PRESET_ORDER_BASE,
   buildTeamPersona,
   buildTeamPresetDefs,
@@ -419,6 +420,9 @@ export {
   teamPresetId,
   unregisterTeamPresets,
 } from "./team-presets.ts";
+// 测试与维护入口：内置团队事实源（dev / writing）
+export { BUILTIN_TEAMS } from "./builtin-teams.ts";
+export type { BuiltinTeam } from "./builtin-teams.ts";
 
 /**
  * 0.1 时代的 settings namespace 段 schema（settings.yaml 的 cohub.* 段）。

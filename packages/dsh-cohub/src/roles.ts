@@ -15,6 +15,7 @@
 // 批次 2（本批）：delegate.ts / delegate_batch.ts 接线——技能查表改为「内置 ∪ 自定义」
 // 的统一快照 {@link resolveSkillSnapshot}，工具裁剪与 preset 都经 resolveTier / TIER_TOOLS
 // / presetForTier 派生，内置角色与自定义角色走同一条路径。
+import { BUILTIN_TEAMS } from "./builtin-teams.ts";
 import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
 
 /** 工具档位：子代理能碰到的工具面分级 */
@@ -371,7 +372,10 @@ export function resolveSessionTeam(
 ): ActiveTeam | null {
   const preset = (presetId ?? "").trim();
   if (preset.length === 0) return null;
-  const matched = (config?.teams ?? []).find((team) => teamPresetId(team) === preset);
+  // 用户团队优先：用户用同名 id 覆盖内置团队时，限员按用户版本执行（与 team-presets.ts 的
+  // 「id 冲突时用户优先」同一规则）。内置团队没有 presetId 字段，故一律按 cohub-team-<id> 推导。
+  const matched = (config?.teams ?? []).find((team) => teamPresetId(team) === preset)
+    ?? BUILTIN_TEAMS.find((team) => teamPresetId(team) === preset);
   if (matched === undefined) return null;
   return buildActiveTeam(matched, (matched.id ?? "").trim());
 }
@@ -418,17 +422,20 @@ export function resolveTeamFilter(
 
 /**
  * 队长回退规则（唯一判定源）：
- *   ① `team.lead` 非空且 ∈ members → 用它（显式指定优先）；
+ *   ① `team.lead` 非空且 ∈ members **或就是 co-orchestrator** → 用它（显式指定优先）；
  *   ② 否则 members 含 `co-orchestrator` → 用它（默认主代理仍在团队里，不加人格注入）；
  *   ③ 否则 members[0]（没指定就把第一成员当队长）；
  *   ④ members 为空 → ""（叫不出队长，调用方按「无队长」处理）。
  *
  * 为什么 ① 要求 ∈ members：配置里 lead 可能指向一个已从团队删掉的角色（热改配置的常见残留形态），
  * 此时按「没指定」处理、走回退，比让一个不在团队的幽灵角色当队长更可诊断。
+ * 唯一的例外是 `co-orchestrator`：它是主代理本身，内置团队（builtin-teams.ts 的 dev / writing）
+ * 的 members 只列专职子代理、不列主代理，而其 lead 明确写 `co-orchestrator`——若不放宽，
+ * 内置团队的队长会被静默回退成 members[0]（例如 co-fixer），人格与团队语义就错位了。
  */
 function resolveTeamLead(team: TeamConfig, members: readonly string[]): string {
   const declared = (team.lead ?? "").trim();
-  if (declared.length > 0 && members.includes(declared)) return declared;
+  if (declared.length > 0 && (members.includes(declared) || declared === PRIMARY_AGENT_ROLE)) return declared;
   if (members.includes(PRIMARY_AGENT_ROLE)) return PRIMARY_AGENT_ROLE;
   return members[0] ?? "";
 }
