@@ -89,6 +89,18 @@ export interface StallDetectorConfig {
   loopCount?: number;
   graceMs?: number;
   recoverable?: boolean;
+  /**
+   * 降级为「只告警不中止」的信号档位：只认 S2（无结果空转）/ S3（纯推理无动作）。
+   * S1（连续同类错误）与 S4（重复调用循环）恒为致命档，不提供开关。
+   * 缺省 `["S2","S3"]`；显式空数组 = 全部保留杀戮权（退回改动前的旧行为）。
+   */
+  advisorySignals?: readonly string[];
+  /**
+   * 告警升级上限（毫秒）：告警档持续满足条件超过它 → 升级为中止。
+   * 单体 delegate 的 `wallClockBudgetMs` 只在 delegate_batch 生效（delegate 内仅打日志），
+   * 没有这层上限时「不杀」会让一个子代理无限静默挂着。缺省 = `idleMs × 2`。
+   */
+  advisoryMaxMs?: number;
   /** 内部：判定检查间隔（毫秒），非 schema 字段（测试/低延迟部署可覆盖；缺省 1000） */
   checkIntervalMs?: number;
 }
@@ -97,6 +109,27 @@ export interface StallDetectorConfig {
 export interface StallInfo {
   signals: string[];
   diagnostics: string;
+  /** true = 这是 advisory 告警（未中止）；省略 = 中止触发（与改动前逐字兼容） */
+  advisory?: boolean;
+  /** true = 由 advisory 告警超上限升级而来的中止（S2/S3 的兜底路径） */
+  escalated?: boolean;
+}
+
+/**
+ * advisory 档位归一：只认 S2/S3（其余值忽略，大小写与空白不敏感）。
+ * 省略（undefined/null）→ 默认 `["S2","S3"]`；显式给出但过滤后为空 → `[]`（= 全部保留杀戮权）。
+ * 注意不用 `||` 兜底：`[]` 是用户明确表达的「退回旧行为」，不能被默认值覆盖。
+ */
+export function normalizeAdvisorySignals(value: unknown): string[] {
+  if (value === undefined || value === null) return ["S2", "S3"];
+  const raw = Array.isArray(value) ? value : [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const sig = item.trim().toUpperCase();
+    if ((sig === "S2" || sig === "S3") && !out.includes(sig)) out.push(sig);
+  }
+  return out;
 }
 
 /**
@@ -1019,15 +1052,18 @@ export function describeFailureDetail(value: unknown): string | undefined {
  * 纯观测器：不修改子代理内容，只决定「是否提前中止」（控制侧动作）。
  * 组合判定：S1 或（S2/S3/S4 任一），且「距最近一次成功工具结果 > graceMs」（最近成功过不触发）。
  */
-class StallWatchdog {
+export class StallWatchdog {
   private readonly cfg: Required<StallDetectorConfig>;
   private readonly onStall: (info: StallInfo) => void;
+  private readonly onAdvisory: ((info: StallInfo) => void) | undefined;
   private off: (() => void) | null = null;
   private timer: any = null;
   private boundId: string | null = null;
   private buffer = new Map<string, any[]>();
   private triggered = false;
   private readonly maxBuffer = 5000;
+  /** advisory（只告警不中止）记账：sent=是否已发过告警；since=首次告警时刻；signals=当时的档位 */
+  private advisory = { sent: false, since: 0, signals: [] as string[] };
 
   // 观测状态（每次 spawn 全新）
   private s = {
@@ -1046,18 +1082,23 @@ class StallWatchdog {
     pendingCall: null as { key: string; callId: unknown } | null,
   };
 
-  constructor(cfg: StallDetectorConfig, onStall: (info: StallInfo) => void) {
+  constructor(cfg: StallDetectorConfig, onStall: (info: StallInfo) => void, onAdvisory?: (info: StallInfo) => void) {
+    const idleMs = Math.max(0, cfg.idleMs ?? 600_000);
     this.cfg = {
       enabled: cfg.enabled ?? false,
       consecutiveErrors: Math.max(1, Math.trunc(cfg.consecutiveErrors ?? 3)),
-      idleMs: Math.max(0, cfg.idleMs ?? 600_000),
+      idleMs,
       reasoningWithoutAction: Math.max(1, Math.trunc(cfg.reasoningWithoutAction ?? 50)),
       loopCount: Math.max(1, Math.trunc(cfg.loopCount ?? 3)),
       graceMs: Math.max(0, cfg.graceMs ?? 30_000),
       recoverable: cfg.recoverable ?? true,
+      advisorySignals: normalizeAdvisorySignals(cfg.advisorySignals),
+      // 缺省 = idleMs × 2：S2/S3 告警后的兜底升级上限（单体 delegate 无 wallClock 兜底）
+      advisoryMaxMs: Math.max(0, cfg.advisoryMaxMs ?? idleMs * 2),
       checkIntervalMs: Math.max(50, cfg.checkIntervalMs ?? 1000),
     };
     this.onStall = onStall;
+    this.onAdvisory = onAdvisory;
   }
 
   /** 挂载事件总线监听与定时检查；ctx.on 缺失（无事件源）返回 false → 调用方按降级处理 */
@@ -1166,7 +1207,20 @@ class StallWatchdog {
     this.check();
   }
 
-  /** 统一判定：S1 或（S2/S3/S4 任一）且距最近成功工具结果 > graceMs */
+  /** 清除 advisory 记账（条件不再满足 / 已中止）：新一轮条件满足重新计「持续」时长 */
+  private resetAdvisory() {
+    if (!this.advisory.sent && this.advisory.since === 0) return;
+    this.advisory = { sent: false, since: 0, signals: [] };
+  }
+
+  /**
+   * 统一判定：分两档。
+   *   - **致命档** → 立即中止（`triggered` one-shot → `onStall` → `ac.abort()`，与改动前逐字同义）：
+   *     S1 连续同类错误、S4 重复调用循环，以及**未被 `advisorySignals` 降级的** S2/S3。
+   *   - **告警档** → 只发一次 warning（`onAdvisory`）后**继续评估**，不设 `triggered`：
+   *     `advisorySignals` 内的 S2/S3；持续满足超过 `advisoryMaxMs` 才升级为中止。
+   * 两档共用同一道 `graceMs` 门（最近成功过且未超宽限则既不中止也不告警）。
+   */
   private check() {
     if (this.triggered) return;
     const s = this.s;
@@ -1176,22 +1230,65 @@ class StallWatchdog {
     const s2 = s.lastActivityAt > 0 && (now - s.lastActivityAt) > cfg.idleMs;
     const s3 = s.reasoningStreak >= cfg.reasoningWithoutAction;
     const s4 = s.loopStreak >= cfg.loopCount;
-    const fired: string[] = [];
-    if (s1) fired.push("S1:连续同类错误x" + s.consecutiveErrors);
-    if (s2) fired.push("S2:无结果空转");
-    if (s3) fired.push("S3:纯推理无动作x" + s.reasoningStreak);
-    if (s4) fired.push("S4:重复调用循环x" + s.loopStreak);
-    if (fired.length === 0) return;
-    // 宽限窗口：最近成功过且未超宽限 → 不触发
+    if (!s1 && !s2 && !s3 && !s4) { this.resetAdvisory(); return; }
+    // 宽限窗口：最近成功过且未超宽限 → 既不中止也不告警（S2 的 graceMs 门语义保持不变）
     const graceOk = s.lastSuccessAt === 0 || (now - s.lastSuccessAt) > cfg.graceMs;
-    if (!graceOk) return;
-    this.triggered = true;
-    const diag = "停滞检测触发 [" + fired.join(", ") + "]；距最近成功工具结果 "
-      + (s.lastSuccessAt === 0 ? "无" : (now - s.lastSuccessAt) + "ms")
-      + "；最近工具结果 " + (s.lastToolResultAt === 0 ? "无" : (now - s.lastToolResultAt) + "ms 前");
-    const info: StallInfo = { signals: fired, diagnostics: diag };
-    // 延迟到微任务：避免在事件派发栈内重入中止；detach 后（run 已结束）不再触发
-    queueMicrotask(() => { if (this.triggered && this.off) this.onStall(info); });
+    if (!graceOk) { this.resetAdvisory(); return; }
+    const advisoryOn = new Set(cfg.advisorySignals);
+    const fatal: string[] = [];
+    const advisoryNow: string[] = [];
+    // S1/S4 恒为致命档：签名相同的错误连击与死循环必须先止血，不给配置开关
+    if (s1) fatal.push("S1:连续同类错误x" + s.consecutiveErrors);
+    if (s4) fatal.push("S4:重复调用循环x" + s.loopStreak);
+    // S2/S3：命中 advisorySignals → 降级为告警档；未命中 → 保留旧杀戮权
+    if (s2) (advisoryOn.has("S2") ? advisoryNow : fatal).push("S2:无结果空转");
+    if (s3) (advisoryOn.has("S3") ? advisoryNow : fatal).push("S3:纯推理无动作x" + s.reasoningStreak);
+    const silentMs = s.lastActivityAt > 0 ? now - s.lastActivityAt : -1;
+    const sinceSuccess = s.lastSuccessAt === 0 ? "无" : (now - s.lastSuccessAt) + "ms";
+    if (fatal.length > 0) {
+      // 致命档：立即中止。此前已发过告警的，语义上是「升级」，诊断里说明。
+      const escalated = this.advisory.sent;
+      const fired = [...new Set(fatal.concat(advisoryNow).concat(this.advisory.signals))];
+      const diag = "停滞检测触发 [" + fired.join(", ") + "]；距最近成功工具结果 " + sinceSuccess
+        + "；最近工具结果 " + (s.lastToolResultAt === 0 ? "无" : (now - s.lastToolResultAt) + "ms 前")
+        + (escalated ? "；已由停滞告警升级（告警持续 " + (now - this.advisory.since) + "ms）" : "");
+      this.triggered = true;
+      const info: StallInfo = {
+        signals: fired,
+        diagnostics: diag,
+        ...(escalated ? { escalated: true } : {}),
+      };
+      // 延迟到微任务：避免在事件派发栈内重入中止；detach 后（run 已结束）不再触发
+      queueMicrotask(() => { if (this.triggered && this.off) this.onStall(info); });
+      return;
+    }
+    // 告警档：只在首次发一条 warning（不刷屏），不中止、不设 triggered → 继续评估
+    if (!this.advisory.sent) {
+      this.advisory = { sent: true, since: now, signals: advisoryNow.slice() };
+      const info: StallInfo = {
+        signals: advisoryNow.slice(),
+        diagnostics: "停滞告警（未中止）[" + advisoryNow.join(", ") + "]；距最近活动 "
+          + (silentMs < 0 ? "无" : silentMs + "ms")
+          + "；持续满足超过 " + cfg.advisoryMaxMs + "ms 未恢复将升级为中止；距最近成功工具结果 " + sinceSuccess,
+        advisory: true,
+      };
+      queueMicrotask(() => { if (this.off && !this.triggered) this.onAdvisory?.(info); });
+      return;
+    }
+    // 已告警且条件仍持续满足：超过上限 → 升级为中止（单体 delegate 的墙钟兜底）
+    const heldMs = now - this.advisory.since;
+    if (heldMs > cfg.advisoryMaxMs) {
+      const fired = [...new Set(this.advisory.signals.concat(advisoryNow))];
+      this.triggered = true;
+      const info: StallInfo = {
+        signals: fired,
+        diagnostics: "停滞检测触发（告警超上限，已升级为中止）[" + fired.join(", ") + "]；告警已持续 "
+          + heldMs + "ms（上限 " + cfg.advisoryMaxMs + "ms）；距最近活动 "
+          + (silentMs < 0 ? "无" : silentMs + "ms") + "；距最近成功工具结果 " + sinceSuccess,
+        escalated: true,
+      };
+      queueMicrotask(() => { if (this.triggered && this.off) this.onStall(info); });
+    }
   }
 }
 
@@ -1982,14 +2079,19 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
       retryableReasons: retryCfg?.retryableReasons ?? ["aborted"],
     };
     // N2（P3-1）：停滞检测配置归一（默认关闭，阈值保守）
+    const stallIdleMs = Math.max(0, retryCfg?.stall?.idleMs ?? 600_000);
     const stall = {
       enabled: retryCfg?.stall?.enabled ?? false,
       consecutiveErrors: Math.max(1, Math.trunc(retryCfg?.stall?.consecutiveErrors ?? 3)),
-      idleMs: Math.max(0, retryCfg?.stall?.idleMs ?? 600_000),
+      idleMs: stallIdleMs,
       reasoningWithoutAction: Math.max(1, Math.trunc(retryCfg?.stall?.reasoningWithoutAction ?? 50)),
       loopCount: Math.max(1, Math.trunc(retryCfg?.stall?.loopCount ?? 3)),
       graceMs: Math.max(0, retryCfg?.stall?.graceMs ?? 30_000),
       recoverable: retryCfg?.stall?.recoverable ?? true,
+      // S2/S3 降级为「只告警不中止」的档位；显式空数组 = 全部保留杀戮权（旧行为）
+      advisorySignals: normalizeAdvisorySignals(retryCfg?.stall?.advisorySignals),
+      // 告警升级上限：缺省 = idleMs × 2（单体 delegate 无 wallClock 兜底，必须留上限）
+      advisoryMaxMs: Math.max(0, retryCfg?.stall?.advisoryMaxMs ?? stallIdleMs * 2),
       checkIntervalMs: Math.max(50, retryCfg?.stall?.checkIntervalMs ?? 1000),
     };
     const scheduleCfg = settingsNow.schedule ?? config.schedule;
@@ -2263,9 +2365,14 @@ export function createDelegateTool(ctx: any, getRoutes: SkillRouteSource, config
           let stallInfo: StallInfo | null = null;
           if (ac) {
             watchdog = new StallWatchdog(stall, (info) => {
+              // 致命档（或告警超上限升级）：中止子代理，走原路径
               stallInfo = info;
               ctx.logger?.info?.("[cohub stall] " + JSON.stringify(info));
               forwardAbort();
+            }, (info) => {
+              // 告警档（S2/S3）：只发 warning、不中止。复用既有 logger 出口（不新造事件体系）；
+              // 内容是结构化 StallInfo（含档位 signals / 静默时长 / 升级上限说明），外面能直接看到。
+              ctx.logger?.warn?.("[cohub stall advisory] " + JSON.stringify(info));
             });
             const attached = watchdog.attach(ctx);
             if (!attached) {

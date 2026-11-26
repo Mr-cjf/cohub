@@ -229,6 +229,20 @@ const StallDetector = z.object({
   graceMs: z.number().default(30_000),
   /** 触发后是否按可重试中止处理（进入 retryableReasons 判定与 maxRetries 预算） */
   recoverable: z.boolean().default(true),
+  /**
+   * 降级为「只告警不中止」的信号档位：只认 S2（无结果空转）/ S3（纯推理无动作），
+   * 大小写与空白不敏感、其余值忽略。S1（连续同类错误）与 S4（重复调用循环）恒直接中止。
+   * 默认 `["S2","S3"]`；**空数组 = 全部保留杀戮权**（退回本配置项引入前的旧行为）。
+   * 告警经 `logger.warn` 以 `[cohub stall advisory] {signals, diagnostics}` 输出，不中止子代理。
+   */
+  advisorySignals: z.array(z.string()).default(["S2", "S3"]),
+  /**
+   * 告警升级上限（毫秒）：告警档持续满足条件超过它 → 升级为中止（`escalated=true`）。
+   * 单体 delegate 的 `wallClockBudgetMs` 只在 delegate_batch 生效（delegate 内仅打日志），
+   * 没有这层上限时「不杀」会让单个子代理无限静默挂着。
+   * **省略 = `idleMs × 2`**；`0` = 告警后下一次检查即升级。
+   */
+  advisoryMaxMs: z.number().description("告警升级上限毫秒；省略 = idleMs × 2；0 = 告警后立即升级"),
 }).default({});
 
 /** delegate 中止/失败自动重试配置（P1-2）：默认不重试（maxRetries=0），保持现状 */
