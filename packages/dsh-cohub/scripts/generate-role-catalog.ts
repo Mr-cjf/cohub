@@ -7,7 +7,8 @@
  *   2. src/roles.ts：BUILTIN_ROLE_TIERS（角色→档位）、TIER_TO_PRESET（档位→preset）、
  *      TIER_TOOLS（派发层 deny 表）、ALL_TIERS；
  *   3. presets/<preset>/agent.cordis.yml：真实挂载的 `- id: / name: '@deepseek-ai/dsh-tool-*'`
- *      行 + config 开关（write / edit / fetch）+ `disabled: !!js ...` 平台门控。
+ *      行 + config 开关（write / edit / fetch）+ `disabled: !!js ...` 平台门控；
+ *   4. src/builtin-teams.ts 的 BUILTIN_TEAMS：内置团队（客户端「团队」区块只读展示 + 复制模板）。
  *
  * 产物（**只有一份**数据落盘，真实数据不进源码）：
  *   · src/client/role-catalog.data.js —— 纯 ESM（无 import / 无 Node API），`export const ROLE_CATALOG = {...}`；
@@ -25,6 +26,7 @@ import { fileURLToPath } from "node:url";
 
 import { COHUB_SKILLS } from "../src/skills.ts";
 import { ALL_TIERS, BUILTIN_ROLE_TIERS, SHELL_TOOL, TIER_TOOLS, TIER_TO_PRESET } from "../src/roles.ts";
+import { BUILTIN_TEAMS } from "../src/builtin-teams.ts";
 import type { Tier } from "../src/roles.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -79,12 +81,26 @@ interface TierEntry {
   deny: string[];
 }
 
+/** 内置团队（客户端展示用；结构与 BuiltinTeam 一致，builtin 恒为 true） */
+interface BuiltinTeamEntry {
+  id: string;
+  name: string;
+  description: string;
+  members: string[];
+  lead: string;
+  builtin: true;
+}
+
 /** 角色目录整体 */
 interface RoleCatalog {
   generatedAt: string;
   tiers: Record<string, TierEntry>;
   roles: Record<string, { tier: Tier | null; description: string; brief: string; content: string }>;
+  builtinTeams: BuiltinTeamEntry[];
 }
+
+/** 内置团队条数下限（两套：dev / writing；客户端「团队」区块先渲染它们） */
+const MIN_BUILTIN_TEAMS = 2;
 
 /** 去掉 `@deepseek-ai/` 前缀，得到插件短名（dsh-tool-fs / mcp-github …） */
 function shortName(raw: string): string {
@@ -230,13 +246,23 @@ function buildCatalog(generatedAt: string): RoleCatalog {
     };
   }
 
-  return { generatedAt, tiers, roles };
+  const builtinTeams: BuiltinTeamEntry[] = BUILTIN_TEAMS.map((team) => ({
+    id: team.id,
+    name: team.name,
+    description: team.description,
+    members: team.members.slice(),
+    lead: team.lead,
+    builtin: true as const,
+  }));
+
+  return { generatedAt, tiers, roles, builtinTeams };
 }
 
 const HEADER_DATA = [
   "// 自动生成，请勿手动编辑。源：scripts/generate-role-catalog.ts",
   "// 数据来源：src/skills.ts（name/description/brief/content）、src/roles.ts（档位映射与 deny 表）、",
-  "//          presets/<preset>/agent.cordis.yml（真实挂载的插件行 + config 开关 + 平台门控）",
+  "//          presets/<preset>/agent.cordis.yml（真实挂载的插件行 + config 开关 + 平台门控）、",
+  "//          src/builtin-teams.ts（内置团队：只读展示 + 复制模板）",
   "// 浏览器消费：纯 ESM，无 import、无 Node API；由 scripts/build-client.js 拼进 lib/client.js。",
 ].join("\n");
 
@@ -308,6 +334,23 @@ function main(): void {
   const writeTools = catalog.tiers["rw"]!.tools;
   if (!writeTools.some((tool) => tool.label === "Shell")) throw new Error("❌ rw 档应含 Shell");
 
+  // 内置团队自验：两套随包发布的团队必须齐、成员不能空（客户端「团队」区块直接渲染它们）。
+  if (catalog.builtinTeams.length !== MIN_BUILTIN_TEAMS) {
+    throw new Error(`❌ 内置团队数不符：${catalog.builtinTeams.length}（应为 ${MIN_BUILTIN_TEAMS}）`);
+  }
+  const teamIds = new Set<string>();
+  for (const team of catalog.builtinTeams) {
+    if (team.id.trim() === "") throw new Error("❌ 内置团队缺 id");
+    if (teamIds.has(team.id)) throw new Error(`❌ 内置团队 id 重复：${team.id}`);
+    teamIds.add(team.id);
+    if (team.name.trim() === "") throw new Error(`❌ 内置团队 ${team.id} 缺名称`);
+    if (team.members.length === 0) throw new Error(`❌ 内置团队 ${team.id} 成员为空`);
+    if (team.members.some((name) => typeof name !== "string" || name.trim() === "")) {
+      throw new Error(`❌ 内置团队 ${team.id} 含空成员名`);
+    }
+    if (team.builtin !== true) throw new Error(`❌ 内置团队 ${team.id} 缺少 builtin 标记`);
+  }
+
   // content 全文自验：16 个角色都必须带正文，且明显长于 brief（不是被截断的摘要）
   for (const [name, entry] of Object.entries(catalog.roles)) {
     if (typeof entry.content !== "string" || entry.content.trim().length === 0) {
@@ -326,7 +369,8 @@ function main(): void {
 
   const contentChars = Object.values(catalog.roles).reduce((sum, entry) => sum + entry.content.length, 0);
   console.log(
-    `✅ 已生成角色目录：${roleNames.length} 角色 / ${tierNames.length} 档位 → ` +
+    `✅ 已生成角色目录：${roleNames.length} 角色 / ${tierNames.length} 档位 / ` +
+      `${catalog.builtinTeams.length} 内置团队 → ` +
       `src/client/role-catalog.data.js（${data.bytes} 字节${data.changed ? "" : "，未变化"}；` +
       `content 合计 ${contentChars} 字）；lib/client.js 由 build-client.js 拼接`,
   );

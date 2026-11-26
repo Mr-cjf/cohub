@@ -89,7 +89,7 @@ if (endMatch.index < beginMatch.index) {
 const block = `    const ROLE_CATALOG = ${jsonText};`;
 const outputText =
   `${source.slice(0, beginMatch.index + beginMatch[0].length)}\n${block}\n    ${source.slice(endMatch.index)}`;
-if (outputText.includes("const ROLE_CATALOG = { tiers: {}, roles: {} };")) {
+if (outputText.includes("const ROLE_CATALOG = { tiers: {}, roles: {}, builtinTeams: [] };")) {
   throw new Error("构建失败：占位块未被替换，产物会呈现空目录");
 }
 
