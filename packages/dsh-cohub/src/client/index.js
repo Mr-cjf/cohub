@@ -12,7 +12,7 @@ window.__ModuleLoader__.load({
     var React = require("react");
 
     /* ────────────────────────────────────────────────────────────────
-     * CoHub 代理模型设置页（DSH 0.2.1）
+     * CoHub 代理设置页（DSH 0.2.1）
      *
      * 历史纠正（旧注释是错的，别再抄回去）：
      *   ❌「0.2 官方设置页会自动按 volatile 字段生成表单，无需客户端」
@@ -95,14 +95,8 @@ window.__ModuleLoader__.load({
 
     var zh = {
       nav: "CoHub 代理",
-      title: "CoHub 代理模型",
-      description: "为每个专职代理单独指定模型供应商与模型。留空则继承父模型；配置失效时自动回退。",
-      provider: "供应商",
-      model: "模型",
-      configured: "显式配置",
-      inherited: "继承父模型",
-      providerInherit: "（不配置，继承父模型）",
-      modelInherit: "（继承父模型）",
+      title: "CoHub 代理",
+      description: "团队 → 角色库。每个角色的提示词、绑定工具与运行模型（供应商 / 模型 / 推理强度 / 最大输出）统一在「角色库」里配置。",
       loading: "加载中…",
       unavailable: "当前设置不可用（宿主未提供 cohub 配置命名空间）。",
       readOnly: "当前连接只读，无法修改设置。",
@@ -114,17 +108,8 @@ window.__ModuleLoader__.load({
       saving: "保存中…",
       saved: "已保存。",
       discard: "放弃修改",
-      reset: "重置",
-      customModel: "输入模型 ID",
-      selectProviderFirst: "请先选择供应商",
       loadProvidersFailed: "模型供应商列表加载失败",
       emptyModel: "该供应商未提供模型目录",
-      unavailableOption: "{value}（不可用）",
-      reasoningEffort: "推理强度",
-      effortInherit: "（继承父会话）",
-      effortSelectModelFirst: "请先选择模型",
-      effortUnsupported: "该模型不支持",
-      effortUnsupportedOption: "{value}（当前模型不支持）",
       "skill.co-orchestrator": "调度编排",
       "skill.co-planner": "方案制定",
       "skill.co-oracle": "架构/代码审查",
@@ -292,14 +277,8 @@ window.__ModuleLoader__.load({
 
     var en = {
       nav: "CoHub agents",
-      title: "CoHub Agent Models",
-      description: "Pick a provider and model for each specialist agent. Leave blank to inherit the parent model; stale config auto-resets.",
-      provider: "Provider",
-      model: "Model",
-      configured: "Explicit",
-      inherited: "Inherited",
-      providerInherit: "(not set — inherit parent model)",
-      modelInherit: "(inherit parent model)",
+      title: "CoHub agents",
+      description: "Teams → Roles. Each role's prompt, bound tools and runtime model (provider / model / reasoning effort / max output) are configured in the role library.",
       loading: "Loading…",
       unavailable: "This setting is unavailable (the Host does not serve the cohub configuration namespace).",
       readOnly: "This connection is read-only; settings cannot be changed.",
@@ -311,17 +290,8 @@ window.__ModuleLoader__.load({
       saving: "Saving…",
       saved: "Saved.",
       discard: "Discard",
-      reset: "Reset",
-      customModel: "Enter model ID",
-      selectProviderFirst: "Select a provider first",
       loadProvidersFailed: "Failed to load the provider catalog",
       emptyModel: "This provider publishes no model catalog",
-      unavailableOption: "{value} (unavailable)",
-      reasoningEffort: "Reasoning effort",
-      effortInherit: "(inherit from parent session)",
-      effortSelectModelFirst: "Select a model first",
-      effortUnsupported: "Not supported by this model",
-      effortUnsupportedOption: "{value} (unsupported by this model)",
       "skill.co-orchestrator": "Orchestrator",
       "skill.co-planner": "Planner",
       "skill.co-oracle": "Architecture/code review",
@@ -2514,10 +2484,6 @@ window.__ModuleLoader__.load({
         ".cohub-row-id{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}",
         ".cohub-badge{margin-left:auto;border-radius:999px;padding:1px 8px;font-size:11px;line-height:17px;white-space:nowrap;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);}",
         ".cohub-badge-explicit{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary);}",
-        // 四列：供应商 / 模型 / 推理强度 / 重置。三列下拉都等分剩余宽度，重置按钮自适应。
-        ".cohub-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) auto;gap:8px;margin-top:8px;align-items:end;}",
-        // 窄容器下 4 列会把下拉压到不可读：退成两列（前三个字段各占一行两列，按钮贴右下）。
-        "@media (max-width:560px){.cohub-fields{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}}",
         ".cohub-field{display:flex;flex-direction:column;gap:4px;min-width:0;}",
         ".cohub-label{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;}",
         ".cohub-select,.cohub-input{box-sizing:border-box;width:100%;height:32px;font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:0 10px;font-size:13px;line-height:20px;}",
@@ -2537,7 +2503,7 @@ window.__ModuleLoader__.load({
         ".cohub-button-ghost{color:var(--dsw-alias-label-secondary);background:transparent;border:1px solid var(--dsw-alias-border-l2);}",
         ".cohub-button-ghost:hover:not(:disabled){color:var(--dsw-alias-label-primary);}",
         ".cohub-button:disabled{opacity:.45;cursor:default;}",
-        // ── 自定义团队区块（与上面的模型区块隔开，各自独立的草稿与保存按钮） ──
+        // ── 自定义团队区块（各自独立的草稿与保存按钮） ──
         ".cohub-roles{display:flex;flex-direction:column;gap:12px;margin-top:8px;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2);}",
         ".cohub-subtitle{margin:0;font-size:14px;font-weight:600;line-height:22px;}",
         ".cohub-role-summary{flex:1 1 140px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}",
@@ -2608,7 +2574,7 @@ window.__ModuleLoader__.load({
     /**
      * settings.section 页面。
      * @param props - 注入面：hooks.cohubSkills→useCohubSkills、动作、locale 提供的 t。
-     * @returns 每个代理一行（供应商下拉 + 模型下拉/手填 + 推理强度下拉 + 重置）与保存/放弃。
+     * @returns 页面结构：团队 → 角色库（角色的提示词 / 绑定工具 / 运行模型），底部是 Config.skills 的保存动作条。
      */
     function CohubSection(props) {
       var t = typeof props.t === "function" ? props.t : fallbackTranslate;
@@ -2630,170 +2596,7 @@ window.__ModuleLoader__.load({
 
       var locked = !state.writable || state.saving || state.conflicted;
       var providers = state.providers || [];
-      var modelsByProvider = state.modelsByProvider || {};
       var rows = state.rows || [];
-
-      function renderRow(row) {
-        var known = SKILL_NAMES.indexOf(row.name) >= 0;
-        var label = known ? t("skill." + row.name) : row.name;
-        var providerIds = [];
-        var providerOptions = [
-          React.createElement("option", { key: "__inherit", value: "" }, t("providerInherit"))
-        ];
-        for (var i = 0; i < providers.length; i += 1) {
-          providerIds.push(providers[i].id);
-          providerOptions.push(React.createElement("option", { key: providers[i].id, value: providers[i].id }, providers[i].label));
-        }
-        if (row.provider !== "" && providerIds.indexOf(row.provider) < 0) {
-          // 已存但当前目录里没有：给一个不可选回显项，避免下拉显示成第一项造成误读。
-          providerOptions.push(React.createElement("option", {
-            key: "__missing-provider",
-            value: row.provider,
-            disabled: true
-          }, state.catalogStatus === "ready" ? t("unavailableOption", { value: row.provider }) : row.provider));
-        }
-
-        var models = modelsByProvider[row.provider] || [];
-        var modelControl;
-        if (row.provider === "") {
-          modelControl = React.createElement("select", { className: "cohub-select", value: "", disabled: true },
-            React.createElement("option", { value: "" }, t("selectProviderFirst")));
-        } else if (state.catalogStatus === "loading") {
-          modelControl = React.createElement("select", { className: "cohub-select", value: "", disabled: true },
-            React.createElement("option", { value: "" }, t("loading")));
-        } else if (models.length > 0) {
-          // 未保存 model 时必须插入 value="" 的占位项。否则 <select value=""> 会被浏览器
-          // 渲染成列表第一项，用户以为已选、实际存的仍是空 → 子代理拿不到模型（UNKNOWN_MODEL）。
-          var modelOptions = [React.createElement("option", { key: "__inherit", value: "" }, t("modelInherit"))];
-          var modelIds = [];
-          for (var m = 0; m < models.length; m += 1) {
-            modelIds.push(models[m].id);
-            modelOptions.push(React.createElement("option", { key: models[m].id, value: models[m].id }, models[m].label));
-          }
-          if (row.model !== "" && modelIds.indexOf(row.model) < 0) {
-            modelOptions.push(React.createElement("option", {
-              key: "__missing-model",
-              value: row.model,
-              disabled: true
-            }, t("unavailableOption", { value: row.model })));
-          }
-          modelControl = React.createElement("select", {
-            className: "cohub-select",
-            value: row.model === "" ? "" : row.model,
-            disabled: locked,
-            "aria-label": label + " · " + t("model"),
-            onChange: function (event) {
-              props.editRow(row.name, "model", event.target.value);
-            }
-          }, modelOptions);
-        } else {
-          // 该供应商没有可用模型目录（或目录加载失败）→ 降级为手填 model id。
-          modelControl = React.createElement("input", {
-            className: "cohub-input",
-            type: "text",
-            value: row.model,
-            disabled: locked,
-            "aria-label": label + " · " + t("model"),
-            placeholder: state.catalogStatus === "ready" ? t("emptyModel") + " / " + t("customModel") : t("customModel"),
-            onChange: function (event) {
-              props.editRow(row.name, "model", event.target.value);
-            }
-          });
-        }
-
-        var configured = row.provider !== "" || row.model !== "" || effortOf(row) !== "";
-
-        // 第三个下拉：推理强度。档位来自模型目录（models[].reasoning.efforts），
-        // 按「供应商 + 模型」这一对查表；不支持的模型整个 reasoning 字段缺失 → 禁用并提示。
-        var currentEffort = effortOf(row);
-        var efforts = [];
-        if (row.provider !== "" && row.model !== "") {
-          var byModel = state.effortsByModel && state.effortsByModel[row.provider];
-          var list = byModel ? byModel[row.model] : undefined;
-          if (Array.isArray(list)) efforts = list;
-        }
-        var effortControl;
-        if (row.provider === "") {
-          effortControl = React.createElement("select", { className: "cohub-select", value: "", disabled: true },
-            React.createElement("option", { value: "" }, t("selectProviderFirst")));
-        } else if (state.catalogStatus === "loading") {
-          effortControl = React.createElement("select", { className: "cohub-select", value: "", disabled: true },
-            React.createElement("option", { value: "" }, t("loading")));
-        } else if (row.model === "") {
-          effortControl = React.createElement("select", { className: "cohub-select", value: "", disabled: true },
-            React.createElement("option", { value: "" }, t("effortSelectModelFirst")));
-        } else if (efforts.length === 0) {
-          // 模型目录里没有该模型的 reasoning 信息（或手填了不在目录里的 model id）→ 不支持。
-          effortControl = React.createElement("select", { className: "cohub-select", value: "", disabled: true },
-            React.createElement("option", { value: "" }, t("effortUnsupported")));
-        } else {
-          // 与模型下拉同理：value="" 的继承占位项必须在首位，否则浏览器把第一档显示成已选，
-          // 而实际存的是空串（用户以为配了 high，其实继承父会话）。
-          var effortOptions = [React.createElement("option", { key: "__inherit", value: "" }, t("effortInherit"))];
-          var effortIds = [];
-          for (var e = 0; e < efforts.length; e += 1) {
-            effortIds.push(efforts[e].id);
-            effortOptions.push(React.createElement("option", { key: efforts[e].id, value: efforts[e].id }, efforts[e].label));
-          }
-          if (currentEffort !== "" && effortIds.indexOf(currentEffort) < 0) {
-            // 已配强度不在当前模型档位里（手改过 YAML / 换过模型）→ 给不可选回显项，别静默改成第一档。
-            effortOptions.push(React.createElement("option", {
-              key: "__missing-effort",
-              value: currentEffort,
-              disabled: true
-            }, t("effortUnsupportedOption", { value: currentEffort })));
-          }
-          effortControl = React.createElement("select", {
-            className: "cohub-select",
-            value: currentEffort,
-            disabled: locked,
-            "aria-label": label + " · " + t("reasoningEffort"),
-            onChange: function (event) {
-              props.editRow(row.name, "reasoningEffort", event.target.value);
-            }
-          }, effortOptions);
-        }
-
-        return React.createElement("li", { key: row.name, className: "cohub-row" },
-          React.createElement("div", { className: "cohub-row-head" },
-            React.createElement("span", { className: "cohub-row-name" }, label),
-            React.createElement("span", { className: "cohub-row-id" }, row.name),
-            React.createElement("span", {
-              className: configured ? "cohub-badge cohub-badge-explicit" : "cohub-badge"
-            }, configured ? t("configured") : t("inherited"))
-          ),
-          React.createElement("div", { className: "cohub-fields" },
-            React.createElement("div", { className: "cohub-field" },
-              React.createElement("label", { className: "cohub-label" }, t("provider")),
-              React.createElement("select", {
-                className: "cohub-select",
-                value: row.provider,
-                disabled: locked,
-                "aria-label": label + " · " + t("provider"),
-                onChange: function (event) {
-                  props.editRow(row.name, "provider", event.target.value);
-                }
-              }, providerOptions)
-            ),
-            React.createElement("div", { className: "cohub-field" },
-              React.createElement("label", { className: "cohub-label" }, t("model")),
-              modelControl
-            ),
-            React.createElement("div", { className: "cohub-field" },
-              React.createElement("label", { className: "cohub-label" }, t("reasoningEffort")),
-              effortControl
-            ),
-            React.createElement("button", {
-              type: "button",
-              className: "cohub-row-reset",
-              disabled: locked || !configured,
-              onClick: function () {
-                props.resetRow(row.name);
-              }
-            }, t("reset"))
-          )
-        );
-      }
 
       /* ── 自定义团队：增删改 Config.customRoles ─────────────────── */
 
@@ -3804,9 +3607,6 @@ window.__ModuleLoader__.load({
         )
       );
 
-      var items = [];
-      for (var i = 0; i < rows.length; i += 1) items.push(renderRow(rows[i]));
-
       var status = null;
       var statusClass = "cohub-status";
       if (state.conflicted) {
@@ -3842,7 +3642,10 @@ window.__ModuleLoader__.load({
         state.conflicted
           ? React.createElement("p", { className: "cohub-notice cohub-notice-warn" }, t("conflicted"))
           : null,
-        React.createElement("ul", { className: "cohub-rows" }, items),
+        teamsBlock,
+        rolesBlock,
+        // 角色库 / 角色编辑里的模型区写的是 Config.skills，统一由这条动作条落盘。
+        // 顶部「每个代理一行」的模型区块已移除，这里只剩保存 / 放弃与状态提示。
         React.createElement("div", { className: "cohub-actions" },
           status !== null ? React.createElement("p", { className: statusClass }, status) : null,
           React.createElement("button", {
@@ -3861,9 +3664,7 @@ window.__ModuleLoader__.load({
               props.save();
             }
           }, t(state.saving ? "saving" : "save"))
-        ),
-        teamsBlock,
-        rolesBlock
+        )
       );
     }
 
