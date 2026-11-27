@@ -8,8 +8,8 @@
 // 另覆盖：YAML → 对象 的一致性（plugins 条数 / Shell 行 / !!js 求值 / persona 块标量）。
 //
 // 用法：bun run build && node test/preset-runtime.ts（node >= 24）
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 // lib/ 是 bun 产物（无 .d.ts），在产物边界按 any 使用；类型正确性由 bun run typecheck:src 覆盖
 import * as libBuild from "../lib/index.js";
 const {
@@ -18,6 +18,8 @@ const {
   loadCohubPresetDefs,
   parseMiniYaml,
   evaluatePlatformExpr,
+  materializeJsTags,
+  assertCustomSkillDirs,
   COHUB_PRESETS_DIR,
   TEAM_OWNED_PRESET_IDS,
 }: any = libBuild;
@@ -135,6 +137,74 @@ check("group 行解析出 config 子序列", Array.isArray(compaction?.config) &
 const persona = cordis.plugins.find((line: any) => line.id === "persona");
 check("块标量 |- 保留了多行正文", typeof persona?.config?.prefix === "string" && persona.config.prefix.split("\n").length > 5);
 check("块标量正文里的 # 未被当注释剥掉", persona.config.prefix.includes("#"));
+
+// ── customSkillDirs：`!!js "fileURLToPath(new URL('skills/', baseUrl))"` 必须求值成字符串绝对路径 ──
+// 旧行为：序列项里的 `node:url` 冒号让整行被误切成映射 → customSkillDirs[0] 是对象 →
+// skill-filesystem 配校验失败（`$.customSkillDirs[0] expected string but got [object Object]`）。
+const skillFs = cordis.plugins.find((line: any) => line.id === "skill-filesystem");
+const customSkillDirs = skillFs?.config?.customSkillDirs;
+const presetDir = join(COHUB_PRESETS_DIR, "cohub-cordis");
+const expectedSkillsDir = resolve(presetDir, "skills");
+console.log("  实际解析出的 customSkillDirs：", JSON.stringify(customSkillDirs));
+check(
+  "skill-filesystem.customSkillDirs 是字符串数组",
+  Array.isArray(customSkillDirs) && customSkillDirs.length === 1
+    && customSkillDirs.every((entry: any) => typeof entry === "string"),
+);
+check(
+  "customSkillDirs[0] = preset 目录下的 skills 绝对路径",
+  Array.isArray(customSkillDirs) && resolve(String(customSkillDirs[0])) === expectedSkillsDir,
+);
+check(
+  "customSkillDirs[0] 指向真实存在的目录",
+  Array.isArray(customSkillDirs) && existsSync(String(customSkillDirs[0])),
+);
+
+// ── 无法识别的 `!!js` → warn + 丢弃，绝不产生非字符串值 ──────────────────────
+const dropLogger = makeLogger();
+const dropParsed = materializeJsTags(
+  parseMiniYaml([
+    "- id: skill-filesystem",
+    "  name: '@deepseek-ai/dsh-skill-filesystem'",
+    "  config:",
+    "    customSkillDirs:",
+    '      - !!js "process.getBuiltinModule(\'node:url\').fileURLToPath(new URL(\'skills/\', baseUrl))"',
+    "      - !!js someUnknownCall(1)",
+    "- id: tool-bash",
+    "  name: '@deepseek-ai/dsh-tool-bash'",
+    "  disabled: !!js someUnknownCall(2)",
+  ].join("\n")),
+  dropLogger,
+  process.platform,
+  "plugins",
+  presetDir,
+) as any[];
+const dropSkillFs = dropParsed.find((line: any) => line.id === "skill-filesystem");
+const dropDirs = dropSkillFs?.config?.customSkillDirs;
+const dropBash = dropParsed.find((line: any) => line.id === "tool-bash");
+check(
+  "无法识别的 !!js 数组项被丢弃（customSkillDirs 仍是纯字符串数组）",
+  Array.isArray(dropDirs) && dropDirs.length === 1 && typeof dropDirs[0] === "string"
+    && !JSON.stringify(dropDirs).includes("{"),
+);
+check(
+  "无法识别的 !!js 映射值不落进配置（disabled 键被丢弃，不传对象/原串）",
+  dropBash !== undefined && !("disabled" in dropBash),
+);
+check("丢弃时产生了 warn", dropLogger.warns.some((line: string) => line.includes("无法求值")));
+
+// 注册前兜底断言：对象项被剔除、字符串项保留
+const guardInput = [{
+  id: "skill-filesystem",
+  name: "@deepseek-ai/dsh-skill-filesystem",
+  config: { customSkillDirs: [{ bad: 1 }, expectedSkillsDir] },
+}];
+const guardLogger = makeLogger();
+assertCustomSkillDirs(guardInput as any, guardLogger);
+check(
+  "assertCustomSkillDirs 剔除对象项、保留字符串项",
+  deepEqual(guardInput[0]!.config.customSkillDirs, [expectedSkillsDir]) && guardLogger.warns.length === 1,
+);
 
 // !!js：文件里保留 `!!js <expr>`，按当前平台求值成真布尔（win32 → bash 禁用、pwsh 启用）
 const bashExpr = typeof writePluginsRaw.find((l: any) => l.id === "tool-bash")?.disabled === "string"

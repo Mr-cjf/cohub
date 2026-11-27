@@ -33,10 +33,21 @@
 //     非空字符串是 truthy，会把 `tool-pwsh` 也一起禁掉（win32 下反了、非 win32 也反了）。
 //     所以这里**在注册前按当前进程的 process.platform 就地求值成真正的布尔**：
 //     只支持 preset 里实际使用的两种比较写法（`===` / `!==`，可带前置 `!`），
-//     不 eval、不引入代码执行面；无法识别的表达式保留原字符串并 warn（宿主自己处理）。
+//     不 eval、不引入代码执行面。
+//
+//   `!!js "fileURLToPath(new URL('skills/', baseUrl))"` 的处理（cohub-cordis 的 customSkillDirs）：
+//     YAML 里写作 `- !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"`。
+//     baseUrl 是 **preset 自己的目录**（注释见该 yml），因此这里按「该 preset 目录的绝对路径」把它
+//     求值成真正的字符串：`<presetsDir>/<presetId>/skills`。若不求值而交给宿主，
+//     skill-filesystem 的 `customSkillDirs: string[]` 会拿到非字符串并让整个 preset 挂载失败。
+//     同样不 eval，只做受控的「相对段 + baseUrl」拼接，并拒绝逃出 preset 目录的 `..`。
+//
+//   无法识别的 `!!js`（两个求值器都不认）：
+//     **丢弃该键 / 该数组项**并 warn —— 绝不把对象或未求值字符串塞进宿主配置（那是一颗地雷）。
+//     注册前另有 {@link assertCustomSkillDirs} 兜底：`customSkillDirs` 里非 string 的项一律剔除。
 
 import { existsSync, readFileSync, readdirSync, type Dirent } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** 本包内置的 agent preset 目录（随 files 字段打包进 npm 包） */
@@ -221,6 +232,13 @@ export function parseMiniYaml(text: string): MiniYamlNode {
         out.push(parseBlock(indent + 1));
         continue;
       }
+      // `- !!js <expr>` 是**标量序列项**，不能进映射解析：表达式里可能带 `node:url` 的冒号，
+      // 会被 `key: value` 正则误切成对象（cohub-cordis 的 customSkillDirs 正是栽在这里）。
+      if (/^!!js(\s|$)/.test(rest)) {
+        cursor++;
+        out.push(parseScalar(rest));
+        continue;
+      }
       // 就地改写为等效映射行（缩进 +2），让 `- id: x` 与后续同项键走同一套映射解析
       lines[cursor] = { raw: " ".repeat(indent + 2) + rest, indent: indent + 2, content: rest };
       out.push(parseBlock(indent + 1));
@@ -247,6 +265,13 @@ export function parseMiniYaml(text: string): MiniYamlNode {
 
 const JS_TAG_PREFIX = /^!!js\s+([\s\S]+)$/;
 
+/** `fileURLToPath(new URL('<rel>', baseUrl))`，允许带 `process.getBuiltinModule('node:url').` 前缀 */
+const URL_DIR_EXPR =
+  /^(?:process\s*\.\s*getBuiltinModule\(\s*(['"])node:url\1\s*\)\s*\.\s*)?fileURLToPath\(\s*new\s+URL\(\s*(['"])([^'"]*)\2\s*,\s*baseUrl\s*\)\s*\)$/;
+
+/** 求值失败时的「丢弃」哨兵：数组项被 splice、映射键被 delete，绝不落进宿主配置 */
+const DROP_JS_TAG: unique symbol = Symbol("cohub.dropJsTag");
+
 /**
  * 求值 preset 里实际使用的 `!!js` 表达式。
  *
@@ -267,6 +292,54 @@ export function evaluatePlatformExpr(expr: string, platform: string = process.pl
 }
 
 /**
+ * 识别并求值 `fileURLToPath(new URL('<rel>/', baseUrl))` 形式的 `!!js`（cohub-cordis 的
+ * `skill-filesystem.config.customSkillDirs`）。
+ *
+ * 语义：`baseUrl` = **该 preset 自己的目录**（yml 里这么注释），故结果 = `resolve(baseDir, rel)`。
+ * 不做任何代码求值；相对段为绝对路径或试图 `..` 逃出 preset 目录时返回 undefined（视为不可识别）。
+ */
+export function evaluateUrlDirExpr(expr: string, baseDir: string): string | undefined {
+  const match = URL_DIR_EXPR.exec(unquoteScalar(expr.trim()));
+  if (match === null) return undefined;
+  const relative = match[3]!;
+  if (relative === "" || relative.startsWith("/") || relative.startsWith("\\") || /^[a-zA-Z]:/.test(relative)) return undefined;
+  const root = resolve(baseDir);
+  const target = resolve(root, relative);
+  const prefix = root.endsWith(sep) ? root : root + sep;
+  if (target !== root && !target.startsWith(prefix)) return undefined;
+  return target;
+}
+
+/**
+ * 注册前兜底断言：`skill-filesystem.config.customSkillDirs` 的每一项都必须是 string。
+ *
+ * 非字符串项（旧解析器把 `!!js "…node:url…"` 当映射键时产生的对象）就地剔除并 warn；
+ * 整个键不是数组时直接丢弃该键 —— 宁可少一个技能目录，也不要让整个 preset 挂载失败。
+ */
+export function assertCustomSkillDirs(plugins: readonly unknown[], logger?: Logger): void {
+  for (const line of plugins) {
+    if (line === null || typeof line !== "object" || Array.isArray(line)) continue;
+    const record = line as Record<string, unknown>;
+    if (record.name !== "@deepseek-ai/dsh-skill-filesystem") continue;
+    const config = record.config;
+    if (config === null || typeof config !== "object" || Array.isArray(config)) continue;
+    const cfg = config as Record<string, unknown>;
+    if (!("customSkillDirs" in cfg)) continue;
+    const dirs = cfg.customSkillDirs;
+    if (!Array.isArray(dirs)) {
+      logger?.warn?.(`cohub: skill-filesystem.customSkillDirs 不是数组（${typeof dirs}），已丢弃该键`);
+      delete cfg.customSkillDirs;
+      continue;
+    }
+    const kept = dirs.filter((entry): entry is string => typeof entry === "string");
+    if (kept.length !== dirs.length) {
+      logger?.warn?.(`cohub: skill-filesystem.customSkillDirs 含 ${dirs.length - kept.length} 个非字符串项，已剔除`);
+      cfg.customSkillDirs = kept;
+    }
+  }
+}
+
+/**
  * 把组合行里所有 `!!js <expr>` 字符串就地换成求值结果。
  *
  * 无法求值的表达式**保留原字符串**并交给宿主（logger 只 warn，不改变其它行）。
@@ -277,25 +350,45 @@ export function materializeJsTags(
   logger?: Logger,
   platform: string = process.platform,
   path = "plugins",
+  baseDir?: string,
 ): unknown {
   if (typeof node === "string") {
     const match = JS_TAG_PREFIX.exec(node.trim());
     if (match === null) return node;
-    const value = evaluatePlatformExpr(match[1]!, platform);
-    if (value === undefined) {
-      logger?.warn?.(`cohub: 无法求值的 !!js 表达式（原样交给宿主）：${path} = ${match[1]!}`);
-      return node;
+    const rawExpr = match[1]!.trim();
+    // `!!js "…"`：外层引号属于 YAML 标量，不是表达式的一部分
+    const expr = unquoteScalar(rawExpr);
+    const boolValue = evaluatePlatformExpr(expr, platform);
+    if (boolValue !== undefined) return boolValue;
+    if (baseDir !== undefined) {
+      const dirValue = evaluateUrlDirExpr(expr, baseDir);
+      if (dirValue !== undefined) return dirValue;
     }
-    return value;
+    // 求不出来就**丢弃**（不是原样交给宿主）：对象 / 未求值字符串都会把宿主配置搞崩
+    logger?.warn?.(`cohub: 无法求值的 !!js 表达式，已丢弃该键以免把非字符串值交给宿主：${path} = ${rawExpr}`);
+    return DROP_JS_TAG;
   }
   if (Array.isArray(node)) {
-    for (let i = 0; i < node.length; i++) node[i] = materializeJsTags(node[i], logger, platform, `${path}[${i}]`);
+    for (let i = 0; i < node.length; i++) {
+      const value = materializeJsTags(node[i], logger, platform, `${path}[${i}]`, baseDir);
+      if (value === DROP_JS_TAG) {
+        node.splice(i, 1);
+        i--;
+        continue;
+      }
+      node[i] = value;
+    }
     return node;
   }
   if (node !== null && typeof node === "object") {
     const record = node as Record<string, unknown>;
     for (const key of Object.keys(record)) {
-      record[key] = materializeJsTags(record[key], logger, platform, `${path}.${key}`);
+      const value = materializeJsTags(record[key], logger, platform, `${path}.${key}`, baseDir);
+      if (value === DROP_JS_TAG) {
+        delete record[key];
+        continue;
+      }
+      record[key] = value;
     }
     return record;
   }
@@ -374,7 +467,7 @@ export function loadCohubPresetDefs(presetsDir: string = COHUB_PRESETS_DIR, logg
       logger?.info?.(`cohub: preset ${entry.name} 由团队注册接管（内置 dev 团队），档位注册跳过`);
       continue;
     }
-    const dir = join(presetsDir, entry.name);
+    const dir = resolve(presetsDir, entry.name);
     const agentFile = join(dir, "agent.cordis.yml");
     if (!existsSync(agentFile)) continue;
     try {
@@ -384,7 +477,11 @@ export function loadCohubPresetDefs(presetsDir: string = COHUB_PRESETS_DIR, logg
         continue;
       }
       const meta = readPresetMeta(dir);
-      const plugins = materializeJsTags(parsed, logger) as unknown[];
+      // baseDir = 该 preset 自己的目录（yml 里 baseUrl 的语义）：
+      // `!!js "fileURLToPath(new URL('skills/', baseUrl))"` 在这里被求值成绝对路径字符串
+      const plugins = materializeJsTags(parsed, logger, process.platform, "plugins", dir) as unknown[];
+      // 注册前兜底：customSkillDirs 必须全是 string（非字符串会被 skill-filesystem 的配校验拒绝）
+      assertCustomSkillDirs(plugins, logger);
       defs.push({
         id: entry.name,
         name: meta.name ?? entry.name,
@@ -523,6 +620,8 @@ export async function registerCohubPresets(
   const defs = loadCohubPresetDefs(presetsDir, logger);
   for (const def of defs) {
     try {
+      // 注册前最后一道闸：customSkillDirs 里只要有一个非 string，宿主就会让整个 preset 挂载失败
+      assertCustomSkillDirs(def.plugins, logger);
       releaseExisting(registry, def.id);
       let handle: unknown;
       try {

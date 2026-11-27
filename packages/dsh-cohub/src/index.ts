@@ -415,7 +415,9 @@ export { applyPresetPatchDeclarations, buildPresetPatchDeclarations, resolveProf
 // 测试与维护入口：档位 preset 的运行时注册（正解）/ 卸载 / 定义读取 / YAML 子集解析
 export {
   COHUB_PRESETS_DIR,
+  assertCustomSkillDirs,
   evaluatePlatformExpr,
+  evaluateUrlDirExpr,
   loadCohubPresetDefs,
   materializeJsTags,
   parseMiniYaml,
