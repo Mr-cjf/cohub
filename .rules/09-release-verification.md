@@ -28,3 +28,9 @@
 - `ctx.logger.info` 不落 stdout/磁盘，验证时用 `console.log`
 - client 组件经 `ctx.slots.register` 挂载，**禁止在组件函数体内用 React hook**（宿主可能直接函数调用渲染），状态走 controller 闭包 + `publish()`
 - `git show 大文件 | awk '...exit'` 在文件超 64KB 时会 SIGPIPE（141），配合 `pipefail` 静默失败；先落盘再处理
+- **UI 自动化验证用语义定位，不要用坐标点击**：`page.mouse.click(x, y)` 在 DSH 设置页里极易被遮罩层吞掉点击（表现为「面板莫名关闭」「点了没反应」）。改用 Playwright 的 `page.getByRole('button', { name })` / `page.getByText(text, { exact: true })`，必要时 `.first()`，一次即可点通。
+- **启动屏需要循环过**：DSH 首次访问会走 6 步启动流程（授权 → 身份确认 → … → WELCOME）。用循环反复尝试点击 `授予访问权限 / 确认身份 / CONTINUE`，每次点击后 `waitForTimeout(1600)`，最后按一次 `Enter`，直到页面出现「新会话」字样再继续。
+- **设置入口两个**：`Control+Alt+,` 快捷键最稳；失败再走「账号菜单 → 设置」。每次操作后用 `document.body.innerText` 断言状态（如 `/通用设置/` 判断设置页已打开），不要假设点击一定成功。
+- **设置页的展开项要二次点击**：「角色类型」只出现在角色编辑表单里（需先点「添加角色」）；「队长提示词预览」只出现在团队编辑面板里（需先点「新建团队」或编辑）。断言前先确认面板已展开。
+- **`file://` 被拦**：Playwright 无法直接打开本地 HTML（`Access to "file:" protocol is blocked`），预览原型只能让用户手动打开。
+- **本地实例走系统代理会被劫持**：Playwright 访问 `127.0.0.1` 时静态资源可能全部 `ERR_FAILED`，而 `context.request` 直连同 URL 返回 200。用 `context.route('**/*')` 拦截并用 `context.request.fetch` 转发、剥掉 `content-encoding/content-length/transfer-encoding` 头，即可正常渲染。
