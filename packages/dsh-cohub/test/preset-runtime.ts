@@ -33,18 +33,19 @@ function check(name: string, cond: boolean) {
 }
 
 /**
- * 全部档位预设（4 个子代理档位 + cohub-cordis）。
- * 每个档位必须挂独立 preset：persona 只能由 preset 提供，tools.restrict 裁不掉 persona。
+ * 本模块运行时**仍会注册**的 preset：只剩 cohub-cordis。
+ * 4 个档位子代理 preset 恢复「不注册」（0.13.13 行为）——档位子代理一律继承父组合 +
+ * spawn 后 tools.restrict 收窄；父 persona 已中性化，不再有「绝不改文件」的硬禁令。
  */
-const TIER_PRESETS = [
+const TIER_PRESETS = ["cohub-cordis"];
+/** 由团队注册接管、且**档位不再注册**的 preset（4 个档位子代理 + co-orchestrator） */
+const TEAM_OWNED_PRESETS = [
+  "co-orchestrator",
   "cohub-subagent-readonly",
   "cohub-subagent-readonly-net",
   "cohub-subagent-write",
   "cohub-subagent-write-shell",
-  "cohub-cordis",
 ];
-/** 由团队注册接管的 preset（不参与档位注册）：co-orchestrator —— team-presets.ts 以「开发团队」名义注册 */
-const TEAM_OWNED_PRESETS = ["co-orchestrator"];
 
 /** mock agentPresets 注册表：记录调用序列，可注入「已存在」与「注册抛错」 */
 function makeRegistry(options: { failOn?: string[]; existing?: string[] } = {}) {
@@ -103,13 +104,13 @@ function makeLogger() {
 console.log("===== 0：YAML → 对象 一致性 =====");
 const defs: any[] = loadCohubPresetDefs(COHUB_PRESETS_DIR);
 const defIds = defs.map((def) => def.id);
-check("解析出 5 个档位 preset（4 个子代理档位 + cohub-cordis）", defs.length === 5);
-check("5 个档位全部解析出来", TIER_PRESETS.every((id) => defIds.includes(id)));
+check("解析出 1 个档位 preset（只剩 cohub-cordis）", defs.length === 1);
+check("cohub-cordis 被解析出来", defIds.includes("cohub-cordis"));
 check("co-orchestrator 由团队接管（不在档位列表）", !defIds.includes("co-orchestrator"));
-check("4 个档位子代理恢复注册（readonly / readonly-net / write / write-shell）",
+check("4 个档位子代理不再注册（继承父组合 + restrict 裁剪）",
   ["cohub-subagent-readonly", "cohub-subagent-readonly-net", "cohub-subagent-write", "cohub-subagent-write-shell"]
-    .every((id) => defIds.includes(id)));
-check("TEAM_OWNED_PRESET_IDS 恰好是 [co-orchestrator]", (() => {
+    .every((id) => !defIds.includes(id)));
+check("TEAM_OWNED_PRESET_IDS 恰好是 5 个（co-orchestrator + 4 个档位子代理）", (() => {
   const owned: string[] = [...(TEAM_OWNED_PRESET_IDS as string[])].sort();
   return JSON.stringify(owned) === JSON.stringify([...TEAM_OWNED_PRESETS].sort());
 })());
@@ -227,20 +228,20 @@ function deepEqual(a: any, b: any): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-// ── ① 空注册表 → 注册 5 个档位（+团队注册的 co-orchestrator 共 6） ────────────
-console.log("===== ① 空注册表 → 5 个档位注册（+团队注册的 co-orchestrator 共 6） =====");
+// ── ① 空注册表 → 只注册 1 个（cohub-cordis） ─────────────────────────────
+console.log("===== ① 空注册表 → 1 个档位注册（cohub-cordis） =====");
 const r1 = makeRegistry();
 const logger1 = makeLogger();
 const ctx1 = makeCtx(r1);
 ctx1.logger = logger1;
 const result1 = await registerCohubPresets(ctx1, logger1);
-check("registered 共 5 个（4 个子代理档位 + cohub-cordis）", result1.registered.length === 5);
+check("registered 共 1 个（cohub-cordis）", result1.registered.length === 1);
 check("failed 为空", result1.failed.length === 0);
-check("注册的就是全部档位预设", TIER_PRESETS.every((id) => result1.registered.includes(id)));
-check("register 调用 5 次", r1.calls.filter((c) => c.startsWith("register:")).length === 5);
-check("4 个档位子代理都被 register",
+check("注册的就是 cohub-cordis", TIER_PRESETS.every((id) => result1.registered.includes(id)));
+check("register 调用 1 次", r1.calls.filter((c) => c.startsWith("register:")).length === 1);
+check("4 个档位子代理都不再 register",
   ["cohub-subagent-readonly", "cohub-subagent-readonly-net", "cohub-subagent-write", "cohub-subagent-write-shell"]
-    .every((id) => r1.calls.includes(`register:${id}`)));
+    .every((id) => !r1.calls.includes(`register:${id}`)));
 check("首轮不带任何 unregister（无旧注册）", r1.calls.every((c) => !c.startsWith("unregister:")));
 
 // ── ② 已存在同 id → 先 unregister 再 register ─────────────────────────────
@@ -267,14 +268,14 @@ const ctx3 = makeCtx(r3);
 ctx3.logger = logger3;
 const result3 = await registerCohubPresets(ctx3, logger3);
 check("failed 含 cohub-cordis", result3.failed.includes("cohub-cordis"));
-check("registered 为空（其余 4 个照常注册，失败 1 个）", result3.registered.length === 4);
+check("registered 为空（唯一档位失败）", result3.registered.length === 0);
 check("产生了一条 warn", logger3.warns.some((line) => line.includes("cohub-cordis")));
 check("失败不抛（fail-soft）", true);
 
 // ── ④ dispose → 全部 unregister ───────────────────────────────────────────
 console.log("===== ④ 插件卸载 → 全部 unregister =====");
 const removed4 = unregisterCohubPresets(ctx1, logger1);
-check("卸载数量 = 已注册数量（5）", removed4.length === 5);
+check("卸载数量 = 已注册数量（1）", removed4.length === 1);
 check("每个已注册 id 都被 unregister", result1.registered.every((id: string) => r1.calls.includes(`unregister:${id}`)));
 check("注册表回到空", r1.registered.size === 0);
 check("重复卸载是幂等的（第二次为空）", unregisterCohubPresets(ctx1, logger1).length === 0);

@@ -377,10 +377,10 @@ export function resolveSkillAgentPreset(
 ): string | undefined {
   if (!enabled) return undefined;
   const key = (skillName ?? "").trim();
-  // co-orchestrator 是委派发起方，被委派时继承父组合（不裁剪、不挂 preset）
-  if (key === "co-orchestrator") return undefined;
-  const tier = resolveTier(key, customRoles);
-  return presetForTier(tier ?? "rw-shell");
+  // cordis 档位仍需独立 preset：它提供 tool-cordis 类工具，父组合没有，restrict 补不出来
+  if (key === "co-cordis") return CORDIS_PRESET;
+  // 其余一律继承父组合、不挂 preset（权限边界由 spawn 后的 restrict 收窄，fail-closed 不动）
+  return undefined;
 }
 
 /**
