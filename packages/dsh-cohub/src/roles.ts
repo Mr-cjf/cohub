@@ -74,6 +74,8 @@ export const BUILTIN_ROLE_TIERS: Readonly<Record<string, Tier>> = {
   // 读写
   "co-designer": "rw",
   "co-writer": "rw",
+  "co-team-lead": "rw",
+  "co-team-member": "rw",
   // 读写 + shell
   "co-fixer": "rw-shell",
   // Cordis 专线

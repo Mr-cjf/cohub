@@ -73,7 +73,7 @@ console.log('技能清单:', names.join(', '));
 const EXPECTED = [
   'co-cordis','co-council','co-designer','co-editor','co-explorer','co-fixer','co-librarian',
   'co-observer','co-oracle','co-orchestrator','co-outliner','co-planner','co-rule-app','co-rule-project',
-  'co-rule-user','co-writer',
+  'co-rule-user','co-writer','co-team-lead','co-team-member',
 ].sort();
 const okSkills = JSON.stringify(names) === JSON.stringify(EXPECTED);
 console.log('技能清单校验:', okSkills ? 'PASS' : 'FAIL');

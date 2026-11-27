@@ -640,13 +640,13 @@ let zhDict: Record<string, string> = {};
       "co-fixer", "co-designer", "co-council", "co-rule-user", "co-rule-project", "co-rule-app", "co-cordis",
     ].map((name) => ({ name, provider: "", model: "", extra: {} })),
   }));
-  // 只读目录卡：16 个内置角色 + 顶部主代理卡都带「查看详情」（aria-expanded）；团队卡没有。
+  // 只读目录卡：18 个内置角色 + 顶部主代理卡都带「查看详情」（aria-expanded）；团队卡没有。
   const detailCards = blocksOf(allRows, "cohub-row-catalog")
     .filter((el) => collect(el, "button").some((b) => "aria-expanded" in (b.props ?? {})));
   const builtinCards = detailCards
     .filter((el) => !String(el.props?.className ?? "").split(/\s+/).includes("cohub-row-main"))
     .filter((el) => BUILTIN_NAMES.some((name) => textOf(el).includes(zhDict["skill." + name])));
-  check("16 个内置角色 + 主代理卡都可展开详情", detailCards.length === 17);
+  check("18 个内置角色 + 主代理卡都可展开详情", detailCards.length === 19);
   check("13 个可委派技能各渲染一张内置角色卡（含 co-cordis）", builtinCards.length === 13);
   check("行标签用中文字典（co-cordis → Cordis 插件）", textOf(allRows).includes(zhDict["skill.co-cordis"]));
 

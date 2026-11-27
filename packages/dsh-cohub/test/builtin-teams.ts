@@ -73,9 +73,12 @@ const unknownDev = dev.members.filter((name: string) => !tierNames.includes(name
 const unknownWriting = writing.members.filter((name: string) => !tierNames.includes(name));
 check("开发团队成员全部存在于 BUILTIN_ROLE_TIERS", unknownDev.length === 0, unknownDev);
 check("写作团队成员全部存在于 BUILTIN_ROLE_TIERS", unknownWriting.length === 0, unknownWriting);
-check("两团队成员并集 = 档位表全部角色（无遗漏 / 无重复）",
-  new Set([...dev.members, ...writing.members]).size === tierNames.length
-  && tierNames.every((name) => dev.members.includes(name) || writing.members.includes(name)),
+// 通用角色（co-team-lead / co-team-member）不进内置团队：留给用户自己组队时勾选。
+const GENERIC_ROLES: readonly string[] = ["co-team-lead", "co-team-member"];
+check("两团队成员并集 + 通用角色 = 档位表全部角色（无遗漏 / 无重复）",
+  new Set([...dev.members, ...writing.members, ...GENERIC_ROLES]).size === tierNames.length
+  && tierNames.every((name) => dev.members.includes(name) || writing.members.includes(name)
+    || GENERIC_ROLES.includes(name)),
   { dev: dev.members.length, writing: writing.members.length, tiers: tierNames.length });
 check("开发团队 12 人、写作团队 3 人", dev.members.length === 12 && writing.members.length === 3);
 check("内置团队标 builtin: true", BUILTIN_TEAMS.every((team: any) => team.builtin === true));

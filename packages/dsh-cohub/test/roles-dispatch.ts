@@ -80,7 +80,7 @@ function oldAgentPreset(skillName: string | undefined): string | undefined {
  * 写作组（co-writer / co-editor / co-outliner）是接线后新增的，没有旧值可比，
  * 由下方「全部内置角色都能解析出 preset」一条覆盖，不计入本对比表。
  */
-const POST_COMPAT_ADDITIONS: ReadonlySet<string> = new Set(["co-writer", "co-editor", "co-outliner"]);
+const POST_COMPAT_ADDITIONS: ReadonlySet<string> = new Set(["co-writer", "co-editor", "co-outliner", "co-team-lead", "co-team-member"]);
 const BUILTIN_NAMES: readonly string[] = COHUB_SKILLS.map((skill) => skill.name)
   .filter((name) => !POST_COMPAT_ADDITIONS.has(name));
 

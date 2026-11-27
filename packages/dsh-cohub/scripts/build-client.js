@@ -22,7 +22,7 @@ const END_RE = /^[ \t]*\/\/ END ROLE_CATALOG[ \t]*$/m;
 /** data 文件里目录数据的开头 */
 const DATA_HEAD = "export const ROLE_CATALOG = ";
 /** 内置角色数：拼装后必须完整（防止误拼空目录） */
-const EXPECTED_ROLES = 16;
+const EXPECTED_ROLES = 18;
 
 if (!existsSync(sourcePath)) {
   throw new Error(`构建失败：缺少客户端源文件 ${sourcePath}`);

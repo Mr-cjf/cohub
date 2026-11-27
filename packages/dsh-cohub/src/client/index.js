@@ -75,11 +75,11 @@ window.__ModuleLoader__.load({
     ];
 
     /**
-     * 内置角色全量清单（16 个）= 13 个可委派技能 + 3 个仅档位表登记的规则/写作角色
-     * （co-editor / co-outliner / co-writer，见 src/roles.ts 的 BUILTIN_ROLE_TIERS）。
+     * 内置角色全量清单（18 个）= 13 个可委派技能 + 5 个仅档位表登记的角色
+     * （co-team-lead / co-team-member / co-editor / co-outliner / co-writer，见 src/roles.ts 的 BUILTIN_ROLE_TIERS）。
      * 团队成员的「内置角色」分组用这份清单，与派发层认可的档位表一致。
      */
-    var BUILTIN_ROLE_NAMES = SKILL_NAMES.concat(["co-editor", "co-outliner", "co-writer"]);
+    var BUILTIN_ROLE_NAMES = SKILL_NAMES.concat(["co-team-lead", "co-team-member", "co-editor", "co-outliner", "co-writer"]);
 
     /** Config.customRoles[].tier 的五个合法档位（自定义角色不得越权，取值与 Config schema 一致）。 */
     var ROLE_TIERS = ["ro", "ro-net", "rw", "rw-shell", "cordis"];
@@ -224,8 +224,6 @@ window.__ModuleLoader__.load({
       roleTemplateBlank: "空白角色",
       roleTemplateBlankDesc: "从零填写名称、职责与提示词。",
       roleTemplateMain: "co-orchestrator · 通用编排主代理",
-      roleTemplateLead: "通用队长（纯调度）",
-      roleTemplateMember: "通用队员（示例）",
       roleTemplateMainDesc: "通用编排主代理 · 纯调度 · 不绑定档位",
       roleTemplateBasedOn: "基于模板：{name}",
       roleTemplateReselect: "重新选择模板",
@@ -412,8 +410,6 @@ window.__ModuleLoader__.load({
       roleTemplateBlank: "Blank role",
       roleTemplateBlankDesc: "Fill in name, description and prompt from scratch.",
       roleTemplateMain: "co-orchestrator · general orchestrator",
-      roleTemplateLead: "Generic lead (pure dispatch)",
-      roleTemplateMember: "Generic member (sample)",
       roleTemplateMainDesc: "General orchestrator · dispatch only · no tier",
       roleTemplateBasedOn: "Based on template: {name}",
       roleTemplateReselect: "Pick another template",
@@ -770,65 +766,13 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 通用模板提示词（逐字固定）：不写死成员名单，成员以会话里的团队配置为准。
-     * 只用于「以此模板新建」预填，**不注册为角色**（角色库/技能表里没有它们）。
-     */
-    var TEMPLATE_LEAD_PROMPT = [
-      "你是一个团队的队长。你的职责是：理解用户目标 → 拆分成可独立执行的任务 → 为每个任务选择最合适的队员 → 派发并检查交付 → 汇总结果。",
-      "",
-      "规则：",
-      "- 团队成员以当前会话的团队配置为准，不要假设成员名单固定。",
-      "- 能自己一次答清的小问题直接答，不要为了派发而派发。",
-      "- 派发时必须给队员自包含的任务书（目标、约束、输出格式）。",
-      "- 收到结果后核对是否满足原始目标，指出证据、遗漏与风险再汇总。"
-    ].join("\n");
-
-    var TEMPLATE_MEMBER_PROMPT = [
-      "你是团队中的一名成员。你会收到队长派发的具体任务，按任务书完成并交付。",
-      "",
-      "规则：",
-      "- 严格按任务书的目标、约束与输出格式交付，不擅自扩大范围。",
-      "- 交付时给出：做了什么、依据/证据（文件与行号或来源）、结论、风险与未做的事。",
-      "- 遇到无法完成的限制（缺权限、缺信息），直接说明卡点，不要编造结果。"
-    ].join("\n");
-
-    /** 通用队长的工具预选：编排类（委派/待办/任务/目标/提问/技能）+ 文件读写 + 搜索。 */
-    var TEMPLATE_LEAD_TOOLS = [
-      "tool-delegation", "tool-todo", "tool-jobs", "tool-goal", "tool-ask-user", "tool-skill",
-      "tool-fs", "tool-fs-search", "tool-web"
-    ];
-
-    /** 通用队员的工具预选：文件读写 + 搜索（不含委派，队员不再向下派发）。 */
-    var TEMPLATE_MEMBER_TOOLS = ["tool-fs", "tool-fs-search", "tool-web"];
-
-    /**
-     * 模板清单：2 个通用模板（队长/队员）→ 16 个内置角色 → 空白角色。
+     * 模板清单：18 个内置角色 → 空白角色（co-team-lead / co-team-member 亦在内）。
      * 数据全部来自构建期生成的 ROLE_CATALOG，运行期零 IO。
      * 注意：co-orchestrator 的提示词写死了成员名单，**不再作为模板**（它仍是会话主代理）。
      */
     function roleTemplateList() {
       var roles = ROLE_CATALOG && ROLE_CATALOG.roles ? ROLE_CATALOG.roles : {};
-      var out = [{
-        id: "tmpl-lead",
-        name: "my-lead",
-        main: true,
-        fixedName: true,
-        labelKey: "roleTemplateLead",
-        description: "团队队长：拆解任务、分派队员、验收汇总",
-        brief: TEMPLATE_LEAD_PROMPT,
-        tier: "rw",
-        tools: TEMPLATE_LEAD_TOOLS.slice()
-      }, {
-        id: "tmpl-member",
-        name: "my-member",
-        main: false,
-        fixedName: true,
-        labelKey: "roleTemplateMember",
-        description: "团队成员：按分配完成任务并交付",
-        brief: TEMPLATE_MEMBER_PROMPT,
-        tier: "rw",
-        tools: TEMPLATE_MEMBER_TOOLS.slice()
-      }];
+      var out = [];
       for (var i = 0; i < BUILTIN_ROLE_NAMES.length; i += 1) {
         var name = BUILTIN_ROLE_NAMES[i];
         var entry = roles[name] && typeof roles[name] === "object" ? roles[name] : null;
@@ -863,19 +807,6 @@ window.__ModuleLoader__.load({
       var n = 2;
       while (used.indexOf(candidate) >= 0) {
         candidate = raw + "-copy-" + n;
-        n += 1;
-      }
-      return candidate;
-    }
-
-    /** 通用模板（my-lead / my-member）逐字预填名字，只有真的重名时才追加 -2、-3。 */
-    function templateFixedName(base, taken) {
-      var raw = typeof base === "string" && base !== "" ? base : "my-role";
-      var used = Array.isArray(taken) ? taken : [];
-      var candidate = raw;
-      var n = 2;
-      while (used.indexOf(candidate) >= 0) {
-        candidate = raw + "-" + n;
         n += 1;
       }
       return candidate;
@@ -1988,7 +1919,7 @@ window.__ModuleLoader__.load({
               copy.tools = [];
             } else {
               // 「基于模板」的显示名固定用模板 id：选完再改名也不影响这条提示。
-              copy.name = template.fixedName ? templateFixedName(template.name, taken) : templateRoleName(template.name, taken);
+              copy.name = templateRoleName(template.name, taken);
               copy.description = template.description !== "" ? template.description : template.name;
               copy.prompt = template.brief !== "" ? template.brief : template.description;
               copy.tier = ROLE_TIERS.indexOf(template.tier) >= 0 ? template.tier : "ro";
@@ -2166,7 +2097,7 @@ window.__ModuleLoader__.load({
         publish();
       }
 
-      /** 主代理卡「以此模板新建」：加一行并直接套上「通用队长」模板（co-orchestrator 提示词写死成员名单，不作模板）。 */
+      /** 主代理卡「以此模板新建」：加一行并套上通用队长 co-team-lead（co-orchestrator 提示词写死成员名单，不作模板）。 */
       function newRoleFromMain() {
         if (!canEdit()) return;
         var current = beginRolesDraft();
@@ -2176,7 +2107,7 @@ window.__ModuleLoader__.load({
         rolesDraft.rows = next;
         syncRoleTemplates(next.length);
         publish();
-        chooseTemplate(next.length - 1, "tmpl-lead");
+        chooseTemplate(next.length - 1, "co-team-lead");
       }
 
       /**

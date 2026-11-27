@@ -47,6 +47,8 @@ const EXPECTED_BUILTIN: ReadonlyArray<readonly [string, Tier]> = [
   ["co-fixer", "rw-shell"],
   ["co-cordis", "cordis"],
   ["co-editor", "ro"],
+  ["co-team-lead", "rw"],
+  ["co-team-member", "rw"],
 ];
 
 // ── 用例 1：内置角色查档（逐角色锁死） ────────────────────────────────────
