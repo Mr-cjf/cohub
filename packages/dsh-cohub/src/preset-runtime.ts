@@ -10,10 +10,12 @@
 //   宿主提供 `agentPresets` 服务，`await ctx.agentPresets.register({ id, name, description,
 //   order, plugins })` 是**当场生效**的：register 内部立即 activate() → mountPreset()，
 //   返回 unregister 句柄；id 重复才抛 `Duplicate agent preset`（见 delegate.ts 里对
-//   'Unknown agent preset: <id>' 的既有说明）。因此本模块在 apply() 里直接把**仍需独立 preset 的
-//   档位**（本批只剩 cohub-cordis）注册进内存注册表，**不依赖任何落盘声明、不需要重启**。
-//   4 个子代理档位（readonly / readonly-net / write / write-shell）已改为「继承父组合 +
-//   spawn 后 tools.restrict 裁剪」，不再注册，见 TEAM_OWNED_PRESET_IDS 的注释。
+//   'Unknown agent preset: <id>' 的既有说明）。因此本模块在 apply() 里直接把**全部档位预设**
+//   （cohub-cordis + 4 个子代理档位 readonly / readonly-net / write / write-shell）注册进内存
+//   注册表，**不依赖任何落盘声明、不需要重启**。
+//   为什么 4 个档位必须各自独立预置：persona 只能由 preset 提供，tools.restrict 只裁工具、
+//   裁不掉 persona。子代理继承父组合时会把父代理（co-orchestrator 等）的「纯调度者」persona
+//   当成自己的 system prompt，与任务书冲突时 system 优先 → 子代理拒绝改文件。
 //
 // 声明从哪来：
 //   唯一事实源仍是包内 `presets/<id>/`（preset.yml 的 name/description/order +
@@ -402,25 +404,16 @@ export function materializeJsTags(
 /**
  * 由**团队注册**接管的 preset id（档位注册必须跳过，否则同 id 撞 `Duplicate agent preset`）。
  *
- * `co-orchestrator` 现在由 team-presets.ts 以「开发团队」的名义注册（见 builtin-teams.ts 的
+ * `co-orchestrator` 由 team-presets.ts 以「开发团队」的名义注册（见 builtin-teams.ts 的
  * `dev.presetId`）：presets/co-orchestrator/ 仍是它的**工具面事实源**（团队组装照抄那排插件），
  * 但 name / description / persona 换成团队版，注册权也归团队。
  *
- * 4 个档位子代理 preset（readonly / readonly-net / write / write-shell）自本批起**不再注册**：
- * 子代理改为「继承父组合 + spawn 后 `tools.restrict` 裁剪」（见 delegate.ts 的
- * applyChildToolFilterDirectly 与 roles.ts 的 TIER_TOOLS）。presets/<id>/ 目录仍在包内，
- * 但不再进注册表，也不再有 agentPreset 指向它们。
- *
- * 唯一保留的档位：`cohub-cordis` —— 它提供 `tool-cordis` 类工具，父组合里没有，
- * restrict 只能做减法（补不出工具），故必须仍以独立 preset 挂载。
+ * 4 个档位子代理 preset（readonly / readonly-net / write / write-shell）**由本模块注册**：
+ * 每个档位必须挂独立预设，才能拿到「专职子代理」persona（继承父组合会让子代理继承
+ * co-orchestrator 的纯调度 persona 而拒绝改文件，restrict 裁不掉 persona）。
+ * `cohub-cordis` 同理（另需 tool-cordis 工具）。
  */
-export const TEAM_OWNED_PRESET_IDS: readonly string[] = [
-  "co-orchestrator",
-  "cohub-subagent-readonly",
-  "cohub-subagent-readonly-net",
-  "cohub-subagent-write",
-  "cohub-subagent-write-shell",
-];
+export const TEAM_OWNED_PRESET_IDS: readonly string[] = ["co-orchestrator"];
 
 /** preset id 合法性：与 preset-install.ts 的 isSafePresetId 同义（目录名，不允许路径穿越） */
 function isSafePresetId(id: string): boolean {

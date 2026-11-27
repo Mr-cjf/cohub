@@ -334,10 +334,10 @@ export function resolveSkillToolFilter(
 // 官方 dsh-tool-subagent 的 Config.agentPreset 走的就是这条路。cohub 自己构造 request，
 // 因此直接传 id 即可，无需 allowlist。两个 preset 随包安装在 ~/.dsh/.agent-presets/。
 
-/** 只读子代理 preset（包内 presets/cohub-subagent-readonly；**自本批起不再注册**，仅保留包内目录） */
+/** 只读子代理 preset（包内 presets/cohub-subagent-readonly；由 preset-runtime 运行时注册） */
 export const SUBAGENT_READONLY_PRESET = "cohub-subagent-readonly";
 
-/** 实施类子代理 preset（包内 presets/cohub-subagent-write；**自本批起不再注册**，仅保留包内目录） */
+/** 实施类子代理 preset（包内 presets/cohub-subagent-write；由 preset-runtime 运行时注册） */
 export const SUBAGENT_WRITE_PRESET = "cohub-subagent-write";
 
 /**
@@ -349,21 +349,24 @@ export const CORDIS_PRESET = "cohub-cordis";
 /**
  * 按 skill 名解析子代理应挂载的独立 preset id。
  *
- * **本批语义（档位子代理继承父组合）**：
- *   - 除 `co-cordis`（tier = cordis）外，**一律返回 undefined** —— 即不传 `agentPreset`，
- *     子代理继承父组合；权限差异全部由 spawn 后的 `tools.restrict(filter)` 施加
- *     （filter 来自 roles.ts 的 TIER_TOOLS[tier].deny，见 resolveSkillToolFilter）。
- *     `agentPreset` 在 startActivation 里本就是可选字段（child-agent.js:150），不传即继承。
- *   - `co-cordis` 是唯一例外：`cohub-cordis` 提供父组合没有的 `tool-cordis` 工具，
- *     restrict 补不出来，故仍以独立 preset 挂载。
+ * **本批语义（每个档位子代理挂自己的预设）**：
+ *   - 除 `co-orchestrator` 外，一律 `presetForTier(resolveTier(...))` ——
+ *     ro → cohub-subagent-readonly、ro-net → cohub-subagent-readonly-net、
+ *     rw → cohub-subagent-write、rw-shell → cohub-subagent-write-shell、cordis → cohub-cordis。
+ *     子代理因此拿到「专职子代理」persona 与刚好够用的工具面。
+ *   - `co-orchestrator` 是委派发起方，被委派时返回 undefined：继承父组合、不裁剪、不挂 preset。
+ *   - 空名 / 未知角色：resolveTier 返回 null，按 `rw-shell` 兜底（与历史「未知 skill → 写类」一致）。
  *
- * 为什么去掉 4 个档位 preset：注册 4 份组合只为「加减几个工具」不值当（组合要随宿主版本
- * 同步维护、还要写 profile patch），而 tool 裁剪本来就在 cohub 手里（restrict 是既有机制）。
+ * 为什么必须挂档位预设（0.13.13 的回归教训）：0.13.13 曾让档位子代理改走「继承父组合 +
+ * spawn 后 tools.restrict 裁剪」以省掉 4 份组合的维护。但 restrict 只做工具减法，**裁不掉
+ * persona**——子代理继承了父（co-orchestrator / 团队队长）的「主调度者……绝不亲自调用任何
+ * 文件/代码读写与执行工具」人格，且 system prompt 优先级高于任务书，于是子代理自认纯调度者、
+ * 拒绝读写文件。故恢复每档一个独立预设；restrict 仍保留为第二层保险（fail-closed 不动）。
  *
  * @param skillName - 规范化后的 skill 名（如 co-fixer / 自定义角色名）。
  * @param enabled - 总开关（Config.delegateSubagentPreset.enabled，默认 true）。
  * @param customRoles - 自定义角色表（其 tier 覆盖内置）；缺省 = 仅内置角色。
- * @param logger - 保留参数（本批不再产生 preset 降级 warn，签名不变以免破坏调用点）。
+ * @param _logger - 保留参数（签名不变以免破坏调用点）。
  * @returns preset id；undefined 表示不指定（继承父组合）。
  */
 export function resolveSkillAgentPreset(
@@ -376,8 +379,8 @@ export function resolveSkillAgentPreset(
   const key = (skillName ?? "").trim();
   // co-orchestrator 是委派发起方，被委派时继承父组合（不裁剪、不挂 preset）
   if (key === "co-orchestrator") return undefined;
-  // 只有 cordis 档位需要独立 preset（tool-cordis 无法由 restrict 补出）
-  return resolveTier(key, customRoles) === "cordis" ? CORDIS_PRESET : undefined;
+  const tier = resolveTier(key, customRoles);
+  return presetForTier(tier ?? "rw-shell");
 }
 
 /**
