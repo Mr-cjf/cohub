@@ -2,6 +2,14 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.22] - 2026-11-27
+
+### 变更
+
+- **内部预设的描述说明误选后果**：`cohub-subagent-readonly` / `-readonly-net` / `-write` / `-write-shell` / `cohub-cordis` 五个内部预设的描述统一改为「内部工具集，供 cohub 编排在派发子代理时自动挂载。<能力>。请勿手动选择——手动选中后，该会话会以“子代理”身份直接运行（没有编排与派发能力，也不会按团队配置限员）。」
+- README 新增「内部预设」小节，说明这些 preset 为什么会出现在 Agent 预设列表里（DSH 未提供隐藏机制），以及误选的代价。
+- 说明：preset 定义在运行时从包内 `presets/` 目录读取，不内联进 `lib/index.js`，因此产物 grep 看不到这些文案属正常。
+
 ## [0.13.21] - 2026-11-27
 
 ### 变更
