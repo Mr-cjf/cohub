@@ -133,7 +133,9 @@ window.__ModuleLoader__.load({
       teamEmpty: "还没有自定义团队。点「新建团队」开始。",
       teamAdd: "新建团队",
       teamRemove: "删除",
-      teamPresetUnknown: "当前会话预设：未知（在 Agent 预设里选择后此处会显示）",
+      teamPresetUnknown: "默认预设：未知（在 Agent 预设里选择后此处会显示）",
+      teamPresetDefault: "默认预设：{label}",
+      teamPresetDefaultHint: "在 设置 → Agent 预设 里可切换当前会话使用的团队",
       teamPresetSwitchHint: "切换请在 设置 → Agent 预设 里选择",
       teamPresetIdBadge: "预设 id：{id}",
       teamPresetSlug: "预设 id（slug，可改）",
@@ -219,6 +221,8 @@ window.__ModuleLoader__.load({
       roleTemplateBlank: "空白角色",
       roleTemplateBlankDesc: "从零填写名称、职责与提示词。",
       roleTemplateMain: "co-orchestrator · 通用编排主代理",
+      roleTemplateLead: "通用队长（纯调度）",
+      roleTemplateMember: "通用队员（示例）",
       roleTemplateMainDesc: "通用编排主代理 · 纯调度 · 不绑定档位",
       roleTemplateBasedOn: "基于模板：{name}",
       roleTemplateReselect: "重新选择模板",
@@ -315,7 +319,9 @@ window.__ModuleLoader__.load({
       teamEmpty: "No custom teams yet. Click \"New team\" to start.",
       teamAdd: "New team",
       teamRemove: "Remove",
-      teamPresetUnknown: "Current session preset: unknown (pick one under Agent presets and it will show here)",
+      teamPresetUnknown: "Default preset: unknown (pick one under Agent presets and it will show here)",
+      teamPresetDefault: "Default preset: {label}",
+      teamPresetDefaultHint: "The team this session uses can be switched under Settings → Agent presets",
       teamPresetSwitchHint: "To switch, use Settings → Agent presets",
       teamPresetIdBadge: "Preset id: {id}",
       teamPresetSlug: "Preset id (slug, editable)",
@@ -400,6 +406,8 @@ window.__ModuleLoader__.load({
       roleTemplateBlank: "Blank role",
       roleTemplateBlankDesc: "Fill in name, description and prompt from scratch.",
       roleTemplateMain: "co-orchestrator · general orchestrator",
+      roleTemplateLead: "Generic lead (pure dispatch)",
+      roleTemplateMember: "Generic member (sample)",
       roleTemplateMainDesc: "General orchestrator · dispatch only · no tier",
       roleTemplateBasedOn: "Based on template: {name}",
       roleTemplateReselect: "Pick another template",
@@ -756,19 +764,64 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 模板清单：co-orchestrator 置顶（突出）→ 16 个内置角色 → 空白角色。
+     * 通用模板提示词（逐字固定）：不写死成员名单，成员以会话里的团队配置为准。
+     * 只用于「以此模板新建」预填，**不注册为角色**（角色库/技能表里没有它们）。
+     */
+    var TEMPLATE_LEAD_PROMPT = [
+      "你是一个团队的队长。你的职责是：理解用户目标 → 拆分成可独立执行的任务 → 为每个任务选择最合适的队员 → 派发并检查交付 → 汇总结果。",
+      "",
+      "规则：",
+      "- 团队成员以当前会话的团队配置为准，不要假设成员名单固定。",
+      "- 能自己一次答清的小问题直接答，不要为了派发而派发。",
+      "- 派发时必须给队员自包含的任务书（目标、约束、输出格式）。",
+      "- 收到结果后核对是否满足原始目标，指出证据、遗漏与风险再汇总。"
+    ].join("\n");
+
+    var TEMPLATE_MEMBER_PROMPT = [
+      "你是团队中的一名成员。你会收到队长派发的具体任务，按任务书完成并交付。",
+      "",
+      "规则：",
+      "- 严格按任务书的目标、约束与输出格式交付，不擅自扩大范围。",
+      "- 交付时给出：做了什么、依据/证据（文件与行号或来源）、结论、风险与未做的事。",
+      "- 遇到无法完成的限制（缺权限、缺信息），直接说明卡点，不要编造结果。"
+    ].join("\n");
+
+    /** 通用队长的工具预选：编排类（委派/待办/任务/目标/提问/技能）+ 文件读写 + 搜索。 */
+    var TEMPLATE_LEAD_TOOLS = [
+      "tool-delegation", "tool-todo", "tool-jobs", "tool-goal", "tool-ask-user", "tool-skill",
+      "tool-fs", "tool-fs-search", "tool-web"
+    ];
+
+    /** 通用队员的工具预选：文件读写 + 搜索（不含委派，队员不再向下派发）。 */
+    var TEMPLATE_MEMBER_TOOLS = ["tool-fs", "tool-fs-search", "tool-web"];
+
+    /**
+     * 模板清单：2 个通用模板（队长/队员）→ 16 个内置角色 → 空白角色。
      * 数据全部来自构建期生成的 ROLE_CATALOG，运行期零 IO。
+     * 注意：co-orchestrator 的提示词写死了成员名单，**不再作为模板**（它仍是会话主代理）。
      */
     function roleTemplateList() {
       var roles = ROLE_CATALOG && ROLE_CATALOG.roles ? ROLE_CATALOG.roles : {};
       var out = [{
-        id: "co-orchestrator",
-        name: "co-orchestrator",
+        id: "tmpl-lead",
+        name: "my-lead",
         main: true,
-        description: "通用编排主代理 · 纯调度 · 不绑定档位",
-        brief: "你是纯调度主代理：只分析需求、委派子代理、审核产出，不直接改文件。每轮只派发当前最必要的一组任务，说明目标、约束与验收标准；收到结果后核对证据再决定下一步。",
-        tier: "",
-        tools: []
+        fixedName: true,
+        labelKey: "roleTemplateLead",
+        description: "团队队长：拆解任务、分派队员、验收汇总",
+        brief: TEMPLATE_LEAD_PROMPT,
+        tier: "rw",
+        tools: TEMPLATE_LEAD_TOOLS.slice()
+      }, {
+        id: "tmpl-member",
+        name: "my-member",
+        main: false,
+        fixedName: true,
+        labelKey: "roleTemplateMember",
+        description: "团队成员：按分配完成任务并交付",
+        brief: TEMPLATE_MEMBER_PROMPT,
+        tier: "rw",
+        tools: TEMPLATE_MEMBER_TOOLS.slice()
       }];
       for (var i = 0; i < BUILTIN_ROLE_NAMES.length; i += 1) {
         var name = BUILTIN_ROLE_NAMES[i];
@@ -804,6 +857,19 @@ window.__ModuleLoader__.load({
       var n = 2;
       while (used.indexOf(candidate) >= 0) {
         candidate = raw + "-copy-" + n;
+        n += 1;
+      }
+      return candidate;
+    }
+
+    /** 通用模板（my-lead / my-member）逐字预填名字，只有真的重名时才追加 -2、-3。 */
+    function templateFixedName(base, taken) {
+      var raw = typeof base === "string" && base !== "" ? base : "my-role";
+      var used = Array.isArray(taken) ? taken : [];
+      var candidate = raw;
+      var n = 2;
+      while (used.indexOf(candidate) >= 0) {
+        candidate = raw + "-" + n;
         n += 1;
       }
       return candidate;
@@ -1330,7 +1396,10 @@ window.__ModuleLoader__.load({
       teamsNotice: "",
       expandedTeam: -1,
       // 角色详情面板（提示词 + 绑定工具）展开的是哪个角色名；"" = 全收起。
-      expandedRole: ""
+      expandedRole: "",
+      // 默认预设（remote.agentPresets.list 里 isDefault=true 的那一项）；取不到时 null。
+      presetStatus: "loading",
+      presetDefault: null
     });
 
     /**
@@ -1390,6 +1459,99 @@ window.__ModuleLoader__.load({
       var teamsNotice = "";           // 一次性提示（保留 "activeCleared" 旧词条，本版不再触发）
       var expandedTeam = -1;          // 展开编辑的团队行下标，-1 = 全收起
       var expandedRole = "";          // 展开详情的角色名，"" = 全收起（角色库/成员/团队三处共用）
+
+      // 默认预设（会话未指名预设时组合的那一个）：客户端拿不到「当前会话」的预设，
+      // 只能通过 remote 的 agentPresets.list 取默认项。取不到就静默降级成未知文案。
+      var presetStatus = "loading";   // "loading" | "ready" | "unknown"
+      var presetDefault = null;       // { id, name }
+      var presetLoaded = false;       // 成功取到过就不再重复请求（缓存失效前只用一份）
+      var presetGeneration = 0;
+
+      /**
+       * 取 agentPresets.list 的可调用入口：优先 `remote.agentPresets.list()`（服务/方法两段），
+       * 退到扁平 key 与通用 `remote.call`。三处都没有就返回 null（当作拿不到）。
+       */
+      function agentPresetRequest() {
+        var remote = ctx && ctx.remote;
+        if (!remote || typeof remote !== "object") return null;
+        var service = remote.agentPresets;
+        if (service && typeof service.list === "function") return function () { return service.list(); };
+        var flat = remote["agentPresets/list"];
+        if (typeof flat === "function") return function () { return flat(); };
+        if (typeof remote.call === "function") return function () { return remote.call("agentPresets/list"); };
+        return null;
+      }
+
+      /** 从各种可能的返回形状里取出预设数组：{ ok, value: { presets } } / { presets } / 数组。 */
+      function agentPresetRowsOf(response) {
+        if (!response || typeof response !== "object") return null;
+        if (Array.isArray(response)) return response;
+        var value = response.ok === true && response.value !== undefined ? response.value : response;
+        if (!value || typeof value !== "object") return null;
+        if (Array.isArray(value)) return value;
+        if (Array.isArray(value.presets)) return value.presets;
+        return null;
+      }
+
+      function applyPresetRows(rows) {
+        var found = null;
+        var list = Array.isArray(rows) ? rows : [];
+        for (var i = 0; i < list.length; i += 1) {
+          var row = list[i];
+          if (!row || typeof row !== "object" || row.isDefault !== true) continue;
+          found = {
+            id: typeof row.id === "string" ? row.id : "",
+            name: typeof row.name === "string" ? row.name : ""
+          };
+          break;
+        }
+        presetStatus = found === null ? "unknown" : "ready";
+        presetDefault = found;
+      }
+
+      /**
+       * 异步取默认预设并缓存；任何失败（无 remote / 抛错 / 形状不认识）都静默降级成「未知」，
+       * 不抛、不弹错误、不阻断其余页面。
+       */
+      function loadPresets() {
+        if (disposed || presetLoaded) return;
+        presetGeneration += 1;
+        var generation = presetGeneration;
+        var request = agentPresetRequest();
+        if (request === null) {
+          presetStatus = "unknown";
+          presetDefault = null;
+          publish();
+          return;
+        }
+        var response;
+        try {
+          response = request();
+        } catch (error) {
+          presetStatus = "unknown";
+          presetDefault = null;
+          publish();
+          return;
+        }
+        Promise.resolve(response).then(function (result) {
+          if (disposed || generation !== presetGeneration) return;
+          var rows = agentPresetRowsOf(result);
+          if (rows === null) {
+            presetStatus = "unknown";
+            presetDefault = null;
+            publish();
+            return;
+          }
+          applyPresetRows(rows);
+          presetLoaded = presetStatus === "ready";
+          publish();
+        }, function () {
+          if (disposed || generation !== presetGeneration) return;
+          presetStatus = "unknown";
+          presetDefault = null;
+          publish();
+        });
+      }
 
       function readScope() {
         if (!scope || typeof scope.getSnapshot !== "function") {
@@ -1465,7 +1627,9 @@ window.__ModuleLoader__.load({
           teamErrors: teamErrors,
           teamsNotice: teamsNotice,
           expandedTeam: expandedTeam,
-          expandedRole: expandedRole
+          expandedRole: expandedRole,
+          presetStatus: presetStatus,
+          presetDefault: presetDefault
         };
       }
 
@@ -1499,7 +1663,9 @@ window.__ModuleLoader__.load({
           && left.teamErrors === right.teamErrors
           && left.teamsNotice === right.teamsNotice
           && left.expandedTeam === right.expandedTeam
-          && left.expandedRole === right.expandedRole;
+          && left.expandedRole === right.expandedRole
+          && left.presetStatus === right.presetStatus
+          && left.presetDefault === right.presetDefault;
       }
 
       function publish() {
@@ -1783,7 +1949,7 @@ window.__ModuleLoader__.load({
               copy.tools = [];
             } else {
               // 「基于模板」的显示名固定用模板 id：选完再改名也不影响这条提示。
-              copy.name = templateRoleName(template.name, taken);
+              copy.name = template.fixedName ? templateFixedName(template.name, taken) : templateRoleName(template.name, taken);
               copy.description = template.description !== "" ? template.description : template.name;
               copy.prompt = template.brief !== "" ? template.brief : template.description;
               copy.tier = ROLE_TIERS.indexOf(template.tier) >= 0 ? template.tier : "ro";
@@ -1961,7 +2127,7 @@ window.__ModuleLoader__.load({
         publish();
       }
 
-      /** 主代理卡「以此模板新建」：加一行并直接套上 co-orchestrator 模板。 */
+      /** 主代理卡「以此模板新建」：加一行并直接套上「通用队长」模板（co-orchestrator 提示词写死成员名单，不作模板）。 */
       function newRoleFromMain() {
         if (!canEdit()) return;
         var current = beginRolesDraft();
@@ -1971,7 +2137,7 @@ window.__ModuleLoader__.load({
         rolesDraft.rows = next;
         syncRoleTemplates(next.length);
         publish();
-        chooseTemplate(next.length - 1, "co-orchestrator");
+        chooseTemplate(next.length - 1, "tmpl-lead");
       }
 
       /**
@@ -2406,6 +2572,7 @@ window.__ModuleLoader__.load({
         }
         publish();
         loadCatalog();
+        loadPresets();
         return function () {
           disposed = true;
           var snapshot = disposers;
@@ -2430,6 +2597,7 @@ window.__ModuleLoader__.load({
         discard: discard,
         save: save,
         loadCatalog: loadCatalog,
+        loadPresets: loadPresets,
         editRole: editRole,
         addRole: addRole,
         removeRole: removeRole,
@@ -2620,6 +2788,16 @@ window.__ModuleLoader__.load({
         return parts.join(" ");
       }
 
+      /** 预设显示名：「名称（id）」，名称缺失时只显示 id（默认预设那一行用）。 */
+      function presetLabel(preset) {
+        if (!preset || typeof preset !== "object") return "";
+        var id = typeof preset.id === "string" ? preset.id : "";
+        var name = typeof preset.name === "string" ? preset.name : "";
+        if (name === "") return id;
+        if (id === "" || id === name) return name;
+        return name + "（" + id + "）";
+      }
+
       /** 档位标签：未在目录登记的档位统一显示「未知档位」，不把裸值甩给用户。 */
       function tierLabel(tier) {
         if (!tierKnown(tier)) return t("tier.unknown");
@@ -2668,6 +2846,8 @@ window.__ModuleLoader__.load({
       /** 模板标记 → 展示文案（"" = 空白角色；未知 id 原样显示）。 */
       function templateLabelOf(templateId) {
         if (templateId === "" || templateId === "blank") return t("roleTemplateBlank");
+        var template = templateOf(templateId);
+        if (template !== null && template.labelKey) return t(template.labelKey);
         if (templateId === "co-orchestrator") return t("roleTemplateMain");
         return skillLabel(templateId);
       }
@@ -2841,7 +3021,7 @@ window.__ModuleLoader__.load({
         );
       }
 
-      /** 模板选择器：co-orchestrator 置顶突出 → 16 内置角色（名称/一句职责/档位/工具数）→ 空白角色。 */
+      /** 模板选择器：通用队长/通用队员 → 16 内置角色（名称/一句职责/档位/工具数）→ 空白角色。 */
       function renderTemplatePicker(index) {
         var list = roleTemplateList();
         var cards = [];
@@ -2862,7 +3042,8 @@ window.__ModuleLoader__.load({
             }(item.id)
           },
             React.createElement("span", { className: "cohub-row-name" },
-              item.main ? t("roleTemplateMain") : (item.blank ? t("roleTemplateBlank") : skillLabel(item.name))),
+              item.labelKey ? t(item.labelKey)
+                : (item.main ? t("roleTemplateMain") : (item.blank ? t("roleTemplateBlank") : skillLabel(item.name)))),
             React.createElement("span", { className: "cohub-role-summary" },
               item.blank ? t("roleTemplateBlankDesc") : item.description),
             item.blank ? null : React.createElement("span", { className: "cohub-badge" },
@@ -3486,12 +3667,18 @@ window.__ModuleLoader__.load({
         teamStatus = t("readOnly");
       }
 
+      // 只读一行：默认预设（remote.agentPresets.list 里 isDefault=true 的那一项）+ 切换入口提示。
+      // 客户端拿不到「当前会话」的预设（presetForSession 不是 remote 方法），只能显示默认预设；
+      // 取不到（无 remote / 调用失败）就退回「未知」文案，不报错、不阻断页面。
+      // 旧的「设为当前」下拉/按钮已删除：切换统一走 设置 → Agent 预设（Config.activeTeam 已废弃）。
+      var presetNotice = state.presetDefault
+        ? t("teamPresetDefault", { label: presetLabel(state.presetDefault) })
+        : t("teamPresetUnknown");
+
       var teamsBlock = React.createElement("div", { className: "cohub-roles" },
         React.createElement("h3", { className: "cohub-subtitle" }, t("teamsTitle")),
-        // 只读一行：当前会话预设（客户端拿不到会话的预设 → 稳定的降级文案）+ 切换入口提示。
-        // 旧的「设为当前」下拉/按钮已删除：切换统一走 设置 → Agent 预设（Config.activeTeam 已废弃）。
-        React.createElement("p", { className: "cohub-notice cohub-mono" }, t("teamPresetUnknown")),
-        React.createElement("p", { className: "cohub-desc" }, t("teamPresetSwitchHint")),
+        React.createElement("p", { className: "cohub-notice cohub-mono" }, presetNotice),
+        React.createElement("p", { className: "cohub-desc" }, t("teamPresetDefaultHint")),
         React.createElement("p", { className: "cohub-desc" }, t("teamsDescription")),
         // 内置团队随包发布（不在 Config.teams 里）：先渲染它们，再渲染用户团队。
         React.createElement("p", { className: "cohub-desc" }, t("teamBuiltinNote")),
