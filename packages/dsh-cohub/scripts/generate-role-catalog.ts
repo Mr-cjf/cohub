@@ -25,9 +25,16 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { COHUB_SKILLS } from "../src/skills.ts";
-import { ALL_TIERS, BUILTIN_ROLE_TIERS, SHELL_TOOL, TIER_TOOLS, TIER_TO_PRESET } from "../src/roles.ts";
+import {
+  ALL_TIERS,
+  BUILTIN_ROLE_KINDS,
+  BUILTIN_ROLE_TIERS,
+  SHELL_TOOL,
+  TIER_TOOLS,
+  TIER_TO_PRESET,
+} from "../src/roles.ts";
 import { BUILTIN_TEAMS } from "../src/builtin-teams.ts";
-import type { Tier } from "../src/roles.ts";
+import type { RoleKind, Tier } from "../src/roles.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PRESETS_DIR = path.join(ROOT, "presets");
@@ -97,7 +104,10 @@ interface BuiltinTeamEntry {
 interface RoleCatalog {
   generatedAt: string;
   tiers: Record<string, TierEntry>;
-  roles: Record<string, { tier: Tier | null; description: string; brief: string; content: string }>;
+  roles: Record<
+    string,
+    { tier: Tier | null; kind: RoleKind; description: string; brief: string; content: string }
+  >;
   builtinTeams: BuiltinTeamEntry[];
 }
 
@@ -242,6 +252,9 @@ function buildCatalog(generatedAt: string): RoleCatalog {
   for (const skill of COHUB_SKILLS) {
     roles[skill.name] = {
       tier: BUILTIN_ROLE_TIERS[skill.name] ?? null,
+      // 角色类型（队长 / 队员）：客户端据此只把 lead 型角色列进「队长」下拉、并给卡片打类型徽标。
+      // 未知回落 member，与运行时 resolveRoleKind 的兜底逐字一致。
+      kind: BUILTIN_ROLE_KINDS[skill.name] ?? "member",
       description: skill.description,
       brief: skill.brief,
       content: skill.content,
@@ -364,6 +377,19 @@ function main(): void {
       throw new Error(`❌ 角色 ${name} 的 content 过短（${entry.content.length} ≤ ${MIN_CONTENT_CHARS}），疑似只取了 brief`);
     }
     if (entry.brief.trim().length === 0) throw new Error(`❌ 角色 ${name} 缺少 brief`);
+  }
+
+  // 角色类型自验：每个角色都必须带 kind，且队长类型必须是「真的能当队长」的那几个
+  // （客户端「队长下拉只列 lead」依赖这份数据，漏一个 lead 就让该角色无法被指定为队长）。
+  const leadRoles: string[] = [];
+  for (const [name, entry] of Object.entries(catalog.roles)) {
+    if (entry.kind !== "lead" && entry.kind !== "member") {
+      throw new Error(`❌ 角色 ${name} 的 kind 非法：${String(entry.kind)}`);
+    }
+    if (entry.kind === "lead") leadRoles.push(name);
+  }
+  if (!leadRoles.includes("co-orchestrator") || !leadRoles.includes("co-team-lead")) {
+    throw new Error(`❌ 队长类型角色缺失：${leadRoles.join(", ") || "（空）"}`);
   }
 
   assertPlaceholder();

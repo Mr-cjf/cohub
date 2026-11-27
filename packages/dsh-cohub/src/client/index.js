@@ -90,6 +90,12 @@ window.__ModuleLoader__.load({
      */
     var MAIN_AGENT_NAME = "co-orchestrator";
 
+    /**
+     * 内置的「队长」类型角色名（与 src/roles.ts 的 BUILTIN_ROLE_KINDS 同源）。
+     * 只作兜底：ROLE_CATALOG.roles[name].kind 缺失（旧生成物）时仍能正确认出队长类型。
+     */
+    var LEAD_ROLE_NAMES = ["co-orchestrator", "co-team-lead"];
+
     /** 自定义角色名必须是 kebab-case：运行时把它注册成 skill 名，含空格/大写会污染技能表。 */
     var ROLE_NAME_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
@@ -157,6 +163,14 @@ window.__ModuleLoader__.load({
       teamLeadHint: "队长是本团队的主责角色，派发时优先使用。",
       teamLeadDangling: "已不在成员中",
       teamErrLeadNotMember: "队长必须是本团队已勾选的成员。",
+      teamLeadNotLeadKind: "该角色不是队长类型，保存将被拒绝",
+      teamLeadOnlyHint: "队长下拉只列「队长」类型的成员；把角色类型改成「队长」后才会出现在这里。",
+      teamLeadNoLeadMember: "本团队没有「队长」类型的成员：先勾选 co-team-lead / co-orchestrator，或到角色库把某个自定义角色设为队长类型。",
+      teamPreviewTitle: "队长提示词预览（含 {count} 个成员）",
+      teamPreviewShow: "展开预览",
+      teamPreviewHide: "收起预览",
+      teamPreviewHint: "只读：与实际注册的 persona 同构，成员勾选 / 取消即时更新。",
+      teamPreviewEmpty: "（勾选成员后这里会实时生成队长提示词）",
       "tier.mainAgent": "主代理·纯调度",
       roleToolMainAgent: "主代理 preset（含委派工具）",
       roleDetailMainAgent: "主代理不绑定档位，工具由会话的 agent preset 决定",
@@ -195,6 +209,11 @@ window.__ModuleLoader__.load({
       roleErrNameDuplicate: "名称与其他自定义角色重复。",
       roleErrDescription: "描述不能为空。",
       roleErrPrompt: "提示词不能为空。",
+      roleKind: "角色类型",
+      roleKindLead: "队长",
+      roleKindMember: "队员",
+      roleKindHint: "只有「队长」类型能被指定为团队队长；「队员」类型只能作为团队成员被派发。",
+      roleErrKind: "请选择角色类型。",
       // ── 角色详情（档位 / 提示词 / 绑定工具）：三处共用同一套词条 ──
       "tier.ro": "只读",
       "tier.ro-net": "只读+联网",
@@ -344,6 +363,14 @@ window.__ModuleLoader__.load({
       teamLeadHint: "The lead is the team's primary role, preferred when dispatching.",
       teamLeadDangling: "no longer a member",
       teamErrLeadNotMember: "The lead must be one of the members ticked for this team.",
+      teamLeadNotLeadKind: "This role is not a lead type — saving will be rejected",
+      teamLeadOnlyHint: "The lead dropdown only lists members of type \"Lead\"; set a role's type to Lead to make it selectable here.",
+      teamLeadNoLeadMember: "This team has no member of type Lead: tick co-team-lead / co-orchestrator, or set a custom role's type to Lead.",
+      teamPreviewTitle: "Lead prompt preview ({count} member(s))",
+      teamPreviewShow: "Show preview",
+      teamPreviewHide: "Hide preview",
+      teamPreviewHint: "Read-only: isomorphic with the registered persona and updates as you tick members.",
+      teamPreviewEmpty: "(tick members and the lead prompt appears here in real time)",
       "tier.mainAgent": "Main agent · orchestration only",
       roleToolMainAgent: "Main agent preset (delegation tools included)",
       roleDetailMainAgent: "The main agent has no tier; its tools come from the session's agent preset.",
@@ -382,6 +409,11 @@ window.__ModuleLoader__.load({
       roleErrNameDuplicate: "Name duplicates another custom role.",
       roleErrDescription: "Description is required.",
       roleErrPrompt: "Prompt is required.",
+      roleKind: "Role type",
+      roleKindLead: "Lead",
+      roleKindMember: "Member",
+      roleKindHint: "Only a Lead role can be a team's lead; a Member role can only be dispatched as a team member.",
+      roleErrKind: "Pick a role type.",
       // ── Role details (tier / prompt / bound tools) shared by all three surfaces ──
       "tier.ro": "Read-only",
       "tier.ro-net": "Read-only + web",
@@ -630,8 +662,17 @@ window.__ModuleLoader__.load({
 
     /* ── 纯数据层：Config.customRoles ↔ 编辑行 ────────────────────── */
 
+    /**
+     * 角色类型（队长 / 队员）的合法值；其余（缺省 / 脏值）返回 ""。
+     * 与 src/roles.ts 的 RoleKind 逐字一致，"": 「还没选」= 必填校验会拦下的状态。
+     */
+    function roleKindValue(value) {
+      return value === "lead" || value === "member" ? value : "";
+    }
+
     function emptyRole() {
-      return { name: "", description: "", prompt: "", tier: "ro", tools: [] };
+      // kind = "": 新建空白角色默认不选类型，由用户在表单里显式选（必填）。
+      return { name: "", description: "", prompt: "", tier: "ro", kind: "", tools: [] };
     }
 
     function copyRole(role) {
@@ -645,6 +686,7 @@ window.__ModuleLoader__.load({
         description: typeof role.description === "string" ? role.description : "",
         prompt: typeof role.prompt === "string" ? role.prompt : "",
         tier: ROLE_TIERS.indexOf(role.tier) >= 0 ? role.tier : "ro",
+        kind: roleKindValue(role.kind),
         tools: tools
       };
     }
@@ -661,7 +703,11 @@ window.__ModuleLoader__.load({
       for (var i = 0; i < roles.length; i += 1) {
         var entry = roles[i];
         if (!entry || typeof entry !== "object") continue;
-        rows.push(copyRole(entry));
+        var row = copyRole(entry);
+        // 老配置没有 kind：运行时按 member 解析（src/roles.ts 的 resolveRoleKind 兜底），
+        // 这里同口径补上，免得一次「保存」把用户的存量角色卡在「必填」校验上。
+        if (row.kind === "") row.kind = "member";
+        rows.push(row);
       }
       return rows;
     }
@@ -785,10 +831,16 @@ window.__ModuleLoader__.load({
           description: entry && typeof entry.description === "string" ? entry.description : "",
           brief: entry && typeof entry.brief === "string" ? entry.brief : "",
           tier: tier,
+          // 模板自带类型：新建角色按模板预填「角色类型」（co-orchestrator / co-team-lead → lead，
+          // 其余 → member）。目录缺 kind 时由 roleKindOf 的兜底名单补上。
+          kind: roleKindOf(name),
           tools: tools
         });
       }
-      out.push({ id: "blank", name: "", blank: true, main: false, description: "", brief: "", tier: "", tools: [] });
+      out.push({
+        id: "blank", name: "", blank: true, main: false,
+        description: "", brief: "", tier: "", kind: "", tools: []
+      });
       return out;
     }
 
@@ -830,13 +882,15 @@ window.__ModuleLoader__.load({
       for (i = 0; i < list.length; i += 1) {
         var role = list[i] || {};
         var raw = typeof role.name === "string" ? role.name : "";
-        var error = { name: "", description: "", prompt: "" };
+        var error = { name: "", description: "", prompt: "", kind: "" };
         if (raw === "") error.name = "nameRequired";
         else if (!ROLE_NAME_PATTERN.test(raw)) error.name = "nameFormat";
         else if (SKILL_NAMES.indexOf(raw) >= 0) error.name = "nameBuiltin";
         else if (counts[raw] > 1) error.name = "nameDuplicate";
         if (typeof role.description !== "string" || role.description.trim() === "") error.description = "required";
         if (typeof role.prompt !== "string" || role.prompt.trim() === "") error.prompt = "required";
+        // 角色类型必填：漏选时保存直接被拦（空白角色尤其容易漏，它默认不选）。
+        if (roleKindValue(role.kind) === "") error.kind = "kindRequired";
         errors.push(error);
       }
       return errors;
@@ -850,6 +904,7 @@ window.__ModuleLoader__.load({
         if (error.name !== "") count += 1;
         if (error.description !== "") count += 1;
         if (error.prompt !== "") count += 1;
+        if (error.kind !== "") count += 1;
       }
       return count;
     }
@@ -945,12 +1000,67 @@ window.__ModuleLoader__.load({
      * resolveTeamLead 口径漂移。用户自建团队的保存校验仍要求 lead ∈ members（validateTeams），
      * 这里只影响展示与写回默认值。
      */
-    function effectiveTeamLead(team) {
+    function effectiveTeamLead(team, customRows) {
       var members = team && Array.isArray(team.members) ? team.members : [];
       var lead = team && typeof team.lead === "string" ? team.lead : "";
-      if (lead !== "" && (members.indexOf(lead) >= 0 || lead === MAIN_AGENT_NAME)) return lead;
+      // 显式 lead 除了「是成员 / 是主代理」之外还要求**类型是队长**：队员类型当队长时
+      // 服务端 resolveTeamLead 会静默回退（人格与配置不一致），客户端按「没指定」处理。
+      if (lead !== "" && (members.indexOf(lead) >= 0 || lead === MAIN_AGENT_NAME)
+        && roleKindOf(lead, customRows) === "lead") {
+        return lead;
+      }
       if (members.indexOf(MAIN_AGENT_NAME) >= 0) return MAIN_AGENT_NAME;
+      for (var i = 0; i < members.length; i += 1) {
+        if (roleKindOf(members[i], customRows) === "lead") return members[i];
+      }
       return members.length > 0 && typeof members[0] === "string" ? members[0] : "";
+    }
+
+    /** 成员职责缺失时的兜底文案（与 src/team-presets.ts 的 EMPTY_DUTY 逐字一致）。 */
+    var EMPTY_DUTY = "（未填写职责）";
+
+    /** 队长职责缺失时的兜底正文（与 src/team-presets.ts 的 body 兜底逐字一致）。 */
+    var EMPTY_PERSONA = "你的职责：分析需求 → 委派给本团队的专职子代理 → 审核并汇总结果；绝不亲自操作文件（除非你本身是执行型角色）。";
+
+    /**
+     * 团队主代理 persona 的**本地重建**（团队编辑页的实时预览用），与
+     * src/team-presets.ts 的 {@link buildTeamPersona} 同构：
+     *
+     *   ① 身份行：`你是 cohub 团队「<团队名>」的主代理（团队 id <id>；队长 <lead>）。`
+     *   ② 队长职责全文（内置取 brief、自定义取 prompt；空则用运行时同一条兜底正文）
+     *   ③ `团队成员（共 N 人）：` + 每行 `- <成员名>：<该角色 description>`，队长自己标「（你）」
+     *
+     * 三段用 `join("\n\n")` 拼（段间空一行），查不到的成员跳过并在计数里不出现——与运行时的
+     * `persona skip unknown member` 同一口径，所以预览的 N 恒等于实际注册的 N。
+     *
+     * @param team - 团队编辑行（members / name / lead / id）
+     * @param customRows - 角色库当前编辑行（自定义角色的 kind / prompt / description）
+     * @returns { text, count }（count = 参与 persona 的成员数，即「共 N 人」）
+     */
+    function leadPersonaPreview(team, customRows) {
+      var members = team && Array.isArray(team.members) ? team.members : [];
+      var teamName = team && typeof team.name === "string" ? team.name.trim() : "";
+      var teamId = teamSlugOf(team);
+      var lead = effectiveTeamLead(team, customRows);
+      var leadDetail = roleDetailOf(lead, customRows);
+      var brief = typeof leadDetail.prompt === "string" ? leadDetail.prompt.trim() : "";
+      var head = "你是 cohub 团队「" + teamName + "」的主代理（团队 id " + teamId +
+        "；队长 " + (lead !== "" ? lead : "（未指定）") + "）。";
+      var lines = [];
+      for (var i = 0; i < members.length; i += 1) {
+        var member = members[i];
+        var detail = roleDetailOf(member, customRows);
+        if (detail.promptSource === "none") continue;
+        var duty = typeof detail.description === "string" ? detail.description.trim() : "";
+        lines.push("- " + member + "：" + (duty !== "" ? duty : EMPTY_DUTY) + (member === lead ? "（你）" : ""));
+      }
+      var roster = lines.length > 0
+        ? ["团队成员（共 " + lines.length + " 人）："].concat(lines).join("\n")
+        : "团队成员（共 " + lines.length + " 人）：\n- （本团队没有可列出的成员）";
+      return {
+        text: [head, brief !== "" ? brief : EMPTY_PERSONA, roster].join("\n\n"),
+        count: lines.length
+      };
     }
 
     /**
@@ -1037,7 +1147,7 @@ window.__ModuleLoader__.load({
     }
 
     /** 编辑行 → 待写入的 teams 数组（只写受控字段，草稿标记不外泄）。 */
-    function teamsToConfig(rows) {
+    function teamsToConfig(rows, customRows) {
       var out = [];
       if (!Array.isArray(rows)) return out;
       for (var i = 0; i < rows.length; i += 1) {
@@ -1050,7 +1160,7 @@ window.__ModuleLoader__.load({
           description: typeof team.description === "string" ? team.description : "",
           members: members,
           // lead 与 members 同一次 mutate 写入：空 lead 落成默认队长，配置文件里不留空。
-          lead: effectiveTeamLead({ members: members, lead: team.lead })
+          lead: effectiveTeamLead({ members: members, lead: team.lead }, customRows)
         };
         // 预设 id 落库规则（不新增 schema 字段，全走已有的 presetId）：
         //   - 用户手改过 slug → 写显式 presetId = `cohub-team-<手填值>`；
@@ -1073,7 +1183,7 @@ window.__ModuleLoader__.load({
      *   - 预设 id 的 slug 合法（kebab-case）且表内不重复（按最终 slug 判，手改过的也算）。
      * @returns 与 rows 等长的错误数组，空串表示该字段合法。
      */
-    function validateTeams(rows) {
+    function validateTeams(rows, customRows) {
       var list = Array.isArray(rows) ? rows : [];
       var counts = {};
       var errors = [];
@@ -1096,8 +1206,14 @@ window.__ModuleLoader__.load({
         else if (counts[slug] > 1) error.id = "idDuplicate";
         // 队长必须是本团队已勾选的成员；空 lead 合法（保存时按默认规则补成有效值）。
         var lead = typeof team.lead === "string" ? team.lead : "";
-        if (lead !== "" && (!Array.isArray(team.members) || team.members.indexOf(lead) < 0)) {
+        // 空 lead 保存时会落成 effectiveTeamLead（默认队长），所以校验的必须是**将要写入的那个值**，
+        // 否则会出现「校验通过但写进去的队长是队员类型」的静默错配。
+        var written = lead !== "" ? lead : effectiveTeamLead(team, customRows);
+        if (written !== "" && (!Array.isArray(team.members) || team.members.indexOf(written) < 0)) {
           error.lead = "notMember";
+        } else if (written !== "" && roleKindOf(written, customRows) !== "lead") {
+          // 队员类型当队长：服务端会静默回退成别的角色，这里直接拦截（提示语即「保存将被拒绝」）。
+          error.lead = "notLeadKind";
         }
         errors.push(error);
       }
@@ -1256,6 +1372,35 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 角色类型解析（纯函数），优先级与运行时 src/roles.ts 的 resolveRoleKind **逐条对齐**：
+     *   ① 自定义角色（角色库编辑行）里同名且 kind 合法 → 用它（同名覆盖内置）；
+     *   ② ROLE_CATALOG.roles[name].kind（构建期从 BUILTIN_ROLE_KINDS 生成）；
+     *   ③ 内置名单兜底（LEAD_ROLE_NAMES）→ 其余一律 "member"。
+     * 未知角色 / 空名 / 脏值全部落到 "member"，与运行时一致，绝不抛错。
+     *
+     * @param name - 角色名
+     * @param customRows - 角色库当前编辑行（未保存的草稿也算）
+     * @returns "lead" | "member"
+     */
+    function roleKindOf(name, customRows) {
+      var key = typeof name === "string" ? name.trim() : "";
+      if (key === "") return "member";
+      var list = Array.isArray(customRows) ? customRows : [];
+      for (var i = 0; i < list.length; i += 1) {
+        var row = list[i] || {};
+        if (row.name !== key) continue;
+        var customKind = roleKindValue(row.kind);
+        if (customKind !== "") return customKind;
+        break;
+      }
+      var roles = ROLE_CATALOG && ROLE_CATALOG.roles ? ROLE_CATALOG.roles : {};
+      var entry = Object.prototype.hasOwnProperty.call(roles, key) ? roles[key] : null;
+      var catalogKind = roleKindValue(entry && typeof entry === "object" ? entry.kind : "");
+      if (catalogKind !== "") return catalogKind;
+      return LEAD_ROLE_NAMES.indexOf(key) >= 0 ? "lead" : "member";
+    }
+
+    /**
      * 团队成员的档位分布：[{ tier, known, count }]，按 ROLE_TIERS 顺序，未知档位收尾。
      * 成员名查不到角色时归入 tier="unknown"，不会因为配置里多写一个名字而崩。
      */
@@ -1341,6 +1486,8 @@ window.__ModuleLoader__.load({
       teamErrors: [],
       teamsNotice: "",
       expandedTeam: -1,
+      // 队长提示词预览展开的是哪个团队行下标；-1 = 全收起（折叠区默认收起）。
+      teamPreview: -1,
       // 角色详情面板（提示词 + 绑定工具）展开的是哪个角色名；"" = 全收起。
       expandedRole: "",
       // 设置页 tab 选中态（"teams" | "roles"）：只活在 controller 闭包里，不写配置。
@@ -1419,6 +1566,7 @@ window.__ModuleLoader__.load({
       var teamErrors = [];
       var teamsNotice = "";           // 一次性提示（保留 "activeCleared" 旧词条，本版不再触发）
       var expandedTeam = -1;          // 展开编辑的团队行下标，-1 = 全收起
+      var teamPreview = -1;           // 展开队长提示词预览的团队行下标，-1 = 全收起
       var expandedRole = "";          // 展开详情的角色名，"" = 全收起（角色库/成员/团队三处共用）
 
       // 默认预设（会话未指名预设时组合的那一个）：客户端拿不到「当前会话」的预设，
@@ -1595,6 +1743,7 @@ window.__ModuleLoader__.load({
           teamErrors: teamErrors,
           teamsNotice: teamsNotice,
           expandedTeam: expandedTeam,
+          teamPreview: teamPreview,
           expandedRole: expandedRole,
           tab: tab,
           presetStatus: presetStatus,
@@ -1632,6 +1781,7 @@ window.__ModuleLoader__.load({
           && left.teamErrors === right.teamErrors
           && left.teamsNotice === right.teamsNotice
           && left.expandedTeam === right.expandedTeam
+          && left.teamPreview === right.teamPreview
           && left.expandedRole === right.expandedRole
           && left.tab === right.tab
           && left.presetStatus === right.presetStatus
@@ -1916,6 +2066,8 @@ window.__ModuleLoader__.load({
               copy.description = "";
               copy.prompt = "";
               copy.tier = "ro";
+              // 空白角色默认不选类型：类型是必填项，必须由用户手动选。
+              copy.kind = "";
               copy.tools = [];
             } else {
               // 「基于模板」的显示名固定用模板 id：选完再改名也不影响这条提示。
@@ -1923,6 +2075,7 @@ window.__ModuleLoader__.load({
               copy.description = template.description !== "" ? template.description : template.name;
               copy.prompt = template.brief !== "" ? template.brief : template.description;
               copy.tier = ROLE_TIERS.indexOf(template.tier) >= 0 ? template.tier : "ro";
+              copy.kind = roleKindValue(template.kind) !== "" ? template.kind : "member";
               copy.tools = template.tools.slice();
             }
           }
@@ -2196,7 +2349,7 @@ window.__ModuleLoader__.load({
       /** 写回草稿行并（按需）重算标红；任何编辑都会清掉「已保存」状态。 */
       function pushTeamsRows(rows) {
         teamsDraft.rows = rows;
-        teamErrors = teamErrors.length > 0 ? validateTeams(rows) : [];
+        teamErrors = teamErrors.length > 0 ? validateTeams(rows, currentRoles()) : [];
         teamsSaved = false;
         teamsFailed = false;
         teamsNotice = "";
@@ -2206,6 +2359,12 @@ window.__ModuleLoader__.load({
       /** 单击卡片头部展开/收起编辑区（纯 UI 状态，不进配置）。 */
       function toggleTeam(index) {
         expandedTeam = expandedTeam === index ? -1 : index;
+        publish();
+      }
+
+      /** 展开/收起「队长提示词预览」折叠区（纯 UI 状态；文本本身总是按当前行实时重算）。 */
+      function toggleTeamPreview(index) {
+        teamPreview = teamPreview === index ? -1 : index;
         publish();
       }
 
@@ -2336,10 +2495,10 @@ window.__ModuleLoader__.load({
         var name = template.name + "-副本";
         // 复制的团队是**用户团队**，队长必须 ∈ members（validateTeams 会拦悬空 lead）。
         // 内置团队的 lead 是主代理 co-orchestrator（不在成员里），直接抄过来会让副本一建就标红
-        // 且无法保存，所以落成第一个成员，队长选择器里再让用户改。
+        // 且无法保存：优先挑第一个「队长」类型的成员，挑不到就交给默认规则（再让用户在下拉里改）。
         var leadForCopy = template.members.indexOf(template.lead) >= 0
           ? template.lead
-          : (template.members.length > 0 ? template.members[0] : "");
+          : effectiveTeamLead({ members: template.members, lead: "" });
         var row = copyTeam({
           id: uniqueTeamId(template.id + "-copy", taken),
           name: name,
@@ -2412,7 +2571,10 @@ window.__ModuleLoader__.load({
           publish();
           return Promise.resolve(false);
         }
-        var errors = validateTeams(teamsDraft.rows);
+        // 自定义角色类型（kind）可能刚在「角色库」里改过还没保存，校验/落库都带上当前编辑行，
+        // 否则会把用户刚设成「队长」类型的自定义角色误判成队员。
+        var rolesNow = currentRoles();
+        var errors = validateTeams(teamsDraft.rows, rolesNow);
         if (countTeamErrors(errors) > 0) {
           teamErrors = errors;
           teamsSaved = false;
@@ -2421,7 +2583,7 @@ window.__ModuleLoader__.load({
           return Promise.resolve(false);
         }
         var expected = teamsDraft.revision;
-        var next = teamsToConfig(teamsDraft.rows);
+        var next = teamsToConfig(teamsDraft.rows, rolesNow);
         saving = true;
         teamsSaved = false;
         teamsFailed = false;
@@ -2586,6 +2748,7 @@ window.__ModuleLoader__.load({
         editSkillRow: editSkillRow,
         resetSkillRow: resetSkillRow,
         toggleTeam: toggleTeam,
+        toggleTeamPreview: toggleTeamPreview,
         toggleRoleDetail: toggleRoleDetail,
         editTeam: editTeam,
         toggleTeamMember: toggleTeamMember,
@@ -2713,7 +2876,17 @@ window.__ModuleLoader__.load({
         ".cohub-check-item{display:flex;flex-direction:column;gap:4px;flex:1 1 220px;min-width:0;}",
         ".cohub-tier-chip{align-self:flex-start;background:transparent;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:0 8px;font:inherit;font-size:11px;line-height:17px;color:var(--dsw-alias-label-tertiary);cursor:pointer;}",
         ".cohub-tier-chip:hover{color:var(--dsw-alias-label-primary);}",
-        ".cohub-tier-dist{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;}"
+        ".cohub-tier-dist{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;}",
+        // ── 角色类型（队长 / 队员 分段按钮）与队长提示词预览（只读 pre） ──
+        ".cohub-kind-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}",
+        ".cohub-kind-btn{height:30px;padding:0 14px;font:inherit;font-size:12px;line-height:18px;cursor:pointer;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);border-radius:999px;}",
+        ".cohub-kind-btn:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-border-strong,#4b7193);}",
+        ".cohub-kind-btn:disabled{opacity:.45;cursor:default;}",
+        ".cohub-badge-lead{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);}",
+        ".cohub-lead-picker{display:flex;flex-direction:column;gap:4px;min-width:0;}",
+        ".cohub-preview{display:flex;flex-direction:column;gap:6px;}",
+        ".cohub-preview-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;}",
+        ".cohub-persona-preview{max-height:260px;overflow:auto;white-space:pre-wrap;margin:0;}"
       ].join("\n");
       var tag = document.createElement("style");
       tag.dataset.plugin = "dsh-cohub";
@@ -2785,7 +2958,16 @@ window.__ModuleLoader__.load({
         else if (error.name === "nameDuplicate") parts.push(t("roleErrNameDuplicate"));
         if (error.description === "required") parts.push(t("roleErrDescription"));
         if (error.prompt === "required") parts.push(t("roleErrPrompt"));
+        if (error.kind === "kindRequired") parts.push(t("roleErrKind"));
         return parts.join(" ");
+      }
+
+      /** 角色类型徽标文案：未选（""）返回 null，卡片上就不挂徽标。 */
+      function roleKindLabel(kind) {
+        var value = roleKindValue(kind);
+        if (value === "lead") return t("roleKindLead");
+        if (value === "member") return t("roleKindMember");
+        return null;
       }
 
       /** 预设显示名：「名称（id）」，名称缺失时只显示 id（默认预设那一行用）。 */
@@ -3159,7 +3341,7 @@ window.__ModuleLoader__.load({
 
       function renderRole(role, index) {
         var error = roleErrorOf(index);
-        var invalid = error.name !== "" || error.description !== "" || error.prompt !== "";
+        var invalid = error.name !== "" || error.description !== "" || error.prompt !== "" || error.kind !== "";
         var tierOptions = [];
         for (var k = 0; k < ROLE_TIERS.length; k += 1) {
           tierOptions.push(React.createElement("option", { key: ROLE_TIERS[k], value: ROLE_TIERS[k] }, ROLE_TIERS[k]));
@@ -3175,6 +3357,24 @@ window.__ModuleLoader__.load({
         var hasTemplate = templateId !== "";
         var promptDisabled = locked || !hasTemplate;
         var pickerOpen = !hasTemplate || state.rolePicker === index;
+        // 角色类型分段按钮：lead / member 二选一（必填）。与模板选择无关，未选模板时也能先选类型。
+        var kindButtons = [];
+        var kindValues = ["lead", "member"];
+        for (var kv = 0; kv < kindValues.length; kv += 1) {
+          kindButtons.push(React.createElement("button", {
+            key: kindValues[kv],
+            type: "button",
+            className: role.kind === kindValues[kv] ? "cohub-kind-btn cohub-seg-active" : "cohub-kind-btn",
+            disabled: locked,
+            "aria-pressed": role.kind === kindValues[kv],
+            "aria-label": typeLabel + " · " + t("roleKind") + " " + roleKindLabel(kindValues[kv]),
+            onClick: function (value) {
+              return function () {
+                props.editRole(index, "kind", value);
+              };
+            }(kindValues[kv])
+          }, roleKindLabel(kindValues[kv])));
+        }
         return React.createElement("li", {
           key: "role-" + index,
           className: invalid ? "cohub-row cohub-invalid" : "cohub-row"
@@ -3184,6 +3384,11 @@ window.__ModuleLoader__.load({
             React.createElement("span", { className: "cohub-role-summary" },
               role.description !== "" ? role.description : t("roleDescription")),
             React.createElement("span", { className: "cohub-badge" }, tierLabel(role.tier)),
+            roleKindLabel(role.kind) !== null
+              ? React.createElement("span", {
+                className: role.kind === "lead" ? "cohub-badge cohub-badge-lead" : "cohub-badge"
+              }, roleKindLabel(role.kind))
+              : null,
             roleTitle !== "" ? modelPill(role.name) : null,
             // 未命名的草稿行查不到详情：按钮留着但禁用，避免空键把面板挂到别的角色上。
             React.createElement("button", {
@@ -3259,6 +3464,15 @@ window.__ModuleLoader__.load({
                   props.editRole(index, "prompt", event.target.value);
                 }
               })
+            ),
+            // 角色类型（必填）：两个分段按钮；没选时整行标红并给出「请选择角色类型」。
+            React.createElement("div", { className: "cohub-field cohub-field-wide" },
+              React.createElement("label", {
+                className: error.kind !== "" ? "cohub-label cohub-invalid-label" : "cohub-label"
+              }, t("roleKind")),
+              React.createElement("div", { className: "cohub-kind-row" }, kindButtons),
+              React.createElement("p", { className: "cohub-desc" }, t("roleKindHint")),
+              error.kind !== "" ? React.createElement("p", { className: "cohub-role-error" }, t("roleErrKind")) : null
             )
           ),
           // 模板状态行：已选 → 「基于模板：xxx」+「重新选择模板」；未选 → 禁用提示。
@@ -3390,9 +3604,11 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * 队长选择器：选项**只来自当前已勾选的成员**（未勾选的角色当不了队长）。
+       * 队长选择器：选项**只列已勾选且类型为「队长」的成员**（队员类型的 lead 会被服务端
+       * resolveTeamLead 静默回退，validateTeams 也会拦「notLeadKind」）。
        * 没勾任何成员 → 禁用并提示「先选成员」；lead 为空时按 effectiveTeamLead 预选默认值；
-       * lead 悬空（原队长被取消勾选）时额外留一个标红选项，让「保存被拦」的原因可见。
+       * 当前 lead 已不是成员、或类型不是队长（老配置）时，额外留一个标红选项，
+       * 让「保存被拦」的原因在控件上直接可见。
        */
       function renderLeadPicker(team, index, title) {
         var members = Array.isArray(team.members) ? team.members : [];
@@ -3408,25 +3624,75 @@ window.__ModuleLoader__.load({
             React.createElement("span", { className: "cohub-desc" }, t("teamLeadEmpty")));
         }
         var raw = typeof team.lead === "string" ? team.lead : "";
+        var selected = raw !== "" ? raw : effectiveTeamLead(team, roles);
+        var gone = selected !== "" && members.indexOf(selected) < 0;
+        var wrongKind = selected !== "" && !gone && roleKindOf(selected, roles) !== "lead";
         var options = [];
-        if (raw !== "" && members.indexOf(raw) < 0) {
-          options.push(React.createElement("option", { key: "__dangling", value: raw },
-            raw + "（" + t("teamLeadDangling") + "）"));
+        if (gone || wrongKind) {
+          options.push(React.createElement("option", { key: "__invalid", value: selected },
+            selected + "（" + (gone ? t("teamLeadDangling") : t("teamLeadNotLeadKind")) + "）"));
         }
+        var leadCount = 0;
+        var listed = {};
+        // 只有「已放进失效项」的那一个才从正常列表里排除，否则当前队长会缺少对应 option
+        // （select 的 value 找不到匹配项时浏览器直接显示空白，看起来像没选）。
+        if (gone || wrongKind) listed[selected] = true;
         for (var i = 0; i < members.length; i += 1) {
-          options.push(React.createElement("option", { key: members[i], value: members[i] }, members[i]));
+          var name = members[i];
+          if (listed[name] === true || roleKindOf(name, roles) !== "lead") continue;
+          listed[name] = true;
+          leadCount += 1;
+          options.push(React.createElement("option", { key: name, value: name }, name));
         }
-        return React.createElement("div", { className: "cohub-lead-picker" },
+        var children = [
           React.createElement("select", {
-            className: "cohub-input",
+            className: wrongKind ? "cohub-input cohub-invalid" : "cohub-input",
             disabled: locked,
-            value: raw !== "" ? raw : effectiveTeamLead(team),
+            value: selected,
             "aria-label": label,
             onChange: function (event) {
               props.setTeamLead(index, event.target.value);
             }
           }, options),
-          React.createElement("span", { className: "cohub-desc" }, t("teamLeadHint")));
+          React.createElement("span", { className: "cohub-desc" }, t("teamLeadHint"))
+        ];
+        if (wrongKind) {
+          children.push(React.createElement("p", { className: "cohub-desc cohub-invalid-label" },
+            t("teamLeadNotLeadKind")));
+        }
+        if (leadCount === 0) {
+          children.push(React.createElement("p", { className: "cohub-desc cohub-invalid-label" },
+            t("teamLeadNoLeadMember")));
+        }
+        return React.createElement("div", { className: "cohub-lead-picker" }, children);
+      }
+
+      /**
+       * 队长提示词实时预览（折叠区）：文本由 {@link leadPersonaPreview} 按「与注册 persona
+       * 同构」的模板现场拼出，随成员勾选 / 取消、队长切换即时更新（无需保存）。
+       */
+      function renderPersonaPreview(team, index) {
+        var preview = leadPersonaPreview(team, roles);
+        var open = state.teamPreview === index;
+        return React.createElement("div", { className: "cohub-preview" },
+          React.createElement("div", { className: "cohub-preview-head" },
+            React.createElement("span", { className: "cohub-label" },
+              t("teamPreviewTitle", { count: preview.count })),
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-row-reset",
+              "aria-expanded": open,
+              onClick: function () {
+                props.toggleTeamPreview(index);
+              }
+            }, open ? t("teamPreviewHide") : t("teamPreviewShow"))
+          ),
+          React.createElement("p", { className: "cohub-desc" }, t("teamPreviewHint")),
+          open
+            ? React.createElement("pre", { className: "cohub-prompt-readonly cohub-persona-preview" },
+              preview.count > 0 ? preview.text : t("teamPreviewEmpty"))
+            : null
+        );
       }
 
       function renderTeam(team, index) {
@@ -3523,8 +3789,15 @@ window.__ModuleLoader__.load({
                   className: error.lead !== "" ? "cohub-label cohub-invalid-label" : "cohub-label"
                 }, t("teamLead")),
                 renderLeadPicker(team, index, title),
-                error.lead !== "" ? React.createElement("p", { className: "cohub-desc" }, t("teamErrLeadNotMember")) : null
+                error.lead === "notLeadKind"
+                  ? React.createElement("p", { className: "cohub-desc cohub-invalid-label" }, t("teamLeadNotLeadKind"))
+                  : error.lead !== ""
+                    ? React.createElement("p", { className: "cohub-desc cohub-invalid-label" }, t("teamErrLeadNotMember"))
+                    : null
               ),
+              // 队长提示词实时预览（折叠区）：随成员勾选 / 队长切换即时重算，只读。
+              React.createElement("div", { className: "cohub-field cohub-field-wide" },
+                renderPersonaPreview(team, index)),
               React.createElement("div", { className: "cohub-field cohub-field-wide" },
                 React.createElement("label", {
                   className: error.members !== "" ? "cohub-label cohub-invalid-label" : "cohub-label"
@@ -3994,6 +4267,9 @@ window.__ModuleLoader__.load({
           toggleTeam: function (index) {
             controller.toggleTeam(index);
           },
+          toggleTeamPreview: function (index) {
+            controller.toggleTeamPreview(index);
+          },
           toggleRoleDetail: function (name) {
             controller.toggleRoleDetail(name);
           },
@@ -4058,7 +4334,10 @@ window.__ModuleLoader__.load({
       effectiveTeamLead: effectiveTeamLead,
       builtinTeamsOf: builtinTeamsOf,
       isMainAgent: isMainAgent,
-      roleTierKey: roleTierKey
+      roleTierKey: roleTierKey,
+      roleKindOf: roleKindOf,
+      leadPersonaPreview: leadPersonaPreview,
+      validateRoles: validateRoles
     };
     return module.exports;
   }
