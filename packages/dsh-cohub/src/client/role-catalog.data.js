@@ -4,7 +4,7 @@
 //          src/builtin-teams.ts（内置团队：只读展示 + 复制模板）
 // 浏览器消费：纯 ESM，无 import、无 Node API；由 scripts/build-client.js 拼进 lib/client.js。
 export const ROLE_CATALOG = {
-  "generatedAt": "2026-11-26T03:57:13.809Z",
+  "generatedAt": "2026-11-27T07:56:07.227Z",
   "tiers": {
     "ro": {
       "preset": "cohub-subagent-readonly",
@@ -426,6 +426,7 @@ export const ROLE_CATALOG = {
         "co-cordis"
       ],
       "lead": "co-orchestrator",
+      "presetId": "co-orchestrator",
       "builtin": true
     },
     {

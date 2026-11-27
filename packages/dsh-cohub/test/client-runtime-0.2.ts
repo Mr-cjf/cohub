@@ -11,6 +11,9 @@
 //     SettingsForms 投影由 host-integration.ts 层 3 用真实 Loader + describe() 验证，本测试不重复。
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+// 构建期生成的数据文件（bun run build 第一步重生成）：团队区块的真实数据源，
+// 用它断言「UI 展示口径 == 服务端注册口径」，而不是拿手写样例自证。
+import { ROLE_CATALOG } from "../src/client/role-catalog.data.js";
 
 let pass = 0;
 let fail = 0;
@@ -404,6 +407,24 @@ let zhDict: Record<string, string> = {};
     internals.reasoningEffortsOf({ id: "m3", reasoning: { efforts: [{ id: "medium" }] } })[0]?.label === "medium");
   check("reasoningEffortsOf 跳过无 id 的档位项",
     internals.reasoningEffortsOf({ id: "m4", reasoning: { efforts: [{ name: "无名" }, null, { id: "low" }] } }).length === 1);
+
+  // ── 团队卡片展示口径（本地实例回归）──────────────────────────────────
+  // 真实数据源 ROLE_CATALOG.builtinTeams：内置 dev 团队显式 presetId = co-orchestrator、
+  // lead = co-orchestrator（主代理不在 12 个 members 里）。UI 必须与注册日志同口径，
+  // 且队长不能被静默回退成 members[0]（co-fixer）。
+  const devSpec = internals.builtinTeamsOf(ROLE_CATALOG).find((item: any) => item.id === "dev");
+  check("内置 dev 团队带到客户端的 presetId = co-orchestrator",
+    !!devSpec && devSpec.presetId === "co-orchestrator");
+  check("内置 dev 团队卡片展示的预设 id = co-orchestrator（不是 cohub-team-dev）",
+    internals.teamPresetId(devSpec) === "co-orchestrator");
+  check("内置 dev 团队队长解析为 co-orchestrator（不回退 co-fixer）",
+    internals.effectiveTeamLead(devSpec) === "co-orchestrator");
+  // 校验不放宽：用户自建团队的 lead 必须 ∈ members（主代理例外只作用于内置展示）。
+  const danglingLead = internals.validateTeams([{
+    id: "my-team", name: "我的团队", members: ["co-fixer"], lead: "co-orchestrator", presetId: "",
+  }]);
+  check("用户自建团队 lead 不在 members 仍被拦（notMember）",
+    danglingLead.length === 1 && danglingLead[0].lead === "notMember");
 }
 
 // ── 层 5：组件渲染契约（5 个特殊态 + 状态提示） ──

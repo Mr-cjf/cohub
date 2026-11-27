@@ -88,6 +88,8 @@ interface BuiltinTeamEntry {
   description: string;
   members: string[];
   lead: string;
+  /** 预设 id 覆盖（与 src/builtin-teams.ts 同源；缺省按 cohub-team-<id> 推导） */
+  presetId?: string;
   builtin: true;
 }
 
@@ -252,6 +254,8 @@ function buildCatalog(generatedAt: string): RoleCatalog {
     description: team.description,
     members: team.members.slice(),
     lead: team.lead,
+    // 显式 presetId 必须带给客户端：UI 展示要和服务端注册的 id 同口径（dev 覆盖成 co-orchestrator）
+    ...(team.presetId ? { presetId: team.presetId } : {}),
     builtin: true as const,
   }));
 

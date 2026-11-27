@@ -1004,14 +1004,20 @@ window.__ModuleLoader__.load({
 
     /**
      * 团队的有效队长（默认值规则唯一入口，下拉框默认选中与保存写回都用它）：
-     *   1. 显式 lead 且确实在 members 里 → 用它；
+     *   1. 显式 lead 且（∈ members **或就是 co-orchestrator**）→ 用它；
      *   2. lead 为空（或悬空）且成员含 co-orchestrator → 选 co-orchestrator（主代理天然是调度者）；
      *   3. 否则取第一个成员；没有成员 → ""。
+     *
+     * ① 的 co-orchestrator 例外：主代理是团队队长而**不是子代理成员**，内置团队的 members
+     * 只列专职子代理（见 src/builtin-teams.ts，dev 的 lead = co-orchestrator）。不放宽就会把
+     * 「开发团队」的队长静默回退成 members[0]（co-fixer），与服务端 team-presets.ts 的
+     * resolveTeamLead 口径漂移。用户自建团队的保存校验仍要求 lead ∈ members（validateTeams），
+     * 这里只影响展示与写回默认值。
      */
     function effectiveTeamLead(team) {
       var members = team && Array.isArray(team.members) ? team.members : [];
       var lead = team && typeof team.lead === "string" ? team.lead : "";
-      if (lead !== "" && members.indexOf(lead) >= 0) return lead;
+      if (lead !== "" && (members.indexOf(lead) >= 0 || lead === MAIN_AGENT_NAME)) return lead;
       if (members.indexOf(MAIN_AGENT_NAME) >= 0) return MAIN_AGENT_NAME;
       return members.length > 0 && typeof members[0] === "string" ? members[0] : "";
     }
@@ -1090,6 +1096,9 @@ window.__ModuleLoader__.load({
           description: typeof team.description === "string" ? team.description : "",
           members: members,
           lead: typeof team.lead === "string" ? team.lead : "",
+          // 显式 presetId 必须保留：内置 dev 团队覆盖成 co-orchestrator（见 builtin-teams.ts），
+          // 丢了这个字段 UI 就会把展示 id 推导成 `cohub-team-dev`，与注册日志对不上。
+          presetId: typeof team.presetId === "string" ? team.presetId : "",
           builtin: true
         });
       }
@@ -2394,12 +2403,18 @@ window.__ModuleLoader__.load({
           if (taken.indexOf(specs[t2].id) < 0) taken.push(specs[t2].id);
         }
         var name = template.name + "-副本";
+        // 复制的团队是**用户团队**，队长必须 ∈ members（validateTeams 会拦悬空 lead）。
+        // 内置团队的 lead 是主代理 co-orchestrator（不在成员里），直接抄过来会让副本一建就标红
+        // 且无法保存，所以落成第一个成员，队长选择器里再让用户改。
+        var leadForCopy = template.members.indexOf(template.lead) >= 0
+          ? template.lead
+          : (template.members.length > 0 ? template.members[0] : "");
         var row = copyTeam({
           id: uniqueTeamId(template.id + "-copy", taken),
           name: name,
           description: template.description,
           members: template.members.slice(),
-          lead: template.lead
+          lead: leadForCopy
         });
         row.isNew = true;
         row.slugEdited = false;
@@ -3663,9 +3678,11 @@ window.__ModuleLoader__.load({
               t("teamMemberCount", { count: team.members.length })),
             leadName !== "" ? React.createElement("span", { className: "cohub-badge cohub-badge-lead" },
               t("teamLeadBadge", { name: skillLabel(leadName) })) : null,
-            // 内置团队的预设 id 恒为 `cohub-team-<内置 id>`（见 src/team-presets.ts）。
+            // 预设 id 与「注册器真正注册的 id」同口径：显式 presetId 优先（内置 dev 团队 =
+            // co-orchestrator），否则 `cohub-team-<id>`（见 src/team-presets.ts 的 teamPresetId）。
+            // 绝不能在这里硬拼前缀：那会把 dev 的展示 id 漂成 cohub-team-dev。
             React.createElement("span", { className: "cohub-row-id cohub-mono" },
-              t("teamPresetIdBadge", { id: TEAM_PRESET_PREFIX + team.id })),
+              t("teamPresetIdBadge", { id: teamPresetId(team) })),
             distributionParts.length > 0
               ? React.createElement("span", { className: "cohub-tier-dist" },
                 t("teamTierDistribution") + " · " + distributionParts.join(t("listSeparator")))
