@@ -2,6 +2,22 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.17] - 2026-11-27
+
+### 新增
+
+- **两个通用内置角色**：`co-team-lead`（通用队长，纯调度：拆解目标 → 选队员 → 派发 → 验收汇总）与 `co-team-member`（通用队员，示例角色：按任务书完成并交付）。二者作为参考范例，可直接选进团队，也可作为新建角色的模板；提示词不写死成员名单，成员以当前团队配置为准。
+
+### 修复
+
+- **`agentPresets` 未 inject 导致插件同步失败**：设置页「内置插件」报 `cannot get property "remote.agentPresets" without inject`。已在 client inject 声明 `remote.agentPresets`，并给属性访问加 try/catch 兜底。
+- **团队卡片预设 id 显示错误**：内置开发团队显示 `cohub-team-dev`，实际注册为 `co-orchestrator`。已改为优先读 `team.presetId`（数据生成器与客户端两处补齐）。
+- **内置开发团队队长显示成 `co-fixer`**：`co-orchestrator` 不在该团队 members 内，被 lead 校验回退到第一个成员。已改为「主代理例外」（`lead === co-orchestrator` 直接采纳），用户自建团队仍要求 lead 在成员内。
+
+### 说明
+
+- 本版改动均在隔离实例（独立 DSH_HOME + mobile profile）中真实验证：CoHub 代理菜单正常、双 tab 可切、18 个内置角色可见、默认预设显示为「开发团队（co-orchestrator）」、运行时日志 `registered id=co-orchestrator` / `registered id=cohub-team-writing` 正常。
+
 ## [0.13.16] - 2026-11-27
 
 ### 修复
