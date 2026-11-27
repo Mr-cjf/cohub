@@ -38,6 +38,8 @@
         #                **优先于 tier**：非空时按它装配工具表，为空时回退 tier 默认组合
         #   tier         可选，快捷组合/展示用：ro / ro-net / rw / rw-shell / cordis；
         #                tools 与 tier 都空 = 只读组合
+        #   kind         可选，角色类型：lead / member（缺省 = member，老配置不写该字段按队员处理）；
+        #                lead=队长（可被团队的 lead 指定为主代理），member=队员（只能被派发）
         # 角色专属模型不在这里配，而在 skills 路由里按角色名覆盖 provider/model/maxTokens/reasoningEffort。
         # 注意：重名检查与工具 id 存在性检查在运行时（注册逻辑）进行，不在 schema 层。
         # 示例：
@@ -46,10 +48,16 @@
         #       description: 只读代码审查，输出风险清单
         #       prompt: 你只审查，不修改；按文件列出风险与建议
         #       tools: [tool-fs, tool-web]   # 自由绑定；不写则回退 tier
+        #       kind: member                 # 队员（缺省即 member，可省）
         #     - name: my-reviewer
         #       description: 只读代码审查（快捷档位写法）
         #       prompt: 你只审查，不修改；按文件列出风险与建议
         #       tier: ro
+        #       kind: member
+        #     - name: my-brand-lead
+        #       description: 品牌文案主笔（可被团队指定为队长）
+        #       prompt: 你只派活，所有对外文案统一口吻
+        #       kind: lead                   # 队长：可写进 teams[].lead 当主代理
         customRoles: []
         # teams / activeTeam：团队（角色池编组）——把内置角色与 customRoles 按用途分组，
         # **每个团队映射为一个 DSH Agent 预设**：团队切换改为在 DSH 的 Agent 预设里选择，

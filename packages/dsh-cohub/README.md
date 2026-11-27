@@ -183,7 +183,11 @@ revision 冲突拒绝保存、只写显式配置的代理等。
                              #   name / description / prompt 必填（name 为 kebab-case，不得与内置角色重名）；
                              #   tools 可选，工具插件 id 数组（默认 []，如 [tool-fs, tool-web]），优先于 tier；
                              #   tier 可选，快捷组合/展示用（ro|ro-net|rw|rw-shell|cordis），
-                             #     tools 非空时以 tools 为准，tools 与 tier 都空 = 只读组合。
+                             #     tools 非空时以 tools 为准，tools 与 tier 都空 = 只读组合；
+                             #   kind 可选，角色类型 lead|member（缺省 member，老配置不写按队员处理）：
+                             #     lead=队长（可被 teams[].lead 指定为主代理），member=队员（只能被派发）。
+                             # 内置角色的类型（roles.ts 的 BUILTIN_ROLE_KINDS）：co-orchestrator 与
+                             # co-team-lead 是 lead，其余内置角色全是 member。
                              # 角色专属模型不在此配，而在 skills 路由里按角色名覆盖 provider/model 等。
                              # 重名检查与工具 id 存在性检查在运行时注册逻辑中进行。
     teams: []                # 团队（角色池编组）：把内置角色与 customRoles 按用途分组，

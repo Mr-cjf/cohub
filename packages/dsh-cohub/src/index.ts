@@ -133,6 +133,9 @@ const SkillRoute = z.object({
  *     工具插件 id 的存在性与可用性依赖运行时插件表，由注册/派发逻辑 fail-soft 处理；
  *   - tier 可选（不 `.required()`）：非法值仍报
  *     `expected "ro" | "ro-net" | "rw" | "rw-shell" | "cordis" but got "nope"`。
+ *   - kind 可选（**不** `.required()`）：角色类型 lead / member。缺该字段时按 member 处理，
+ *     保证老配置（本字段引入前写入的 customRoles）能原样加载；非法值仍报
+ *     `expected "lead" | "member" but got "nope"`。
  *
  * **不在这里做重名检查**（是否与内置角色或彼此的 name 重复）——那需要运行时上下文
  * （内置角色表 / 已注册技能目录），由后续批次的注册逻辑负责。
@@ -160,6 +163,18 @@ const CustomRole = z.object({
     .union(["ro", "ro-net", "rw", "rw-shell", "cordis"])
     .description(
       "工具档位（可选，快捷组合/展示用）：ro=只读 / ro-net=只读+联网 / rw=读写 / rw-shell=读写+shell / cordis=Cordis 插件改写；tools 非空时以 tools 为准，tools 与 tier 都空 = 只读组合",
+    ),
+  /**
+   * 角色类型（队长 / 队员）：决定该角色能否被团队指定成队长（主代理）。
+   *
+   * **可选**（不 `.required()`）：老配置没有该字段时必须能原样加载，缺省语义 = member
+   * （兜底在 roles.ts 的 resolveRoleKind）；不 `.default("member")`：避免官方设置页把默认值
+   * 强制写回每一条 customRoles（与 SkillRoute.reasoningEffort 的处理一致）。
+   */
+  kind: z
+    .union(["lead", "member"])
+    .description(
+      "角色类型（可选，缺省 member）：lead=队长（可被团队指定为主代理）；member=队员；老配置不写该字段按 member 处理",
     ),
 });
 
@@ -360,7 +375,8 @@ export const Config = z.object({
   skills: volatileSchema(z.array(SkillRoute).default([])),
   /** 用户自定义团队角色（内置角色之外的扩展）：每项 name/description/prompt 必填、
    *  name 必须 kebab-case；tools 自由绑定工具插件 id（默认 []，优先于 tier）、
-   *  tier 可选（快捷组合/展示用，取自 5 个档位枚举；tools 与 tier 都空 = 只读组合）。
+   *  tier 可选（快捷组合/展示用，取自 5 个档位枚举；tools 与 tier 都空 = 只读组合）、
+   *  kind 可选（lead=队长 / member=队员，缺省 member；只有 lead 能被团队指定为主代理）。
    *  角色专属模型不在这里配，而在 skills 路由里按角色名覆盖 provider/model/maxTokens/reasoningEffort。
    *  默认 []（= 只用内置角色）。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）——用户可改、热生效。 */

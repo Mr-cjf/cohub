@@ -83,6 +83,52 @@ export const BUILTIN_ROLE_TIERS: Readonly<Record<string, Tier>> = {
 };
 
 /**
+ * 角色类型：队长（lead）/ 队员（member）。
+ *
+ * 语义边界：kind **只**用于「这个角色能否被团队指定为 lead（主代理人格）」这一条判定，
+ * 与档位、工具面、派发权限都无关——队员照样可以被派发，队长也不会自动获得派发豁免
+ * （派发豁免仍只看 team.members，见 {@link isRoleAllowed}）。
+ */
+export type RoleKind = "lead" | "member";
+
+/**
+ * 内置角色 → 类型（队长 / 队员）。
+ *
+ * 只有两个内置角色是队长：
+ *   - `co-orchestrator`：主代理本身（默认调度者，团队 lead 的天然回退目标）；
+ *   - `co-team-lead`：通用队长（用户自建团队时的可复用队长角色）。
+ *
+ * 其余内置角色一律是队员。这里**显式列出全部成员而不只写队长**：新增内置角色时，
+ * 忘记想清它是哪一类会让 test/lead-persona.ts 的「表覆盖全部内置角色」用例直接失败，
+ * 而不是静默按默认值 member 混过去。
+ */
+export const BUILTIN_ROLE_KINDS: Readonly<Record<string, RoleKind>> = {
+  // 队长
+  "co-orchestrator": "lead",
+  "co-team-lead": "lead",
+  // 队员（只读）
+  "co-explorer": "member",
+  "co-oracle": "member",
+  "co-planner": "member",
+  "co-council": "member",
+  "co-observer": "member",
+  "co-rule-user": "member",
+  "co-rule-project": "member",
+  "co-rule-app": "member",
+  "co-editor": "member",
+  // 队员（只读 + 联网）
+  "co-librarian": "member",
+  "co-outliner": "member",
+  // 队员（读写）
+  "co-designer": "member",
+  "co-writer": "member",
+  "co-team-member": "member",
+  // 队员（读写 + shell）/ Cordis 专线
+  "co-fixer": "member",
+  "co-cordis": "member",
+};
+
+/**
  * 本平台实际挂载的 shell 工具名。
  * preset 里 tool-bash 与 tool-pwsh 互斥挂载，restrict() 对未挂载的名字是 loud 报错，
  * 所以裁剪表只能写当前平台那一个名字。
@@ -160,12 +206,19 @@ export const TIER_TOOLS: Readonly<Record<Tier, TierTools>> = {
   cordis: { deny: [...WRITE_DENY, ...UNIVERSAL_DENY] },
 };
 
-/** 自定义角色（用户配置里的 role 定义）；只声明档位解析需要的最小字段 */
+/** 自定义角色（用户配置里的 role 定义）；只声明档位 / 类型解析需要的最小字段 */
 export interface RoleSpec {
   /** 角色名（与内置角色同名即覆盖内置） */
   readonly name: string;
   /** 档位；缺省时回退到内置表 */
   readonly tier?: Tier;
+  /**
+   * 角色类型（队长 / 队员）；缺省时先查内置表、再回落 member。
+   *
+   * **可选**是有意的向后兼容：老配置里的 customRoles 没有该字段，schema 不能因此拒绝加载，
+   * 解析层也不能崩（见 {@link resolveRoleKind}）。
+   */
+  readonly kind?: RoleKind;
 }
 
 /** 运行时判定一个值是否是合法档位（自定义角色来自用户配置，可能写出脏值） */
@@ -197,6 +250,42 @@ export function resolveTier(
 
   const builtin = BUILTIN_ROLE_TIERS[key];
   return builtin ?? null;
+}
+
+/**
+ * 运行时判定一个值是否是合法角色类型（自定义角色来自用户配置，可能写出脏值）
+ */
+export function isRoleKind(value: unknown): value is RoleKind {
+  return value === "lead" || value === "member";
+}
+
+/**
+ * 解析角色类型（队长 / 队员）。
+ *
+ * 优先级（任一档命中即返回，永不抛错）：
+ *   ① 自定义角色的 `kind`（同名覆盖内置时以用户配置为准）；
+ *   ② 内置表 {@link BUILTIN_ROLE_KINDS}；
+ *   ③ 默认 `"member"`（未知角色 / 空名 / 老配置缺 kind / 脏值全部落到这里）。
+ *
+ * 为什么 ① 缺 kind 时不径直返回 member：自定义角色与内置同名时会**覆盖**内置条目
+ * （见 {@link resolveSkillSnapshot}）。用户只改 prompt 没写 kind 时，`co-team-lead`
+ * 不该因此从队长降级成队员——那样的「覆盖」副作用太隐蔽。
+ *
+ * @param roleName - 角色名（undefined / 空串 / 纯空白一律视为未知 → member）
+ * @param customRoles - 自定义角色表（可选）
+ * @returns `"lead" | "member"`（永不返回 undefined）
+ */
+export function resolveRoleKind(
+  roleName: string | undefined,
+  customRoles?: readonly RoleSpec[],
+): RoleKind {
+  const key = (roleName ?? "").trim();
+  if (key.length === 0) return "member";
+
+  const custom = customRoles?.find((role) => (role?.name ?? "").trim() === key);
+  if (custom && isRoleKind(custom.kind)) return custom.kind;
+
+  return BUILTIN_ROLE_KINDS[key] ?? "member";
 }
 
 /**
@@ -330,7 +419,7 @@ export function resolveActiveTeam(config?: TeamFilterConfig): ActiveTeam | null 
   if (id.length === 0) return null;
   const matched = (config?.teams ?? []).find((team) => (team?.id ?? "").trim() === id);
   if (matched === undefined) return null;
-  return buildActiveTeam(matched, id);
+  return buildActiveTeam(matched, id, config?.customRoles);
 }
 
 /**
@@ -348,12 +437,21 @@ export function teamPresetId(team: TeamConfig): string {
 }
 
 /** 把一条团队配置规范化成 {@link ActiveTeam}（members 去空白、lead 走回退规则） */
-function buildActiveTeam(matched: TeamConfig, id: string): ActiveTeam {
+function buildActiveTeam(
+  matched: TeamConfig,
+  id: string,
+  customRoles?: readonly RoleSpec[],
+): ActiveTeam {
   const members = (matched.members ?? [])
     .map((member) => (typeof member === "string" ? member.trim() : ""))
     .filter((member) => member.length > 0);
   const name = (matched.name ?? "").trim();
-  return { id, name: name.length > 0 ? name : id, members, lead: resolveTeamLead(matched, members) };
+  return {
+    id,
+    name: name.length > 0 ? name : id,
+    members,
+    lead: resolveTeamLead(matched, members, customRoles),
+  };
 }
 
 /**
@@ -379,7 +477,7 @@ export function resolveSessionTeam(
   const matched = (config?.teams ?? []).find((team) => teamPresetId(team) === preset)
     ?? BUILTIN_TEAMS.find((team) => teamPresetId(team) === preset);
   if (matched === undefined) return null;
-  return buildActiveTeam(matched, (matched.id ?? "").trim());
+  return buildActiveTeam(matched, (matched.id ?? "").trim(), config?.customRoles);
 }
 
 /** {@link resolveTeamFilter} 的返回值：生效团队 + 来源（便于调用方按需留痕） */
@@ -424,7 +522,8 @@ export function resolveTeamFilter(
 
 /**
  * 队长回退规则（唯一判定源）：
- *   ① `team.lead` 非空且 ∈ members **或就是 co-orchestrator** → 用它（显式指定优先）；
+ *   ① `team.lead` 非空、∈ members **或就是 co-orchestrator**、且类型是队长
+ *      （{@link resolveRoleKind} === "lead"）→ 用它（显式指定优先）；
  *   ② 否则 members 含 `co-orchestrator` → 用它（默认主代理仍在团队里，不加人格注入）；
  *   ③ 否则 members[0]（没指定就把第一成员当队长）；
  *   ④ members 为空 → ""（叫不出队长，调用方按「无队长」处理）。
@@ -434,10 +533,28 @@ export function resolveTeamFilter(
  * 唯一的例外是 `co-orchestrator`：它是主代理本身，内置团队（builtin-teams.ts 的 dev / writing）
  * 的 members 只列专职子代理、不列主代理，而其 lead 明确写 `co-orchestrator`——若不放宽，
  * 内置团队的队长会被静默回退成 members[0]（例如 co-fixer），人格与团队语义就错位了。
+ *
+ * 为什么还要 kind === "lead"：角色分「队长 / 队员」两类后，把队员写成团队 lead 是**配置错误**
+ * （队员的 brief 是「执行一份任务」，直接拿来当主代理人格会得到自我矛盾的提示词）。让它走回退
+ * （co-orchestrator → members[0]），比静默接受更可诊断；老配置里自定义角色没有 kind 时按
+ * member 处理，因此此前「任意自定义角色都能当 lead」的写法会退化为回退——这是有意的收紧，
+ * 用户显式写 `kind: lead` 即可恢复。
+ *
+ * @param team - 团队配置
+ * @param members - 已规范化的成员名（trim + 去空）
+ * @param customRoles - 自定义角色表（决定自定义角色的 kind；缺省 = 只用内置表）
+ * @returns 队长角色名；"" = 叫不出队长
  */
-function resolveTeamLead(team: TeamConfig, members: readonly string[]): string {
+function resolveTeamLead(
+  team: TeamConfig,
+  members: readonly string[],
+  customRoles?: readonly RoleSpec[],
+): string {
   const declared = (team.lead ?? "").trim();
-  if (declared.length > 0 && (members.includes(declared) || declared === PRIMARY_AGENT_ROLE)) return declared;
+  const declaredLead = declared.length > 0
+    && (members.includes(declared) || declared === PRIMARY_AGENT_ROLE)
+    && resolveRoleKind(declared, customRoles) === "lead";
+  if (declaredLead) return declared;
   if (members.includes(PRIMARY_AGENT_ROLE)) return PRIMARY_AGENT_ROLE;
   return members[0] ?? "";
 }

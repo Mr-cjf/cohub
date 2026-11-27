@@ -11,10 +11,12 @@
 //   ③ 换队长不得丢掉调度纪律 —— 注入段必须同时出现队长的 brief 与 orchestrator 的调度纪律。
 import { COHUB_SKILLS } from "../src/skills.ts";
 import {
+  BUILTIN_ROLE_KINDS,
   PRIMARY_AGENT_ROLE,
   renderLeadSection,
   resolveActiveTeam,
   resolveLeadPersona,
+  resolveRoleKind,
   type TeamConfig,
 } from "../src/roles.ts";
 
@@ -111,6 +113,7 @@ const customCfg = {
     description: "品牌文案主笔",
     prompt: customPrompt,
     tier: "rw" as const,
+    kind: "lead" as const,
   }],
 };
 check("lead 命中自定义角色", resolveActiveTeam(customCfg)?.lead === "my-brand-lead");
@@ -119,6 +122,78 @@ check("persona = 自定义 prompt（逐字）", customPersona !== null && custom
 check("title = 自定义 description", customPersona !== null && customPersona.title === "品牌文案主笔");
 check("注入段含自定义 prompt", renderLeadSection(customCfg).includes(customPrompt));
 check("自定义队长同样保留调度纪律", renderLeadSection(customCfg).includes(briefOf(PRIMARY_AGENT_ROLE)));
+
+// ── 用例 5：角色类型（队长 / 队员）决定「谁能当 lead」 ──────────────────────
+group("用例 5：角色类型 kind —— lead 可当队长 / member 只能回退");
+// ⑤a 内置角色的类型表：co-orchestrator 与 co-team-lead 是队长，其余全是队员
+check("resolveRoleKind(co-orchestrator) = lead", resolveRoleKind("co-orchestrator") === "lead");
+check("resolveRoleKind(co-team-lead) = lead", resolveRoleKind("co-team-lead") === "lead");
+check("resolveRoleKind(co-writer) = member", resolveRoleKind("co-writer") === "member");
+check("resolveRoleKind(co-fixer) = member", resolveRoleKind("co-fixer") === "member");
+check("内置类型表覆盖 COHUB_SKILLS 全部角色（新增角色必须显式分类）",
+  COHUB_SKILLS.every((skill) => typeof BUILTIN_ROLE_KINDS[skill.name] === "string"));
+check("内置类型表无多余条目（与 COHUB_SKILLS 完全一致）",
+  Object.keys(BUILTIN_ROLE_KINDS).length === COHUB_SKILLS.length);
+check("未知角色 / 空名 / undefined 一律按 member",
+  resolveRoleKind("co-unknown") === "member" && resolveRoleKind("") === "member"
+  && resolveRoleKind(undefined) === "member" && resolveRoleKind("   ") === "member");
+check("大小写敏感（Co-Writer ≠ co-writer）→ member", resolveRoleKind("Co-Writer") === "member");
+check("自定义 kind=lead 优先于内置表（覆盖内置 co-writer → lead）",
+  resolveRoleKind("co-writer", [{ name: "co-writer", kind: "lead" }]) === "lead");
+check("自定义缺 kind 时回退内置表（覆盖 co-team-lead 仍是 lead）",
+  resolveRoleKind("co-team-lead", [{ name: "co-team-lead", prompt: "x" }]) === "lead");
+check("自定义缺 kind 且非内置 → member（老配置语义）",
+  resolveRoleKind("my-legacy", [{ name: "my-legacy", prompt: "x" }]) === "member");
+check("脏 kind 不拦截解析（回退内置表 / member）",
+  resolveRoleKind("my-dirty", [{ name: "my-dirty", kind: "boss" as any }]) === "member"
+  && resolveRoleKind("co-orchestrator", [{ name: "co-orchestrator", kind: "boss" as any }]) === "lead");
+
+// ⑤b kind:'lead' 的自定义角色可当队长（显式指定优先，取它的 prompt 当人格）
+const kindLeadRole = {
+  name: "my-lead",
+  description: "自定义队长",
+  prompt: "你是自定义队长：只派活，不亲自操作。",
+  kind: "lead" as const,
+};
+const kindLeadCfg = {
+  teams: [{ id: "k1", name: "队长组", lead: "my-lead", members: ["co-writer", "my-lead"] }] as readonly TeamConfig[],
+  activeTeam: "k1",
+  customRoles: [kindLeadRole],
+};
+check("kind=lead 的自定义角色可当队长", resolveActiveTeam(kindLeadCfg)?.lead === "my-lead");
+check("其人格取自身 prompt", resolveLeadPersona(kindLeadCfg)?.persona === kindLeadRole.prompt);
+
+// ⑤c kind:'member' 的自定义角色不可当队长 → 走回退（members 不含 co-orchestrator → members[0]）
+const kindMemberCfg = {
+  teams: [{ id: "k2", name: "队员组", lead: "my-writer", members: ["co-writer", "my-writer"] }] as readonly TeamConfig[],
+  activeTeam: "k2",
+  customRoles: [{
+    name: "my-writer",
+    description: "自定义队员",
+    prompt: "你是队员：按任务书执行。",
+    kind: "member" as const,
+  }],
+};
+check("kind=member 不可当队长（回退到 members[0] = co-writer）",
+  resolveActiveTeam(kindMemberCfg)?.lead === "co-writer");
+check("回退后的人格取 co-writer 的 brief（不是该自定义角色的 prompt）",
+  resolveLeadPersona(kindMemberCfg)?.persona === briefOf("co-writer"));
+check("内置队员当 lead 同样回退（lead=co-writer，members[0]=co-editor）",
+  resolveActiveTeam({
+    teams: [{ id: "k3", name: "K3", lead: "co-writer", members: ["co-editor", "co-writer"] }] as readonly TeamConfig[],
+    activeTeam: "k3",
+  })?.lead === "co-editor");
+
+// ⑤d 老配置：自定义角色没有 kind → 按 member 处理（可加载、不崩、不当队长）
+const legacyNoKindCfg = {
+  teams: [{ id: "k4", name: "老配置组", lead: "my-legacy", members: ["co-writer", "my-legacy"] }] as readonly TeamConfig[],
+  activeTeam: "k4",
+  customRoles: [{ name: "my-legacy", description: "老配置角色", prompt: "你是老配置角色。" }],
+};
+check("老配置无 kind → 解析为 member", resolveRoleKind("my-legacy", legacyNoKindCfg.customRoles) === "member");
+check("老配置无 kind → 不当队长（回退 members[0]）", resolveActiveTeam(legacyNoKindCfg)?.lead === "co-writer");
+check("老配置无 kind → 团队仍能解析（不抛错、members 完整）",
+  resolveActiveTeam(legacyNoKindCfg)?.members.length === 2);
 
 // ── 汇总 ────────────────────────────────────────────────────────────────
 console.log("");

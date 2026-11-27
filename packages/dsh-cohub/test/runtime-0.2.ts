@@ -59,6 +59,25 @@ function check(name: string, cond: boolean) {
     JSON.stringify(Config.toJSON()).includes('"reasoningEffort"'));
   check("reasoningEffort 带 schema 描述（表单提示用）",
     JSON.stringify(Config.toJSON()).includes("推理强度"));
+
+  // ── CustomRole.kind（队长 / 队员）：可选字段 → 老配置必须能原样加载 ──
+  // 兼容策略：kind 不 .required()，缺该字段时解析结果不含该键，语义上的缺省值（member）
+  // 由 roles.ts 的 resolveRoleKind 兜底——schema 层绝不因为老配置少一个字段而拒绝挂载。
+  const legacyRole = { name: "my-legacy", description: "老配置角色", prompt: "你是老配置角色" };
+  const roleWith = (extra: Record<string, unknown>) => ({ ...legacyRole, ...extra }) as any;
+  const parsedLegacy = Config({ customRoles: [legacyRole] });
+  check("老配置 customRoles 无 kind → 仍可加载", parsedLegacy.customRoles.get().length === 1);
+  check("老配置无 kind → 解析结果不含 kind 键（缺省语义 = member）",
+    !Object.prototype.hasOwnProperty.call(parsedLegacy.customRoles.get()[0], "kind"));
+  check("kind:'lead' 被保留",
+    Config({ customRoles: [roleWith({ name: "my-lead", kind: "lead" })] }).customRoles.get()[0]?.kind === "lead");
+  check("kind:'member' 被保留",
+    Config({ customRoles: [roleWith({ name: "my-member", kind: "member" })] }).customRoles.get()[0]?.kind === "member");
+  let badKindThrew = false;
+  try { Config({ customRoles: [roleWith({ kind: "boss" })] }); } catch { badKindThrew = true; }
+  check("非法 kind 被 schema 拒绝（仅 lead / member）", badKindThrew);
+  check("Config schema JSON 含 kind 字段（官方表单投影依据）",
+    JSON.stringify(Config.toJSON()).includes('"kind"'));
 }
 
 // ── 层 2：Volatile 引用更新（loader/volatile-update 的引用层等价）──
