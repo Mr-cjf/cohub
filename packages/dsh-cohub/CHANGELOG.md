@@ -2,6 +2,19 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.13] - 2026-11-27
+
+### 变更
+
+- **子代理不再注册档位预设**：`cohub-subagent-readonly` / `-readonly-net` / `-write` / `-write-shell` 四个预设不再注册，Agent 预设列表里不再出现这些内部项。子代理改为继承父组合，由 spawn 后的 `tools.restrict` 按档位裁剪工具。
+- **工具裁剪改为 fail-closed**：`restrict` 失败时该次派发直接失败并释放子代理，不再降级为全量工具（此前 fail-soft 会放行子代理拥有父的全部权限）。
+- 保留 `cohub-cordis` 预设：它提供父组合没有的 `tool-cordis` 类工具，`restrict` 无法凭空添加，只能靠 preset 继承。
+
+### 说明
+
+- 升级后 Agent 预设自定义组只剩：`co-orchestrator`（开发团队）、`cohub-team-writing`（写作团队）、`cohub-cordis`。
+- 若 profile patch 里仍有历史 preset 声明，请升级到 0.13.12+ 后手动清理并重启，否则会与运行时注册冲突。
+
 ## [0.13.12] - 2026-11-27
 
 ### 变更
