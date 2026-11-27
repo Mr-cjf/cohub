@@ -187,11 +187,12 @@ check("④ 其余声明被追加", p2.appended.length === decls.length - 1);
 check("④ 生成 .bak-<时间戳> 备份且内容为原文", typeof p2.backup === "string" && existsSync(p2.backup) && read(p2.backup).startsWith("# 占位注释"));
 check("④ 原有注释与既有声明保留", read(patch2).includes("# 用户自己的注释") && read(patch2).includes(`    - id: preset-${decls[0].id}`));
 
-// ④' installPresets:false 由 index.ts 的守卫整块跳过（声明写入也在该守卫内）
+// ④' 0.13.12 起：installPresets 只控制**目录复制**；声明写入已停用（不进入启动路径）
 const srcText = read(join(import.meta.dirname, "..", "src", "index.ts"));
 const guarded = /if \(config\.installPresets !== false\) \{[\s\S]*installAgentPresets\([\s\S]*?\n {2}\}/.test(srcText);
-const insideInstaller = /function installAgentPresets[\s\S]*?applyPresetPatchDeclarations\(/.test(srcText);
-check("④ installPresets:false 时声明写入同样被跳过", guarded && insideInstaller);
+const noDeclWrite = !/function installAgentPresets[\s\S]*?applyPresetPatchDeclarations\(/.test(srcText);
+check("④ installPresets:false 时目录复制被跳过", guarded);
+check("④ 声明写入已停用（installAgentPresets 内不再调用 applyPresetPatchDeclarations）", noDeclWrite);
 
 // ⑤ 默认 profile 解析：$DSH_PROFILE 优先；未设置时唯一 profile 自动取用；多个则不猜
 check("⑤ $DSH_PROFILE 优先", resolveProfilePatchPath(homeDir, { DSH_PROFILE: "mobile" }) === join(homeDir, "profiles", "mobile", "cordis.patch.yml"));

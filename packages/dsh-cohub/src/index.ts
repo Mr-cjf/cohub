@@ -12,7 +12,7 @@ import type { Volatile } from "@deepseek-ai/cosmokit";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
-import { applyPresetPatchDeclarations, copyTree, installShippedPresets, resolveProfilePatchPath } from "./preset-install";
+import { installShippedPresets } from "./preset-install";
 import { registerCohubPresets, unregisterCohubPresets } from "./preset-runtime";
 import { syncTeamPresets, unregisterTeamPresets } from "./team-presets.ts";
 import { CHINESE_LANGUAGE_INSTRUCTION } from "./chinese";
@@ -478,32 +478,14 @@ function readPackageVersion(): string {
  *   - 版本升级：只覆盖**未被用户改动**的文件，用户改过的文件跳过并告警；
  *   - 无台账（首次或从旧版本升级上来）：退化为「仅新增」，不覆盖任何已存在目录。
  * 安装失败只告警，绝不拖垮插件挂载（preset 是可选增强，技能才是核心能力）。
+ *
+ * 0.13.12 起**只做目录复制**：profile patch 的 preset **声明写入已停用**。
+ * 原因：声明由 patch 先行加载，旧名声明（如 preset-cohub-subagent-readonly 等）会胜过
+ * ②c 的运行时 agentPresets.register()，导致运行时注册覆盖不掉。preset 注册的唯一正源
+ * 改为运行时注册（见下方 ②c / ②d）。声明写入的实现保留在 preset-install.ts 供外部工具复用。
  */
 function installAgentPresets(logger: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void } | undefined) {
-  const r = installShippedPresets(SHIPPED_PRESETS_DIR, dshHomePath(".agent-presets"), readPackageVersion(), logger);
-  // ② 把 preset **声明**幂等写入当前 profile 的 cordis.patch.yml（新版宿主按声明行注册 preset，
-  //    只复制目录不够）。已存在且一致 → 不写盘；内容不同 → 保留用户版本并告警；失败不阻断挂载。
-  try {
-    const patchPath = resolveProfilePatchPath(dshHomePath());
-    if (patchPath === null) {
-      logger?.info?.("cohub: 无法判定活动 profile（$DSH_PROFILE 未设置且 profiles 下不止一个），跳过 preset 声明写入");
-    } else {
-      const p = applyPresetPatchDeclarations(SHIPPED_PRESETS_DIR, patchPath, logger);
-      if (p.appended.length > 0) {
-        logger?.info?.(
-          `cohub: 已向 ${patchPath} 追加 ${p.appended.length} 条 preset 声明（${p.appended.join(", ")}）${p.backup ? `，原文件已备份为 ${p.backup}` : ""}`,
-        );
-      }
-      if (p.conflicts.length > 0) {
-        logger?.info?.(`cohub: ${p.conflicts.length} 条 preset 声明保留你的版本：${p.conflicts.join(", ")}`);
-      }
-      if (p.degraded !== undefined) logger?.info?.(`cohub: preset 声明写入已跳过（${p.degraded}）`);
-    }
-  } catch (error) {
-    // 防御：声明写入是可选增强，任何异常都不得拖垮插件挂载
-    logger?.warn?.("cohub: 写入 profile patch 的 preset 声明失败（不影响插件启动）", error);
-  }
-  return r;
+  return installShippedPresets(SHIPPED_PRESETS_DIR, dshHomePath(".agent-presets"), readPackageVersion(), logger);
 }
 
 /**
@@ -632,13 +614,12 @@ export function apply(ctx: any, config: any) {
     };
   }, "cohub.teamPresets()");
 
-  // ③ 【兼容备用】内置 agent preset（co-orchestrator / cohub-cordis / 3 个子代理档位）
-  //    的目录安装 + profile patch 声明写入。
-  //    ⚠️ 主场景已由 ②c 的**运行时注册**覆盖：注册当场可用，不需要重启。
-  //    这里保留（不删）仅为兼容旧版 DSH（无 agentPresets 服务）与外部工具/部署脚本
-  //    对 patch 声明的依赖（例如用户手工编辑过 cordis.patch.yml，或工具读该文件枚举 preset）。
-  //    开关仍是 config.installPresets：false 时既不复制目录、也不写声明。
-  //    回退路径：万一运行时注册在某个宿主上不可用，这份声明会在下一次启动时接管。
+  // ③ 内置 agent preset（co-orchestrator / cohub-cordis / 4 个子代理档位）的**目录安装**。
+  //    ⚠️ preset 注册的唯一正源是 ②c 的**运行时注册**（当场可用，不需要重启）。
+  //    这里的目录复制只为兼容外部工具/部署脚本对 ~/.dsh/.agent-presets/ 目录的依赖。
+  //    0.13.12 起**不再写 profile patch 声明**：声明会先于运行时注册被宿主加载，
+  //    旧名声明胜出后运行时注册覆盖不掉（实例曾出现 6 条旧名声明）。
+  //    开关仍是 config.installPresets：false 时连目录复制也跳过。
   if (config.installPresets !== false) {
     try {
       const r = installAgentPresets(ctx.logger);
