@@ -34,3 +34,6 @@
 - **设置页的展开项要二次点击**：「角色类型」只出现在角色编辑表单里（需先点「添加角色」）；「队长提示词预览」只出现在团队编辑面板里（需先点「新建团队」或编辑）。断言前先确认面板已展开。
 - **`file://` 被拦**：Playwright 无法直接打开本地 HTML（`Access to "file:" protocol is blocked`），预览原型只能让用户手动打开。
 - **本地实例走系统代理会被劫持**：Playwright 访问 `127.0.0.1` 时静态资源可能全部 `ERR_FAILED`，而 `context.request` 直连同 URL 返回 200。用 `context.route('**/*')` 拦截并用 `context.request.fetch` 转发、剥掉 `content-encoding/content-length/transfer-encoding` 头，即可正常渲染。
+- **涉及子代理边界 / 人格 / preset 挂载的改动，必须派一个真任务验证**：单测与产物 grep 都验不出「子代理拿到的 persona 对不对」。0.13.13 为了让 Agent 预设列表干净，改成"档位子代理不挂 preset、继承父组合 + `tools.restrict` 裁剪"——单测全绿、构建通过、列表也干净了，但子代理继承到了父代理（co-orchestrator）的 persona「绝不亲自调用任何文件工具」，system prompt 压过任务书，**所有子代理都拒绝改文件**。`restrict` 只能裁工具，裁不掉 persona。
+- **验证方式**：重启后派一个**有副作用**的任务（改一个文件、跑一条命令），确认子代理真的执行了，而不是只看它"回复正常"。回复正常但拒绝动手，就是这个坑的典型症状。
+- **判断口诀**：改动如果影响「子代理能做什么」，就必须让子代理实际做一次；影响「界面长什么样」，必须真人或 Playwright 点一次；只影响「字符串内容」，产物 grep 即可。
