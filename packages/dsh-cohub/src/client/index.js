@@ -1403,6 +1403,8 @@ window.__ModuleLoader__.load({
       expandedTeam: -1,
       // 角色详情面板（提示词 + 绑定工具）展开的是哪个角色名；"" = 全收起。
       expandedRole: "",
+      // 设置页 tab 选中态（"teams" | "roles"）：只活在 controller 闭包里，不写配置。
+      tab: "teams",
       // 默认预设（remote.agentPresets.list 里 isDefault=true 的那一项）；取不到时 null。
       presetStatus: "loading",
       presetDefault: null
@@ -1438,6 +1440,19 @@ window.__ModuleLoader__.load({
       var lastTeams = [];
       var lastActiveTeam = "";
       var published = null;
+
+      // 设置页 tab 选中态：和草稿一样只活在 controller 闭包里，靠既有的 store 通知通道
+      // 触发重渲染。不放进 React 组件状态——宿主可能以直接函数调用方式渲染组件，
+      // 组件体内的任何 hook 都会抛 Invalid hook call，进而让整个设置节注册失败。
+      var tab = "teams";
+
+      /** 切换设置页 tab：先归一（脏值回落 teams），变了才写闭包态并发布一次。 */
+      function setTab(next) {
+        var normalized = normalizeTab(next);
+        if (normalized === tab) return;
+        tab = normalized;
+        publish();
+      }
 
       // 自定义角色草稿与 skills 草稿各自独立（写的是不同 path），但共用同一 scope、
       // 同一 revision 冲突判定和同一个 saving 互斥位。roleErrors 与行等长，空串 = 合法。
@@ -1634,6 +1649,7 @@ window.__ModuleLoader__.load({
           teamsNotice: teamsNotice,
           expandedTeam: expandedTeam,
           expandedRole: expandedRole,
+          tab: tab,
           presetStatus: presetStatus,
           presetDefault: presetDefault
         };
@@ -1670,6 +1686,7 @@ window.__ModuleLoader__.load({
           && left.teamsNotice === right.teamsNotice
           && left.expandedTeam === right.expandedTeam
           && left.expandedRole === right.expandedRole
+          && left.tab === right.tab
           && left.presetStatus === right.presetStatus
           && left.presetDefault === right.presetDefault;
       }
@@ -2624,7 +2641,8 @@ window.__ModuleLoader__.load({
         copyBuiltinTeam: copyBuiltinTeam,
         removeTeam: removeTeam,
         discardTeams: discardTeams,
-        saveTeams: saveTeams
+        saveTeams: saveTeams,
+        setTab: setTab
       };
     }
 
@@ -2773,16 +2791,10 @@ window.__ModuleLoader__.load({
       var useSkills = typeof props.useCohubSkills === "function" ? props.useCohubSkills : useStaticState;
       var state = useSkills(selectAllSnapshot) || EMPTY_STATE;
 
-      // tab 选中态只活在组件里（不写配置）。切换 tab 只是换渲染分支：
+      // tab 选中态在 controller 闭包里（不写配置、不是 hook）。切换 tab 只是换渲染分支：
       // 团队草稿 / 角色草稿 / 模型草稿都在 controller 闭包里，所以切回来未保存的编辑还在。
-      var tabHook = typeof React.useState === "function" ? React.useState("teams") : null;
-      var activeTab = normalizeTab(tabHook !== null ? tabHook[0] : "teams");
-      var setTab = function (next) {
-        var normalized = normalizeTab(next);
-        if (tabHook !== null && typeof tabHook[1] === "function" && normalized !== activeTab) {
-          tabHook[1](normalized);
-        }
-      };
+      var activeTab = normalizeTab(state.tab);
+      var setTab = props.setTab;
 
       var header = [
         React.createElement("h2", { key: "title", className: "cohub-title" }, t("title")),
@@ -4041,6 +4053,9 @@ window.__ModuleLoader__.load({
           },
           saveTeams: function () {
             return controller.saveTeams();
+          },
+          setTab: function (next) {
+            controller.setTab(next);
           }
         };
       };

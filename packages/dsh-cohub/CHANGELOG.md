@@ -2,6 +2,12 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.16] - 2026-11-27
+
+### 修复
+
+- **设置页「CoHub 代理」菜单消失**（0.13.15 回归）：tab 切换原用 `React.useState` 在组件函数体内调用，宿主以直接函数调用方式渲染时抛 `Invalid hook call`，导致整个设置节未注册。改为 controller 闭包状态（与编辑/保存同一重渲染通道），不再依赖任何 React hook。
+
 ## [0.13.15] - 2026-11-27
 
 ### 新增
