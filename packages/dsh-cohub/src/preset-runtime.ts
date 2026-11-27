@@ -413,13 +413,7 @@ export function materializeJsTags(
  * co-orchestrator 的纯调度 persona 而拒绝改文件，restrict 裁不掉 persona）。
  * `cohub-cordis` 同理（另需 tool-cordis 工具）。
  */
-export const TEAM_OWNED_PRESET_IDS: readonly string[] = [
-  "co-orchestrator",
-  "cohub-subagent-readonly",
-  "cohub-subagent-readonly-net",
-  "cohub-subagent-write",
-  "cohub-subagent-write-shell",
-];
+export const TEAM_OWNED_PRESET_IDS: readonly string[] = ["co-orchestrator"];
 
 /** preset id 合法性：与 preset-install.ts 的 isSafePresetId 同义（目录名，不允许路径穿越） */
 function isSafePresetId(id: string): boolean {

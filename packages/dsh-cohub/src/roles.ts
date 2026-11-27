@@ -631,45 +631,6 @@ export function renderLeadSection(config?: TeamFilterConfig): string {
   ].join("\n");
 }
 
-/**
- * 主代理的「纯调度硬约束」段（运行时注入，**不再写进 preset persona**）。
- *
- * 为什么放运行时：subagent 子代理会继承父代理的 preset persona，persona 里若有
- * 「绝不亲自调用文件工具」这类硬禁令，子代理（co-fixer 等）会自认纯调度者而拒绝改文件。
- * 因此 persona 只保留中性表述，硬约束改由本段**按 agent 类型**注入：只要 agent 不是
- * subagent（`session.header.origin === "subagent"` / `delegationDepth > 0`）就注入。
- */
-export const MAIN_AGENT_DISPATCH_RULE: string = [
-  "你是本会话的主代理，只负责调度与验收：",
-  "- 不要亲自调用 read / edit / write / bash / pwsh 等执行类工具去改文件或跑命令——这些动作派给对应的专职子代理。",
-  "- 例外：仅当用户明确要求你本人查看某个文件内容时，才允许用只读方式查看。",
-].join("\n");
-
-/**
- * 判定某个 agent 是否是「子代理」（被委派方）。
- *
- * 权威字段是 `agent.session.header.origin === "subagent"`；辅助判据是
- * `delegationDepth > 0`（旧宿主 / 派生 agent 只填深度的情况）。
- * 拿不到 agent（诊断性 assemble）时返回 false —— **按主代理处理（保守）**。
- */
-export function isSubagentAgent(agent: unknown): boolean {
-  const header = (agent as { session?: { header?: Record<string, unknown> } } | undefined)?.session?.header;
-  if (header === undefined || header === null) return false;
-  if (header.origin === "subagent") return true;
-  const depth = header.delegationDepth;
-  return typeof depth === "number" && depth > 0;
-}
-
-/**
- * 按 agent 类型渲染 cohub:lead 段：子代理 → 空串（宿主丢弃该 section，不注入任何调度纪律）；
- * 主代理（或拿不到 agent）→ 团队队长人格（可能为空串）+ 纯调度硬约束段。
- */
-export function renderLeadSectionForAgent(config: TeamFilterConfig | undefined, agent: unknown): string {
-  if (isSubagentAgent(agent)) return "";
-  const base = renderLeadSection(config);
-  return base.length > 0 ? `${base}\n\n${MAIN_AGENT_DISPATCH_RULE}` : MAIN_AGENT_DISPATCH_RULE;
-}
-
 /** co-orchestrator 的 brief（调度纪律正文；内置表为准，不被自定义角色覆盖） */
 function orchestratorBrief(): string {
   const skill = COHUB_SKILLS.find((item) => item.name === PRIMARY_AGENT_ROLE);

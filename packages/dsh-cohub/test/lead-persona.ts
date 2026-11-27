@@ -18,9 +18,6 @@ import {
   resolveActiveTeam,
   resolveLeadPersona,
   resolveRoleKind,
-  renderLeadSectionForAgent,
-  isSubagentAgent,
-  MAIN_AGENT_DISPATCH_RULE,
   type TeamConfig,
 } from "../src/roles.ts";
 
@@ -199,26 +196,10 @@ check("老配置无 kind → 不当队长（回退 members[0]）", resolveActive
 check("老配置无 kind → 团队仍能解析（不抛错、members 完整）",
   resolveActiveTeam(legacyNoKindCfg)?.members.length === 2);
 
-// ── ⑥ 按 origin 分流注入（父 persona 中性化后的纯调度硬约束） ──────────────
-group("⑥ cohub:lead 按 agent 类型分流（子代理不注入 / 主代理注入硬约束）");
-const subagent = { session: { header: { origin: "subagent" } } };
-const depthAgent = { session: { header: { delegationDepth: 2 } } };
-const mainAgent = { session: { header: { origin: "main" } } };
-check("origin === 'subagent' → 判定为子代理", isSubagentAgent(subagent) === true);
-check("delegationDepth > 0 → 判定为子代理", isSubagentAgent(depthAgent) === true);
-check("主代理 / 拿不到 agent（诊断性 assemble）→ 判定为主代理（保守）",
-  isSubagentAgent(mainAgent) === false && isSubagentAgent(undefined) === false && isSubagentAgent({}) === false);
-check("子代理：section 返回空串（宿主丢弃，不注入调度纪律）",
-  renderLeadSectionForAgent(undefined, subagent) === "" && renderLeadSectionForAgent(undefined, depthAgent) === "");
-check("主代理（无团队）：返回纯调度硬约束段，含「只负责调度与验收」",
-  renderLeadSectionForAgent(undefined, mainAgent).includes("只负责调度与验收")
-  && renderLeadSectionForAgent(undefined, mainAgent) === MAIN_AGENT_DISPATCH_RULE);
-check("主代理（拿不到 agent）：同样注入硬约束（保守）",
-  renderLeadSectionForAgent(undefined, undefined).includes("只负责调度与验收"));
-check("硬约束点明 read/edit/write/bash/pwsh 与「例外」只读条款",
-  MAIN_AGENT_DISPATCH_RULE.includes("read / edit / write / bash / pwsh")
-  && MAIN_AGENT_DISPATCH_RULE.includes("例外"));
-// 硬约束不得写进 preset persona（否则子代理继承后自认纯调度者而拒绝改文件）
+// ── ⑥ 父 persona 中性化（保留项：硬约束不写进 preset persona） ──────────────
+group("⑥ co-orchestrator preset persona 保持中性（子代理继承时不冲突）");
+// 注：按 agent 类型分流注入 section 的方案验证不可行（assemble 时拿不到 context.agent，
+//     子代理仍被当主代理注入），已回退为「档位预设挂载」，故只保留 persona 中性化断言。
 const orchestratorYml = readFileSync(
   new URL("../presets/co-orchestrator/agent.cordis.yml", import.meta.url),
   "utf8",

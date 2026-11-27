@@ -17,7 +17,7 @@ import { registerCohubPresets, unregisterCohubPresets } from "./preset-runtime";
 import { syncTeamPresets, unregisterTeamPresets } from "./team-presets.ts";
 import { CHINESE_LANGUAGE_INSTRUCTION } from "./chinese";
 import { COHUB_SKILLS } from "./skills";
-import { renderLeadSectionForAgent } from "./roles.ts";
+import { renderLeadSection } from "./roles.ts";
 import { CUSTOM_ROLE_POLL_MS, createCustomSkillRegistry } from "./custom-skills.ts";
 import { createCouncilTool } from "./council";
 import { createDelegateTool } from "./delegate";
@@ -527,20 +527,18 @@ export function apply(ctx: any, config: any) {
 
   // ①b 团队队长人格 —— 运行时按 Config.activeTeam 的团队队长决定主代理人格。
   //    · text 是**函数**：每次 assemble 现读 volatile 配置 → 设置页换队长度热生效，无需重启；
-  //    · **按 origin 分流**：子代理（session.header.origin === 'subagent' 或 delegationDepth > 0）
-  //      返回空串 = 不注入（宿主丢弃空 section）。子代理会继承父代理的 preset persona，
-  //      若把「纯调度硬约束」也注入给子代理，co-fixer 等会被要求「不要改文件」而失效。
-  //    · 主代理：团队队长 brief（无团队 / 队长就是 co-orchestrator 时为空）＋ 纯调度硬约束段。
-  //      硬约束从 preset persona 挪到这里，就是为了让子代理继承到的 persona 保持中性。
-  //    · context 可能为空（诊断性 assemble）：拿不到 agent 时按主代理处理（保守）。
+  //    · 空串 = 不注入（宿主会丢弃空 section），故「无团队 / 队长为空 / 队长就是 co-orchestrator」
+  //      三种情形下系统提示词与改动前**逐字一致**（co-orchestrator 人格由 preset persona 自带）；
+  //    · 有队长时注入的是队长 brief（不是全文 content，避免撑大每轮系统提示词），并附带边界声明
+  //      + 可派队员名单 + 原调度纪律段：换队长不允许丢掉 orchestrator 的调度本职。
   ctx.effect(() => ctx.systemPrompt.section({
     name: "cohub:lead",
     order: 96,
-    text: (context?: { agent?: unknown }) => renderLeadSectionForAgent({
+    text: () => renderLeadSection({
       teams: readVolatile(config.teams),
       activeTeam: readVolatile(config.activeTeam),
       customRoles: readVolatile(config.customRoles),
-    }, context?.agent),
+    }),
   }), "cohub.lead()");
 
   // ② 13 技能（12 专职代理 + orchestrator）→ runtime skills
