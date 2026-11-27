@@ -2,6 +2,14 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.14] - 2026-11-27
+
+### 修复
+
+- **`cohub-cordis` 预设挂载失败**（Agent 预设页显示「加载失败」）：`skill-filesystem` 的 `customSkillDirs` 被解析成对象而非字符串。
+- 根因两处：① mini-YAML 解析器把 `- !!js "process.getBuiltinModule('node:url')..."` 中 `node:url` 的冒号误判为 `key: value` 映射，序列项变成对象；② `!!js` 求值只支持平台布尔表达式，URL 目录表达式被原样透传。
+- 修法：`- !!js <expr>` 走标量快速路径跳过映射解析；新增 URL 目录表达式求值（基于 preset 目录算绝对路径，拒绝绝对路径与 `..` 逃逸，不做代码求值）；无法识别的 `!!js` 键/项一律丢弃并告警，绝不把非字符串值交给宿主；注册前对 `customSkillDirs` 再做一次类型兜底校验。
+
 ## [0.13.13] - 2026-11-27
 
 ### 变更
