@@ -304,6 +304,15 @@ export function materializeJsTags(
 // 第三部分：读包内 presets/ → 档位定义
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * 由**团队注册**接管的 preset id（档位注册必须跳过，否则同 id 撞 `Duplicate agent preset`）。
+ *
+ * `co-orchestrator` 现在由 team-presets.ts 以「开发团队」的名义注册（见 builtin-teams.ts 的
+ * `dev.presetId`）：presets/co-orchestrator/ 仍是它的**工具面事实源**（团队组装照抄那排插件），
+ * 但 name / description / persona 换成团队版，注册权也归团队。
+ */
+export const TEAM_OWNED_PRESET_IDS: readonly string[] = ["co-orchestrator"];
+
 /** preset id 合法性：与 preset-install.ts 的 isSafePresetId 同义（目录名，不允许路径穿越） */
 function isSafePresetId(id: string): boolean {
   return /^[a-z0-9][a-z0-9._-]*$/i.test(id) && !id.includes("..");
@@ -328,7 +337,8 @@ function readPresetMeta(dir: string): { name?: string; description?: string; ord
  * 扫描包内 presets/<id>/，合成可直接注册的档位定义。
  *
  * 跳过规则（fail-soft，任一不合格只 warn，不影响其它档位）：
- *   · 目录名非法 / 缺 agent.cordis.yml / 解析结果不是数组。
+ *   · 目录名非法 / 缺 agent.cordis.yml / 解析结果不是数组；
+ *   · 目录名 ∈ {@link TEAM_OWNED_PRESET_IDS}（`co-orchestrator` 由开发团队注册接管）。
  * 顺序：order 升序，其次 id 字典序（与宿主选择器的稳定顺序一致）。
  */
 export function loadCohubPresetDefs(presetsDir: string = COHUB_PRESETS_DIR, logger?: Logger): CohubPresetDef[] {
@@ -343,6 +353,11 @@ export function loadCohubPresetDefs(presetsDir: string = COHUB_PRESETS_DIR, logg
   const defs: CohubPresetDef[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !isSafePresetId(entry.name)) continue;
+    // 注册权已交给团队（team-presets.ts）：跳过档位注册，避免同 id 撞 Duplicate
+    if (TEAM_OWNED_PRESET_IDS.includes(entry.name)) {
+      logger?.info?.(`cohub: preset ${entry.name} 由团队注册接管（内置 dev 团队），档位注册跳过`);
+      continue;
+    }
     const dir = join(presetsDir, entry.name);
     const agentFile = join(dir, "agent.cordis.yml");
     if (!existsSync(agentFile)) continue;

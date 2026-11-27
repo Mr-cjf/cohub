@@ -24,6 +24,14 @@ export interface BuiltinTeam {
   readonly members: readonly string[];
   /** 队长角色名：co-orchestrator = 主代理本身，不额外注入人格 */
   readonly lead: string;
+  /**
+   * 预设 id 覆盖（缺省按 `cohub-team-<id>` 推导）。
+   *
+   * dev 团队显式写 `co-orchestrator`：它把**原有的调度者档位升级成团队版**（同一 id、
+   * 同一工具面，只是 persona 换成带成员清单的团队版），因此不再产出按团队 id 推导的平行 id
+   * 这个平行 id。档位注册（preset-runtime.ts）见到同 id 会跳过，把注册权交给团队。
+   */
+  readonly presetId?: string;
   /** 恒为 true：标记来源，便于调用方区分内置 / 用户团队 */
   readonly builtin: true;
 }
@@ -41,6 +49,8 @@ export const BUILTIN_TEAMS: readonly BuiltinTeam[] = [
     id: "dev",
     name: "开发团队",
     description: "通用软件开发团队：调度 + 12 个专职子代理",
+    // 复用调度者预设 id（见 BuiltinTeam.presetId 注释）：不再额外产出 cohub-team-<dev> 形式的平行 id
+    presetId: "co-orchestrator",
     members: [
       "co-fixer",
       "co-designer",

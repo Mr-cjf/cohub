@@ -138,7 +138,7 @@ console.log("===== ③ 改成员 → 先 unregister 再 register =====");
 const changed = { ...writing, members: ["co-orchestrator", "co-fixer", "co-designer"] };
 const s3 = await syncTeamPresets(ctx1, logger1, { teams: [changed] });
 check("updated = [cohub-team-writing-user]", JSON.stringify(s3.updated) === JSON.stringify(["cohub-team-writing-user"]));
-check("unchanged 只含 2 个内置团队（用户团队已更新）", s3.unchanged.length === 2 && s3.unchanged.includes("cohub-team-dev"));
+check("unchanged 只含 2 个内置团队（用户团队已更新）", s3.unchanged.length === 2 && s3.unchanged.includes("co-orchestrator"));
 const seq = r1.calls.filter((c) => c === "register:cohub-team-writing-user" || c === "unregister:cohub-team-writing-user");
 check("序列 = unregister → register", JSON.stringify(seq.slice(-2)) === JSON.stringify(["unregister:cohub-team-writing-user", "register:cohub-team-writing-user"]));
 check("注册表仍是 3 个（重建后含 2 内置）", r1.registered.size === 3);
@@ -184,7 +184,7 @@ check("支持 Volatile 形状的 teams", buildTeamPresetDefs({ teams: { get: () 
 console.log("===== ⑥ 插件卸载 → 全部注销 =====");
 check("台账里 3 个", listRegisteredTeamPresets(ctx1).length === 3);
 const removed = unregisterTeamPresets(ctx1, logger1);
-check("卸载 3 个（含内置团队）", removed.length === 3 && removed.includes("cohub-team-dev") && removed.includes("cohub-team-writing") && removed.includes("cohub-team-writing-user"));
+check("卸载 3 个（含内置团队）", removed.length === 3 && removed.includes("co-orchestrator") && removed.includes("cohub-team-writing") && removed.includes("cohub-team-writing-user"));
 check("注册表回空", r1.registered.size === 0);
 check("重复卸载幂等（第二次为空）", unregisterTeamPresets(ctx1, logger1).length === 0);
 
