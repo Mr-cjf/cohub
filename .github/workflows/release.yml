@@ -185,29 +185,40 @@ jobs:
           fi
 
           # 正文来源：优先抽取 tag 快照内 CHANGELOG 的对应版本段，缺失/抽取为空才回退自动生成。
-          # 抽段规则：起于 `##[ \t]` 且含带边界版本号的行，止于下一 `## ` 行（不含），去尾空行，截 60000 字符。
+          # 抽段规则：起于以 `## ` 开头且含带边界版本号的行，止于下一条以 `## ` 开头的行（不含），去尾空行，截 60000 字符。
+          # 实现约束（踩过坑，勿改回管道）：先把快照落盘成临时文件，再交给 awk 读文件。
+          # 若写成 `git show ... | awk ...`，awk 抽完段落就停止读取，git show 会收到 SIGPIPE 并以 141 退出；
+          # 在 `set -euo pipefail` 下整条管道判失败，`[ -s ]` 被短路，正文静默退化成 --generate-notes。
+          # 边界判定用 index() 而非动态正则，避免依赖 awk 方言与转义规则；版本号按 `[ver]` / ` ver ` 两种写法精确匹配。
           NOTES_FILE="$RUNNER_TEMP/release-notes.md"
           CHANGELOG="$(dirname "$MANIFEST")/CHANGELOG.md"
+          CHANGELOG_SNAPSHOT="$RUNNER_TEMP/changelog-$TAG.md"
           NOTES_SOURCE=generated
           if git cat-file -e "$TAG:$CHANGELOG" 2>/dev/null &&
-            git show "$TAG:$CHANGELOG" | awk -v ver="$VERSION" '
+            git show "$TAG:$CHANGELOG" > "$CHANGELOG_SNAPSHOT" &&
+            [ -s "$CHANGELOG_SNAPSHOT" ]; then
+            awk -v ver="$VERSION" '
               BEGIN {
-                v = ver
-                gsub(/[.]/, "[.]", v)
-                pat = "[^0-9.]" v "[^0-9.]"
                 started = 0
+                ended = 0
                 out = ""
               }
               started == 0 {
-                if ($0 ~ /^##[ \t]/ && (" " $0 " ") ~ pat) {
-                  started = 1
-                  out = $0 "\n"
+                if (substr($0, 1, 3) == "## ") {
+                  line = " " $0 " "
+                  if (index(line, "[" ver "]") > 0 || index(line, " " ver " ") > 0) {
+                    started = 1
+                    out = $0 "\n"
+                  }
                 }
                 next
               }
               {
-                if ($0 ~ /^## /) exit
-                out = out $0 "\n"
+                if (ended == 0 && substr($0, 1, 3) == "## ") {
+                  ended = 1
+                  next
+                }
+                if (ended == 0) out = out $0 "\n"
               }
               END {
                 if (started == 0) exit
@@ -215,9 +226,10 @@ jobs:
                 if (length(out) > 60000) out = substr(out, 1, 60000)
                 printf "%s", out
               }
-            ' > "$NOTES_FILE" &&
-            [ -s "$NOTES_FILE" ]; then
-            NOTES_SOURCE=changelog
+            ' "$CHANGELOG_SNAPSHOT" > "$NOTES_FILE" || true
+            if [ -s "$NOTES_FILE" ]; then
+              NOTES_SOURCE=changelog
+            fi
           fi
           echo "::notice::notes source=$NOTES_SOURCE"
 
