@@ -111,7 +111,7 @@ let captured: { id?: string; factory?: (require: (id: string) => unknown) => any
   };
   const mod = (captured as any).factory(requireStub) as { apply: (ctx: any) => void; inject: string[] };
   check("factory 导出 apply", typeof mod.apply === "function");
-  for (const service of ["slots", "locale", "remote", "remote.session", "configForms"]) {
+  for (const service of ["slots", "locale", "remote", "remote.session", "remote.agentPresets", "configForms"]) {
     check(`inject 声明 ${service}`, (mod.inject ?? []).includes(service));
   }
   const staleServices = ["settingsScope", "settings", "settings.plugin.item"];

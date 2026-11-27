@@ -55,7 +55,7 @@ window.__ModuleLoader__.load({
     /** 左侧导航位置：插在「模型」(10) 与「插件」(15) 之间。 */
     var SECTION_ORDER = 12;
 
-    var inject = ["slots", "locale", "remote", "remote.session", "configForms"];
+    var inject = ["slots", "locale", "remote", "remote.session", "remote.agentPresets", "configForms"];
 
     /** src/skills.ts 中 COHUB_SKILLS 的真实清单与顺序。 */
     var SKILL_NAMES = [
@@ -1491,16 +1491,23 @@ window.__ModuleLoader__.load({
       /**
        * 取 agentPresets.list 的可调用入口：优先 `remote.agentPresets.list()`（服务/方法两段），
        * 退到扁平 key 与通用 `remote.call`。三处都没有就返回 null（当作拿不到）。
+       *
+       * 注意：宿主未把 `remote.agentPresets` 纳入注入时，cordis 的 remote proxy 在**属性读取**
+       * 那一刻就抛错，所以整个探测必须包在 try/catch 里，读取失败一律降级成 null。
        */
       function agentPresetRequest() {
-        var remote = ctx && ctx.remote;
-        if (!remote || typeof remote !== "object") return null;
-        var service = remote.agentPresets;
-        if (service && typeof service.list === "function") return function () { return service.list(); };
-        var flat = remote["agentPresets/list"];
-        if (typeof flat === "function") return function () { return flat(); };
-        if (typeof remote.call === "function") return function () { return remote.call("agentPresets/list"); };
-        return null;
+        try {
+          var remote = ctx && ctx.remote;
+          if (!remote || typeof remote !== "object") return null;
+          var service = remote.agentPresets;
+          if (service && typeof service.list === "function") return function () { return service.list(); };
+          var flat = remote["agentPresets/list"];
+          if (typeof flat === "function") return function () { return flat(); };
+          if (typeof remote.call === "function") return function () { return remote.call("agentPresets/list"); };
+          return null;
+        } catch (error) {
+          return null;
+        }
       }
 
       /** 从各种可能的返回形状里取出预设数组：{ ok, value: { presets } } / { presets } / 数组。 */
