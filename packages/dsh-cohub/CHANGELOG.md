@@ -2,6 +2,15 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.12] - 2026-11-27
+
+### 变更
+
+- **预设注册统一走运行时**：停止把 preset 声明写入 profile 的 `cordis.patch.yml`，唯一来源改为插件启动时的 `ctx.agentPresets.register()`。
+- 背景：patch 声明在插件之前加载，同名 id 会抢先注册，导致运行时注册无法覆盖——改名、改工具集都不会生效。本版起不再产生这份副本。
+- `presets/profile-patch-presets.yml` 已废弃（保留文件仅作迁移说明）；`installPresets` 仍控制 preset 资源目录的复制。
+- 升级后若 profile patch 里仍有历史 preset 声明，建议手动移除并重启（声明与运行时注册同 id 会冲突）。
+
 ## [0.13.11] - 2026-11-27
 
 ### 变更
