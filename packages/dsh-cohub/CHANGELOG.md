@@ -2,6 +2,19 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.21] - 2026-11-27
+
+### 变更
+
+- **撤销「按 agent 类型分流注入」方案**：该方案用 `systemPrompt.section` 判断 `agent.session.header.origin === 'subagent'` 来给主代理注入纯调度约束、对子代理返回空串。实测子代理 assemble 时 `context.agent` 为 undefined，兜底按主代理注入，导致子代理仍被「不要亲自调用 read/edit/write/bash」拦住。section 的注入时机无法可靠区分主代理与子代理，此路作废。
+- **恢复档位 preset 挂载**：子代理重新挂载 `cohub-subagent-*` / `cohub-cordis` 预设，获得「专职子代理」persona 与正确工具面。这 4 个内部预设因此重新出现在 Agent 预设列表中（`order: 900` + 「内部 ·」前缀沉底）。
+- **保留 `co-orchestrator` 的 persona 中性化**：删除其中「绝不亲自调用任何文件/代码读写与执行工具」的硬禁令，改为「优先委派」的中性表述，减少对子代理的间接影响。
+
+### 说明
+
+- 实测确认：内置与自定义角色的 prompt 仍按任务书层注入子代理（例如 `co-designer` 会同时看到 system 层的「专职子代理」与任务书里的「Designer，前端 UI/UX 专家」），角色定义有效，只是不再位于 system 层。
+- DSH 未提供 preset 隐藏机制（`PresetDefinition` 仅 id/name/description/order/plugins），内部预设无法隐藏，属公开 API 的硬边界。
+
 ## [0.13.20] - 2026-11-27
 
 ### 修复
