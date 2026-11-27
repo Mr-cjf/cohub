@@ -123,6 +123,10 @@ DSH 0.2.1 起 `SubagentStartRequest.agentPreset` 是一等字段，`delegate` / 
 因此「只读代理不写文件」由工具面物理保证，不再只靠提示词层软约束；`toolFilter` 仅作为补充收窄手段保留。
 手动 `subagent` 委派时也可显式指定这两个 preset 之一，但常规链路无需关心。
 
+### 内部预设
+
+`cohub-subagent-*` 与 `cohub-cordis` 是 cohub 派发子代理时自动挂载的内部工具集，不是给用户手动选择的模式。它们出现在 Agent 预设列表中是因为 DSH 未提供 preset 隐藏机制；名称以「内部 ·」开头、`order: 900` 沉底。手动选中会让会话以子代理身份运行，失去编排能力。
+
 ## 技能清单（数量以 `src/skills.ts` 生成物为准，本文不写死）
 
 co-orchestrator（调度）/ co-planner（方案）/ co-oracle（审查）/

@@ -1,3 +1,3 @@
 name: 内部 · CoHub 调度者（带 Cordis）（cohub-cordis）
-description: 内部工具集，供 cohub 编排自动选择，请勿手动选择。co-orchestrator 主代理 + co_* 运行时工具（co_inspect_list / co_define / co_run 等），可直接委派 co-cordis 子代理修插件、试挂载、审核 harness 组合。纯调度纪律 + cordis 能力。需要无 cordis 的纯调度版本请用 co-orchestrator。co-cordis 子代理
+description: 内部工具集，供 cohub 编排在派发子代理时自动挂载。可创建/修改 Cordis 插件与组合。请勿手动选择——手动选中后，该会话会以"子代理"身份直接运行（没有编排与派发能力，也不会按团队配置限员）。
 order: 900
