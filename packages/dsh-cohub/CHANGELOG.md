@@ -2,6 +2,18 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.15] - 2026-11-27
+
+### 新增
+
+- **设置页拆分为「团队 / 角色」双 tab**：团队 tab 管团队（内置团队、自定义团队、队长与成员），角色 tab 管角色库（模板新建、工具绑定、模型配置）；两个 tab 各自保留未保存草稿。
+- **通用队长 / 通用队员模板**：新建角色时可选用不绑定具体成员名单的「通用队长（纯调度）」与「通用队员（示例）」，不再把 `co-orchestrator` 当模板（它的提示词写死 12 个成员，新建会带出过期名单）。
+- **团队区块显示默认预设**：顶部由「当前会话预设：未知」改为显示实际默认预设（如「默认预设：开发团队（co-orchestrator）」）。
+
+### 修复
+
+- **Release 正文偶发退化为 compare 链接**（0.13.14 仅 87 字符）：`git show … | awk … exit` 管道在 CHANGELOG 超过 64KB 管道缓冲时触发 SIGPIPE（退出码 141），配合 `set -euo pipefail` 使抽取被判失败并静默回退 `--generate-notes`。改为先落盘再 awk、`index()` 精确匹配版本号、抽取失败只回退不误判。
+
 ## [0.13.14] - 2026-11-27
 
 ### 修复
