@@ -18,7 +18,8 @@
 // fail-soft：没有 agentPresets 服务、单个团队注册失败 → 只 warn，绝不抛（不阻断插件启动）。
 
 import { BUILTIN_TEAMS } from "./builtin-teams.ts";
-import { resolveSkillSnapshot } from "./roles.ts";
+import { resolveSkillSnapshot, resolveTeamLead } from "./roles.ts";
+import type { RoleSpec } from "./roles.ts";
 import type { CohubPresetDef } from "./preset-runtime";
 
 /** 最小日志接口（cordis logger 与测试 mock 都能满足） */
@@ -43,9 +44,17 @@ export interface TeamPresetSource {
   readonly presetId?: string;
 }
 
-/** 自定义角色（只用到取 persona 的两个字段） */
-export interface TeamPresetCustomRole {
-  readonly name: string;
+/**
+ * 自定义角色（preset 组装用到的字段；与 roles.ts 的 `CustomRoleConfig` 同源）。
+ *
+ * 三个字段各有分工：`prompt` = 队长 persona 来源（快照把 prompt 同时写进 brief / content）；
+ * `description` = 成员清单里的职责文案；`kind` = 能否被团队指定为 lead——队员当 lead 时必须
+ * 与运行时一样回退，否则 preset persona 与运行时人格会各说各话（见 {@link resolveTeamLead}）。
+ */
+export interface TeamPresetCustomRole extends RoleSpec {
+  /** 一句话职责（进 persona 成员清单；缺省渲染为「（未填写职责）」） */
+  readonly description?: string;
+  /** 该角色的任务指令（同时是队长 persona 的 brief 来源） */
   readonly prompt?: string;
 }
 
@@ -98,20 +107,9 @@ export function teamPresetId(team: TeamPresetSource): string {
   return `cohub-team-${(team?.id ?? "").trim()}`;
 }
 
-/**
- * 队长回退规则（与 roles.ts 的 resolveTeamLead 同义，此处不导出该函数故就地实现）：
- *   ① lead 非空且 ∈ members **或就是 co-orchestrator**；② members 含 co-orchestrator；
- *   ③ members[0]；④ ""。
- *
- * ① 里的 co-orchestrator 例外是为内置团队服务的：它们的 members 只列专职子代理，lead 写主代理，
- * 不放宽就会把内置团队的队长静默回退成 members[0]（见 builtin-teams.ts）。
- */
-function resolveTeamLead(team: TeamPresetSource, members: readonly string[]): string {
-  const declared = typeof team.lead === "string" ? team.lead.trim() : "";
-  if (declared.length > 0 && (members.includes(declared) || declared === "co-orchestrator")) return declared;
-  if (members.includes("co-orchestrator")) return "co-orchestrator";
-  return members[0] ?? "";
-}
+// 队长判定**不再就地实现**：一律复用 roles.ts 的 {@link resolveTeamLead}（唯一判定源）。
+// 上一版这里有一份副本，漏了「角色类型（kind）」那一步：把队员写成 team.lead 时运行时回退成
+// 别的角色，preset persona 却照单接受——同一份配置长出两套人格。副本已删除，preset 与运行时同源。
 
 /** 干净成员名单（去空白 / 去空项 / 去重，保留原顺序） */
 function cleanMembers(team: TeamPresetSource): string[] {
@@ -126,17 +124,27 @@ function cleanMembers(team: TeamPresetSource): string[] {
   return out;
 }
 
+/** 成员职责缺失时的兜底文案（空 description 不能让清单出现空冒号） */
+const EMPTY_DUTY = "（未填写职责）";
+
 /**
- * 组装团队主代理的 persona 文本。
+ * 组装团队主代理的 persona 文本（三段式）：
  *
- * 事实源：队长角色的 **brief**（内置取 COHUB_SKILLS 的 brief、自定义取 customRoles[].prompt，
- * 两者都由 {@link resolveSkillSnapshot} 统一成 `role.skill.brief`）。取 brief 而非全文 content，
- * 理由与 roles.ts 的队长人格注入一致：preset persona 每轮都在系统提示词里，全文太贵。
+ *   ① 团队身份行：团队名 / id / 队长；
+ *   ② 队长职责全文（内置取 brief、自定义取 prompt，两者都由 {@link resolveSkillSnapshot} 统一成
+ *     `role.skill.brief`）。取 brief 而非全文 content，理由与 roles.ts 的队长人格注入一致：
+ *     preset persona 每轮都在系统提示词里，全文太贵；
+ *   ③ 成员清单：逐条「- 名称：职责」（职责取角色 `description`），顺序同 `team.members`；
+ *     队长自己标「（你）」而不是重复列一条。
  *
- * 末尾必须附「本团队可派角色：…」，让主代理知道团队边界（派发层还会再硬过滤一次）。
+ * 为什么职责要写进 persona：主代理靠它选人派发。旧版只给「本团队可派角色：a、b、c」——光有名字，
+ * 它并不知道每个角色干什么，还得回头查技能目录。
+ *
+ * 查不到的成员（配置残留 / 未注册角色）跳过并打印
+ * `[cohub/team-preset] persona skip unknown member=<name>`，不抛错——脏配置不该阻断注册。
  */
 export function buildTeamPersona(team: TeamPresetSource, members: readonly string[], lead: string, customRoles: readonly TeamPresetCustomRole[]): string {
-  const snapshot = resolveSkillSnapshot({ customRoles: customRoles as never });
+  const snapshot = resolveSkillSnapshot({ customRoles });
   const lookup = snapshot.resolve(lead);
   const brief = (lookup.ok ? (lookup.role.skill.brief ?? "") : "").trim();
 
@@ -144,11 +152,22 @@ export function buildTeamPersona(team: TeamPresetSource, members: readonly strin
   const body = brief.length > 0
     ? brief
     : `你的职责：分析需求 → 委派给本团队的专职子代理 → 审核并汇总结果；绝不亲自操作文件（除非你本身是执行型角色）。`;
-  const discipline =
-    "团队纪律：能用 delegate / delegate_batch 派发的一律派发；需要并行时单批 ≤ 5 个执行单元；" +
-    "每次派发都要给出自包含任务书（目标、路径、约束、输出格式）。";
-  const roster = `本团队可派角色：${members.length > 0 ? members.join("、") : "（无）"}`;
-  return [head, body, discipline, roster].join("\n");
+
+  const lines: string[] = [];
+  for (const name of members) {
+    const found = snapshot.resolve(name);
+    if (!found.ok) {
+      log(`persona skip unknown member=${name}`);
+      continue;
+    }
+    const duty = (found.role.skill.description ?? "").trim();
+    lines.push(`- ${name}：${duty.length > 0 ? duty : EMPTY_DUTY}${name === lead ? "（你）" : ""}`);
+  }
+  const rosterHead = `团队成员（共 ${lines.length} 人）：`;
+  const roster = lines.length > 0
+    ? [rosterHead, ...lines].join("\n")
+    : `${rosterHead}\n- （本团队没有可列出的成员）`;
+  return [head, body, roster].join("\n\n");
 }
 
 /**
@@ -195,7 +214,8 @@ export function buildTeamPresetPlugins(persona: string): unknown[] {
 function buildTeamDef(team: TeamPresetSource, order: number, customRoles: readonly TeamPresetCustomRole[]): CohubPresetDef {
   const teamId = typeof team.id === "string" ? team.id.trim() : "";
   const members = cleanMembers(team);
-  const lead = resolveTeamLead(team, members);
+  // 队长判定与运行时同源（roles.ts 的 resolveTeamLead）：lead 指向队员类型时同样回退
+  const lead = resolveTeamLead(team, members, customRoles);
   const name = (typeof team.name === "string" && team.name.trim().length > 0 ? team.name.trim() : teamId);
   const description =
     `cohub 团队「${name}」：队长 ${lead || "（未指定）"}，成员 ${members.length > 0 ? members.join(", ") : "（无）"}`;
@@ -350,11 +370,25 @@ interface FingerprintMeta {
 }
 
 /**
- * 预设指纹：**id / name / description / members / lead / presetId** + order / plugins 全量参与。
+ * 从预设定义里取 persona 文本（即 `plugins` 里 persona 行的 prefix）。
+ *
+ * 指纹必须**显式**含它：成员职责（角色 description）变了，def 的 id / name / members 全不变，
+ * 只有 persona 里那几行「- 成员：职责」不同。不显式列出就只能靠 `def.plugins` 的深度比较兜住，
+ * 一旦 persona 的承载方式调整（例如换行/前缀），指纹就会漏判「职责改了但没重建」。
+ */
+function presetPersonaOf(def: CohubPresetDef): string {
+  for (const line of (def.plugins ?? []) as { id?: unknown; config?: { prefix?: unknown } }[]) {
+    if (line?.id === "persona" && typeof line.config?.prefix === "string") return line.config.prefix;
+  }
+  return "";
+}
+
+/**
+ * 预设指纹：**id / name / description / members / lead / presetId / persona** + order / plugins 全量参与。
  *
  * 上一版只哈希 `[name, description, order, plugins]`——改名能命中，但 members / lead /
  * presetId 靠 description / persona 间接体现，一旦组装逻辑调整就可能同哈希不同语义；
- * 这里显式列出，改名 / 换队长 / 改成员 / 改 presetId 一律触发「先 unregister 再 register」。
+ * 这里显式列出，改名 / 换队长 / 改成员 / 改 presetId / **改成员职责**一律触发「先 unregister 再 register」。
  */
 function fingerprintOf(def: CohubPresetDef, meta?: FingerprintMeta): string {
   return JSON.stringify([
@@ -364,6 +398,7 @@ function fingerprintOf(def: CohubPresetDef, meta?: FingerprintMeta): string {
     meta?.members ?? [],
     meta?.lead ?? "",
     meta?.presetId ?? "",
+    presetPersonaOf(def),
     def.order ?? null,
     def.plugins,
   ]);
@@ -503,6 +538,8 @@ export async function syncTeamPresets(ctx: any, logger: Logger | undefined, conf
   const state = stateOf(registry);
   const defs = buildTeamPresetDefs(config, logger);
   const wanted = new Set(defs.map((def) => def.id));
+  // 自定义角色表：指纹里的 lead 判定要与 buildTeamDef 用同一份（含 kind）
+  const customRoles = readList<TeamPresetCustomRole>(config?.customRoles as never);
   const sources = new Map<string, TeamPresetSource>();
   for (const team of readList<TeamPresetSource>(config?.teams as never)) {
     if (typeof team?.id !== "string" || team.id.trim().length === 0) continue;
@@ -545,7 +582,7 @@ export async function syncTeamPresets(ctx: any, logger: Logger | undefined, conf
             name: def.name,
             description: def.description ?? "",
             members: cleanMembers(meta),
-            lead: resolveTeamLead(meta, cleanMembers(meta)),
+            lead: resolveTeamLead(meta, cleanMembers(meta), customRoles),
             presetId: teamPresetId(meta),
           },
     );

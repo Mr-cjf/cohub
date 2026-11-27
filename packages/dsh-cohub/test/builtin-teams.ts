@@ -84,14 +84,17 @@ check("开发团队 12 人、写作团队 3 人", dev.members.length === 12 && w
 check("内置团队标 builtin: true", BUILTIN_TEAMS.every((team: any) => team.builtin === true));
 check("dev 团队显式 presetId=co-orchestrator", dev.presetId === "co-orchestrator", dev.presetId);
 
-// persona 样例（团队版 persona：含成员清单）
+// persona 样例（团队版 persona：三段式 = 身份行 + 队长职责 + 成员清单）
 const devPersona: string = defsEmpty[0].plugins.find((line: any) => line.id === "persona").config.prefix;
 const devLines = devPersona.split("\n");
+const devMemberLines = devLines.filter((line: string) => line.startsWith("- "));
 console.log(`  persona 首行：${devLines[0]}`);
-console.log(`  persona 成员行：${devLines[devLines.length - 1]}`);
+console.log(`  persona 首个成员行：${devMemberLines[0]}`);
 check("persona 首行是团队身份", devLines[0].startsWith("你是 cohub 团队「开发团队」的主代理"));
-check("persona 末尾附 12 个可派角色",
-  devLines[devLines.length - 1] === `本团队可派角色：${dev.members.join("、")}`);
+check("persona 成员清单：12 人、逐条「- 名称：职责」、顺序同 members",
+  devPersona.includes("团队成员（共 12 人）：")
+  && devMemberLines.length === 12
+  && dev.members.every((name: string, index: number) => devMemberLines[index]!.startsWith(`- ${name}：`)));
 
 // 同步：空配置 → 注册这 2 个
 const r0 = makeRegistry();

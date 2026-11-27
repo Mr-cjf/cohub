@@ -10,6 +10,8 @@
 //
 // 用法：bun run build && node test/team-presets.ts
 import * as libBuild from "../lib/index.js";
+// 运行时队长判定（roles.ts 的唯一判定源）：用于断言 preset persona 与运行时人格同源
+import { resolveActiveTeam } from "../src/roles.ts";
 const {
   syncTeamPresets,
   unregisterTeamPresets,
@@ -108,7 +110,9 @@ check("order 在档位 preset 之后（≥ " + TEAM_PRESET_ORDER_BASE + "）", s
 check("内置团队 order 40/41、用户团队 50/51", defs1[0]!.order === BUILTIN_TEAM_ORDER_BASE && defs1[1]!.order === BUILTIN_TEAM_ORDER_BASE + 1 && defs1[2]!.order === TEAM_PRESET_ORDER_BASE && defs1[3]!.order === TEAM_PRESET_ORDER_BASE + 1);
 check("description 含队长与成员", sample.description.includes("队长 co-orchestrator") && sample.description.includes("co-fixer"));
 check("persona 首行是团队身份", sample.plugins[0].id === "persona" && sample.plugins[0].config.prefix.startsWith("你是 cohub 团队「写作团队」的主代理"));
-check("persona 末尾附可派角色", sample.plugins[0].config.prefix.includes("本团队可派角色：co-orchestrator、co-fixer、co-editor"));
+check("persona 列出成员名称 + 职责（共 3 人）",
+  sample.plugins[0].config.prefix.includes("团队成员（共 3 人）：")
+  && sample.plugins[0].config.prefix.includes("- co-fixer：代码修改 / 构建 / 测试执行（读写+Bash）"));
 check("persona 取队长 brief（co-orchestrator 纯调度者）", sample.plugins[0].config.prefix.includes("纯调度"));
 check("含委派 / 待办 / 追问 / 目标 / 后台任务 / 技能行",
   ["tool-subagent", "tool-todo", "tool-ask-user", "tool-goal", "tool-jobs", "tool-skill"].every((id) => allPluginIds.includes(id)));
@@ -187,6 +191,89 @@ const removed = unregisterTeamPresets(ctx1, logger1);
 check("卸载 3 个（含内置团队）", removed.length === 3 && removed.includes("co-orchestrator") && removed.includes("cohub-team-writing") && removed.includes("cohub-team-writing-user"));
 check("注册表回空", r1.registered.size === 0);
 check("重复卸载幂等（第二次为空）", unregisterTeamPresets(ctx1, logger1).length === 0);
+
+// ── ⑦ persona 动态列出成员（名称 + 职责）───────────────────────────────────
+console.log("===== ⑦ persona 动态列出成员名称与职责 =====");
+const pair = { id: "pair", name: "写作小组", members: ["co-writer", "co-editor"], lead: "co-team-lead" };
+const pairDef = buildTeamPresetDefs({ teams: [pair] }).find((def: any) => def.id === "cohub-team-pair")!;
+const pairPersona: string = pairDef.plugins.find((line: any) => line.id === "persona").config.prefix;
+check("含「团队成员（共 2 人）：」", pairPersona.includes("团队成员（共 2 人）："));
+check("成员行 - co-writer：中文成稿与改稿——按提纲落笔，保持口吻一致（读写）",
+  pairPersona.includes("- co-writer：中文成稿与改稿——按提纲落笔，保持口吻一致（读写）"));
+check("成员行 - co-editor：中文审校——事实/逻辑/标点/错别字，给建议（只读）",
+  pairPersona.includes("- co-editor：中文审校——事实/逻辑/标点/错别字，给建议（只读）"));
+check("成员行顺序同 team.members",
+  pairPersona.indexOf("- co-writer：") < pairPersona.indexOf("- co-editor："));
+// 队长自己在成员里 → 标「（你）」，不重复列一条
+const selfLead = buildTeamPersona(
+  { id: "self", name: "自带队", members: ["co-orchestrator", "co-fixer"] },
+  ["co-orchestrator", "co-fixer"],
+  "co-orchestrator",
+  [],
+);
+check("队长自己标「（你）」且只出现一次",
+  selfLead.includes("- co-orchestrator：纯调度——分析需求→委派→审核（禁止直接文件操作）（你）")
+  && selfLead.split("- co-orchestrator：").length === 2);
+console.log("  样例 persona：\n" + pairPersona.split("\n").map((line) => "    " + line).join("\n"));
+
+// ── ⑧ 成员职责（description）变化 → 指纹变化 → 触发重建 ────────────────────
+console.log("===== ⑧ 成员职责变化 → 指纹变化（触发重建） =====");
+const r8 = makeRegistry();
+const ctx8 = makeCtx(r8);
+const helperTeam = { id: "fp-team", name: "指纹组", members: ["my-helper"], lead: "my-helper" };
+const helperOld = [{ name: "my-helper", description: "老职责", prompt: "你是帮手", kind: "member" }];
+const helperNew = [{ ...helperOld[0], description: "新职责" }];
+await syncTeamPresets(ctx8, makeLogger(), { teams: [helperTeam], customRoles: helperOld });
+const s8a = await syncTeamPresets(ctx8, makeLogger(), { teams: [helperTeam], customRoles: helperNew });
+check("职责变化 → updated（先注销再重建）", s8a.updated.includes("cohub-team-fp-team"));
+const s8b = await syncTeamPresets(ctx8, makeLogger(), { teams: [helperTeam], customRoles: helperNew });
+check("配置不变 → unchanged（指纹稳定，不重复重建）", s8b.unchanged.includes("cohub-team-fp-team"));
+const helperPersona: string = buildTeamPresetDefs({ teams: [helperTeam], customRoles: helperNew })
+  .find((def: any) => def.id === "cohub-team-fp-team")!.plugins.find((line: any) => line.id === "persona").config.prefix;
+check("新 persona 用新职责", helperPersona.includes("- my-helper：新职责") && !helperPersona.includes("老职责"));
+unregisterTeamPresets(ctx8, makeLogger());
+
+// ── ⑨ lead 指向队员类型 → 与运行时同样的回退结果 ───────────────────────────
+console.log("===== ⑨ lead 统一判定（preset persona 与运行时同源） =====");
+const memberLeadTeam = { id: "lead-fallback", name: "回退组", members: ["co-writer", "co-editor"], lead: "co-editor" };
+const runtimeLead = resolveActiveTeam({ teams: [memberLeadTeam], activeTeam: "lead-fallback" })?.lead;
+const personaLead = buildTeamPresetDefs({ teams: [memberLeadTeam] })
+  .find((def: any) => def.id === "cohub-team-lead-fallback")!.plugins.find((line: any) => line.id === "persona").config.prefix;
+check("运行时把队员 lead 回退成 members[0]（co-writer）", runtimeLead === "co-writer");
+check("preset persona 的队长与运行时一致",
+  personaLead.startsWith("你是 cohub 团队「回退组」的主代理（团队 id lead-fallback；队长 co-writer）。"));
+// 队长类型（kind=lead）→ 显式指定优先，两边都不回退
+const kindLeadTeam = { id: "lead-ok", name: "正牌组", members: ["co-team-lead", "co-writer"], lead: "co-team-lead" };
+check("kind=lead 的队长不被回退（运行时）", resolveActiveTeam({ teams: [kindLeadTeam], activeTeam: "lead-ok" })?.lead === "co-team-lead");
+check("kind=lead 的队长不被回退（preset）",
+  buildTeamPresetDefs({ teams: [kindLeadTeam] })
+    .find((def: any) => def.id === "cohub-team-lead-ok")!.plugins.find((line: any) => line.id === "persona")
+    .config.prefix.startsWith("你是 cohub 团队「正牌组」的主代理（团队 id lead-ok；队长 co-team-lead）。"));
+
+// ── ⑩ 未知成员 → 跳过 + 打印日志，不抛错 ───────────────────────────────────
+console.log("===== ⑩ 未知成员被跳过且不抛错 =====");
+let ghostPersona = "";
+let ghostThrew = false;
+const ghostLogs: string[] = [];
+const realLog = (console as any).log;
+(console as any).log = (...args: any[]) => ghostLogs.push(args.join(" "));
+try {
+  ghostPersona = buildTeamPersona(
+    { id: "ghost", name: "幽灵组", members: ["co-writer", "no-such-role", "co-editor"] },
+    ["co-writer", "no-such-role", "co-editor"],
+    "co-orchestrator",
+    [],
+  );
+} catch {
+  ghostThrew = true;
+} finally {
+  (console as any).log = realLog;
+}
+check("不抛错", ghostThrew === false);
+check("跳过未知成员（共 2 人，无该名字）",
+  ghostPersona.includes("团队成员（共 2 人）：") && !ghostPersona.includes("no-such-role"));
+check("打印 skip 日志",
+  ghostLogs.some((line) => line.includes("[cohub/team-preset] persona skip unknown member=no-such-role")));
 
 console.log("");
 console.log(`=== team-presets：PASS ${pass}，FAIL ${fail} ===`);

@@ -594,8 +594,8 @@ export function apply(ctx: any, config: any) {
   }, "cohub.agentPresets()");
 
   // ②d 团队 preset 的**运行时注册**（Config.teams → DSH 原生「Agent 预设」选择器）
-  //    · 每个团队注册为一个预设：id = team.presetId || `cohub-team-<id>`，persona = 队长 brief
-  //      + 「本团队可派角色：…」，工具面抄 co-orchestrator 主代理（不挂 tool-cordis 全进程单例）；
+  //    · 每个团队注册为一个预设：id = team.presetId || `cohub-team-<id>`，persona = 队长职责
+  //      + 「团队成员（共 N 人）：- 名称：职责」清单，工具面抄 co-orchestrator 主代理（不挂 tool-cordis 全进程单例）；
   //    · 幂等：模块内按 registry 维护「已注册 id → 指纹 + handle」台账，指纹不变则完全跳过，
   //      改名 / 改成员 → 先 unregister 再 register，团队被删 → unregister；
   //    · 热生效：teams / customRoles 都是 volatile 字段且宿主无变更回调，故沿用 customRoles 的

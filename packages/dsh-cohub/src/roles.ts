@@ -545,7 +545,7 @@ export function resolveTeamFilter(
  * @param customRoles - 自定义角色表（决定自定义角色的 kind；缺省 = 只用内置表）
  * @returns 队长角色名；"" = 叫不出队长
  */
-function resolveTeamLead(
+export function resolveTeamLead(
   team: TeamConfig,
   members: readonly string[],
   customRoles?: readonly RoleSpec[],
