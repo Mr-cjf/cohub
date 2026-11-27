@@ -194,6 +194,16 @@ revision 冲突拒绝保存、只写显式配置的代理等。
                              # co-team-lead 是 lead，其余内置角色全是 member。
                              # 角色专属模型不在此配，而在 skills 路由里按角色名覆盖 provider/model 等。
                              # 重名检查与工具 id 存在性检查在运行时注册逻辑中进行。
+    roleOverrides: []        # 内置角色的字段级覆盖（内置 18 个：co-orchestrator + 17 个专职代理）。
+                             # 默认 [] = 全部沿用内置（行为与旧版逐字一致）；volatile：设置页可改、热生效。
+                             # 每项字段（name 必填，其余全部可选，留空即沿用内置）：
+                             #   name        内置角色名（精确匹配，如 co-fixer）；不在内置表 → 忽略 + 日志，不报错
+                             #   prompt      覆盖 brief / 正文（主代理看到的 brief 与子代理收到的 content 同源）
+                             #   description 覆盖职责描述（技能目录 + 团队 persona 的成员清单）
+                             #   tier        覆盖档位（ro|ro-net|rw|rw-shell|cordis）
+                             #   tools       覆盖工具集（工具插件 id 数组；留空沿用档位推导）
+                             # 优先级（同名时）：customRoles > roleOverrides > 内置默认。
+                             # 想「新增角色」用 customRoles；只改内置角色的话术 / 档位 / 工具用本字段。
     teams: []                # 团队（角色池编组）：把内置角色与 customRoles 按用途分组，
                              # 每个团队映射为一个 DSH Agent 预设（团队切换在 DSH 的 Agent 预设里选择）。
                              # volatile：设置页可改、热生效。每项 id（kebab-case）/ name（非空）/

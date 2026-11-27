@@ -14,8 +14,12 @@ import {
   SHELL_TOOL,
   TIER_TOOLS,
   TIER_TO_PRESET,
+  applyRoleOverride,
   presetForTier,
+  resolveRoleKind,
+  resolveSkillSnapshot,
   resolveTier,
+  type RoleOverride,
   type RoleSpec,
   type Tier,
 } from "../src/roles.ts";
@@ -140,6 +144,99 @@ check("通用裁剪对所有档位生效（ask_user_question / weather）",
     && TIER_TOOLS[tier].deny.includes("weather")));
 check("SHELL_TOOL 是 pwsh / bash 之一（与平台互斥挂载一致）",
   SHELL_TOOL === "pwsh" || SHELL_TOOL === "bash");
+
+// ── 用例 6：roleOverrides —— 内置角色的字段级覆盖（四组） ──────────────────
+group("用例 6：roleOverrides 覆盖内置角色");
+
+const builtinSnapshot = resolveSkillSnapshot();
+const builtinFixer = builtinSnapshot.resolve("co-fixer");
+const builtinFixerBrief = builtinFixer.ok ? builtinFixer.role.skill.brief : "";
+const builtinFixerDesc = builtinFixer.ok ? builtinFixer.role.skill.description : "";
+check("基线：co-fixer 可解析且 brief 非空", builtinFixer.ok && builtinFixerBrief.length > 0);
+
+// ① 覆盖 prompt → brief / content 变新值；未提供的 description 沿用内置
+const FIXER_PROMPT = "你是修复专员：改前先 read，改完跑构建与测试，报告改动与验证。";
+const promptOverride: readonly RoleOverride[] = [{ name: "co-fixer", prompt: FIXER_PROMPT }];
+const promptSnapshot = resolveSkillSnapshot({ roleOverrides: promptOverride });
+const promptFixer = promptSnapshot.resolve("co-fixer");
+check("① 覆盖 prompt → brief 为新值", promptFixer.ok && promptFixer.role.skill.brief === FIXER_PROMPT);
+check("① 覆盖 prompt → content 同步为新值", promptFixer.ok && promptFixer.role.skill.content === FIXER_PROMPT);
+check("① 未提供 description → 沿用内置", promptFixer.ok && promptFixer.role.skill.description === builtinFixerDesc);
+check("① 纯函数 applyRoleOverride 返回新对象、不改入参", builtinFixer.ok && (() => {
+  const out = applyRoleOverride(builtinFixer.role.skill, { name: "co-fixer", prompt: FIXER_PROMPT });
+  return out.brief === FIXER_PROMPT && out.content === FIXER_PROMPT
+    && builtinFixer.role.skill.brief !== FIXER_PROMPT;
+})());
+check("① override 未给 tier → 沿用内置档位 rw-shell", promptFixer.ok && promptFixer.role.tier === "rw-shell");
+const builtinWriter = builtinSnapshot.resolve("co-writer");
+const promptWriter = promptSnapshot.resolve("co-writer");
+check("① 只影响命中的角色（co-writer brief 不变）",
+  builtinWriter.ok && promptWriter.ok && builtinWriter.role.skill.brief === promptWriter.role.skill.brief);
+
+// ② 覆盖 tier 为 ro → resolveTier / 快照 / preset 全部跟随
+const roOverride: readonly RoleOverride[] = [{ name: "co-fixer", tier: "ro" }];
+check("② resolveTier(co-fixer, undefined, tier=ro) = ro", resolveTier("co-fixer", undefined, roOverride) === "ro");
+const roSnapshot = resolveSkillSnapshot({ roleOverrides: roOverride });
+const roFixer = roSnapshot.resolve("co-fixer");
+check("② 快照条目 tier 同步为 ro", roFixer.ok && roFixer.role.tier === "ro");
+check("② preset 随档位变为只读",
+  presetForTier(resolveTier("co-fixer", undefined, roOverride) ?? "rw-shell") === "cohub-subagent-readonly");
+check("② 覆盖只影响命中角色（co-writer 仍 rw）", resolveTier("co-writer", undefined, roOverride) === "rw");
+check("② 脏 tier 回退内置（rwx → rw-shell）",
+  resolveTier("co-fixer", undefined, [{ name: "co-fixer", tier: "rwx" as unknown as Tier }]) === "rw-shell");
+check("② override 不可覆盖 kind（co-fixer 仍 member、co-team-lead 仍 lead）",
+  resolveRoleKind("co-fixer", undefined, roOverride) === "member"
+  && resolveRoleKind("co-team-lead", undefined, [{ name: "co-team-lead", tier: "ro" }]) === "lead");
+
+// ③ 覆盖不存在的 name → 忽略 + 日志，其余不变
+const logged: string[] = [];
+const originalLog = console.log;
+let unknownSnapshot: ReturnType<typeof resolveSkillSnapshot> | undefined;
+try {
+  console.log = ((...args: unknown[]) => {
+    logged.push(args.map((arg) => String(arg)).join(" "));
+  }) as typeof console.log;
+  unknownSnapshot = resolveSkillSnapshot({
+    roleOverrides: [{ name: "co-unknown-role", prompt: "不该生效的覆盖", tier: "ro" }],
+  });
+} finally {
+  console.log = originalLog;
+}
+check("③ 未知 name 不新增角色（名单与内置一致）",
+  unknownSnapshot !== undefined
+  && JSON.stringify(unknownSnapshot.names) === JSON.stringify(builtinSnapshot.names));
+check("③ 未知 name 留痕：日志含 skip unknown name=co-unknown-role",
+  logged.some((line) => line.includes("[cohub/role-override] skip unknown name=co-unknown-role")));
+const unknownFixer = unknownSnapshot?.resolve("co-fixer");
+check("③ 其余角色不变（co-fixer brief 仍是内置）",
+  unknownFixer !== undefined && unknownFixer.ok && unknownFixer.role.skill.brief === builtinFixerBrief);
+check("③ 未知 name 不报错（查它仍是 unknown）", unknownSnapshot?.resolve("co-unknown-role").ok === false);
+
+// ④ customRoles 与 override 同名 → customRoles 胜
+const customVsOverride = resolveSkillSnapshot({
+  customRoles: [{ name: "co-fixer", description: "自定义职责", prompt: "自定义 brief" }],
+  roleOverrides: [{ name: "co-fixer", prompt: "覆盖 brief", description: "覆盖职责", tier: "ro" }],
+});
+const wins = customVsOverride.resolve("co-fixer");
+check("④ customRoles 胜：brief 来自 customRoles", wins.ok && wins.role.skill.brief === "自定义 brief");
+check("④ customRoles 胜：description 来自 customRoles", wins.ok && wins.role.skill.description === "自定义职责");
+check("④ customRoles 胜：builtin=false（快照标记为自定义）", wins.ok && wins.role.builtin === false);
+check("④ customRoles 未给 tier → 回退 override 的 tier（ro）",
+  resolveTier("co-fixer", [{ name: "co-fixer" }], [{ name: "co-fixer", tier: "ro" }]) === "ro");
+check("④ customRoles 给了 tier → customRoles 胜（rw）",
+  resolveTier("co-fixer", [{ name: "co-fixer", tier: "rw" }], [{ name: "co-fixer", tier: "ro" }]) === "rw");
+
+// ⑤ tools 覆盖随快照条目下传（留空 = 档位推导）
+const toolsSnapshot = resolveSkillSnapshot({ roleOverrides: [{ name: "co-fixer", tools: ["tool-fs", "tool-pwsh"] }] });
+const toolsFixer = toolsSnapshot.resolve("co-fixer");
+check("⑤ tools 覆盖进快照条目",
+  toolsFixer.ok && JSON.stringify(toolsFixer.role.tools) === JSON.stringify(["tool-fs", "tool-pwsh"]));
+check("⑤ 未给 tools 的角色不带 tools 字段（沿用档位推导）", builtinFixer.ok && builtinFixer.role.tools === undefined);
+
+if (promptFixer.ok) {
+  const firstSentence = promptFixer.role.skill.brief.split(/[。\n]/)[0];
+  console.log("覆盖后 co-fixer 的 brief 首句：" + firstSentence);
+}
 
 // ── 汇总 ────────────────────────────────────────────────────────────────
 console.log("");

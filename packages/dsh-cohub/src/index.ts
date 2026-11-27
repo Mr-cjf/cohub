@@ -179,6 +179,35 @@ const CustomRole = z.object({
 });
 
 /**
+ * 内置角色的字段级覆盖（Config.roleOverrides 的数组元素）。
+ *
+ * 与 {@link CustomRole} 的分工：CustomRole 是「新增角色」（也允许同名覆盖），本 schema 只改
+ * **内置 18 个角色**（co-orchestrator + 17 个专职代理）的四个字段——没写（或写空）的字段一律
+ * 沿用内置，所以「只想换一句话术」不必把整个角色重抄一遍。
+ *
+ * 校验刻意宽松（与 CustomRole 的「必填 + min(1)」相反）：prompt / description / tier / tools 全部
+ * 可选且允许空串，因为「空 = 沿用内置」正是本字段的核心语义；真值判定在运行时（roles.ts 的
+ * applyRoleOverride / resolveTier）。只有 name 用 `.min(1)`：空名无意义且让日志无从定位。
+ *
+ * 优先级（同名时）：customRoles > roleOverrides > 内置默认。
+ * name 不在内置角色表 → 运行时忽略并打印 `[cohub/role-override] skip unknown name=<x>`，不报错。
+ */
+const RoleOverride = z.object({
+  /** 要覆盖的内置角色名（精确匹配；未知名字在运行时忽略） */
+  name: z.string().min(1).required().description("要覆盖的内置角色名"),
+  /** 覆盖 brief / 正文：留空沿用内置 */
+  prompt: z.string().description("覆盖 brief/正文；留空沿用内置"),
+  /** 覆盖职责描述：留空沿用内置 */
+  description: z.string().description("覆盖职责描述；留空沿用内置"),
+  /** 覆盖档位：留空沿用内置；tools 非空时以 tools 为准（与 customRoles 同规则） */
+  tier: z
+    .union(["ro", "ro-net", "rw", "rw-shell", "cordis"])
+    .description("覆盖档位；留空沿用内置"),
+  /** 覆盖工具集：留空沿用档位推导 */
+  tools: z.array(z.string()).description("覆盖工具集；留空沿用档位推导"),
+});
+
+/**
  * 团队配置（Config.teams 的数组元素）：把角色池（内置角色 + customRoles）按用途编组，
  * 并映射为 DSH 的一个 **Agent 预设**——团队切换改为在 DSH 的 Agent 预设里选择
  * （Config.activeTeam 已废弃，仅作旧配置兼容）。
@@ -381,6 +410,11 @@ export const Config = z.object({
    *  默认 []（= 只用内置角色）。
    *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）——用户可改、热生效。 */
   customRoles: volatileSchema(z.array(CustomRole).default([])),
+  /** 内置角色（co-orchestrator + 17 个专职代理）的字段级覆盖：按 name 精确匹配，
+   *  prompt / description / tier / tools 各自独立生效，留空即沿用内置；未知 name 忽略并留痕。
+   *  优先级：customRoles > roleOverrides > 内置默认。默认 [] = 全部沿用内置（行为与旧版逐字一致）。
+   *  volatile：见 skills 字段注释（0.2 Loader 投影/提交语义）——用户可改、热生效。 */
+  roleOverrides: volatileSchema(z.array(RoleOverride).default([])),
   /** delegate 执行器环境契约注入（P1-1）：默认开，文本可覆盖 */
   delegateEnvContract: EnvContractConfig,
   /** delegate 中止/失败自动重试（P1-2）：默认不重试。
@@ -423,7 +457,7 @@ export const Config = z.object({
 
 /** 团队的解析后类型（供外部 / 测试引用） */
 export type Team = ReturnType<typeof Team>;
-export { ScheduleConfig, ResultBudgetConfig, DelegateBackgroundConfig, CustomRole, Team, CohubSettingsSchema };
+export { ScheduleConfig, ResultBudgetConfig, DelegateBackgroundConfig, CustomRole, RoleOverride, Team, CohubSettingsSchema };
 /** 兼容/测试导出：preset 安装台账与递归复制（实现位于 preset-install.ts） */
 export { copyTree, installShippedPresets, hashTree, removeInstallRecord } from "./preset-install";
 // 测试与维护入口：preset 声明生成 / 幂等写入 profile patch / 活动 profile 解析
@@ -538,6 +572,7 @@ export function apply(ctx: any, config: any) {
       teams: readVolatile(config.teams),
       activeTeam: readVolatile(config.activeTeam),
       customRoles: readVolatile(config.customRoles),
+      roleOverrides: readVolatile(config.roleOverrides),
     }),
   }), "cohub.lead()");
 
@@ -607,6 +642,9 @@ export function apply(ctx: any, config: any) {
     const readConfig = () => ({
       teams: readVolatile(config.teams),
       customRoles: readVolatile(config.customRoles),
+      // 团队 preset 的 persona 必须取合并后的同一份快照（内置 + roleOverrides + customRoles），
+      // 否则 override 改了职责 / 队长 brief，preset 里仍是内置文案（与运行时人格各说各话）。
+      roleOverrides: readVolatile(config.roleOverrides),
     });
     const sync = () => {
       if (inFlight) return; // 轮询间隔短于一次注册耗时时，跳过本轮，避免台账竞争

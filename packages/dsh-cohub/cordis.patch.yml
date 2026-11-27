@@ -59,6 +59,26 @@
         #       prompt: 你只派活，所有对外文案统一口吻
         #       kind: lead                   # 队长：可写进 teams[].lead 当主代理
         customRoles: []
+        # roleOverrides：内置角色（co-orchestrator + 17 个专职代理）的**字段级覆盖**。
+        # 与 customRoles 的区别：customRoles 新增角色；roleOverrides 只改内置角色已有的四个字段，
+        # 没写（或写空）的字段一律沿用内置，所以「只想换一句话术」不必重抄整个角色。
+        # volatile：设置页可改、热生效。默认 [] = 全部沿用内置（行为与旧版逐字一致）。
+        # 每项字段（name 必填，其余全部可选，留空即沿用内置）：
+        #   name         内置角色名（精确匹配，如 co-fixer / co-writer / co-oracle）
+        #   prompt       覆盖 brief / 正文；留空沿用内置
+        #   description  覆盖职责描述（进技能目录与团队 persona 成员清单）；留空沿用内置
+        #   tier         覆盖档位 ro|ro-net|rw|rw-shell|cordis；留空沿用内置
+        #   tools        覆盖工具集（工具插件 id 数组）；留空沿用档位推导
+        # 优先级（同名时）：customRoles > roleOverrides > 内置默认。
+        # name 不在内置角色表 → 忽略并打印 [cohub/role-override] skip unknown name=<x>，不报错。
+        # 示例：
+        #   roleOverrides:
+        #     - name: co-fixer
+        #       prompt: 你是修复专家：只改代码并跑测试，报告改动与验证结果。
+        #     - name: co-oracle
+        #       tier: ro
+        #       tools: [tool-fs]
+        roleOverrides: []
         # teams / activeTeam：团队（角色池编组）——把内置角色与 customRoles 按用途分组，
         # **每个团队映射为一个 DSH Agent 预设**：团队切换改为在 DSH 的 Agent 预设里选择，
         # 不再用 activeTeam 切换（该字段已废弃，仅为旧配置保留、不参与派发判定）。

@@ -221,6 +221,76 @@ export interface RoleSpec {
   readonly kind?: RoleKind;
 }
 
+/**
+ * 内置角色的覆盖配置（Config.roleOverrides 的元素）。
+ *
+ * 与 {@link CustomRoleConfig} 的分工：customRoles 是「新增角色」（也允许同名覆盖），roleOverrides
+ * 只做**内置 18 个角色的字段级覆盖**——没写的字段一律沿用内置，用户可以只改一句 prompt 而不必
+ * 把整个角色重抄一遍。
+ *
+ * 优先级（同名时）：customRoles > roleOverrides > 内置默认。
+ * name 不在内置角色表 → 忽略并打印 `[cohub/role-override] skip unknown name=<x>`，不报错
+ * （热改配置时「先写覆盖、后升级插件」是常见顺序，硬失败会让整份配置不可用）。
+ */
+export interface RoleOverride {
+  /** 要覆盖的内置角色名（精确匹配，两侧空白忽略） */
+  readonly name: string;
+  /** 覆盖 brief / 正文；空白 = 沿用内置 */
+  readonly prompt?: string;
+  /** 覆盖职责描述；空白 = 沿用内置 */
+  readonly description?: string;
+  /** 覆盖档位；缺省 / 脏值 = 沿用内置 */
+  readonly tier?: Tier;
+  /** 覆盖工具集；空数组 = 沿用档位推导 */
+  readonly tools?: readonly string[];
+}
+
+/** 取 override 里「确实提供」的文本（trim 后非空才算提供；空串 = 沿用内置语义） */
+function providedText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * 把一条 override 应用到内置技能上（纯函数，不改入参）。
+ *
+ * - prompt → **同时**写进 `brief` 与正文 `content`：主代理看 brief、子代理收 content，
+ *   只改一个会出现「目录里写着新职责、子代理收到旧指令」的错配；
+ * - description → 覆盖职责描述（进技能目录 / 团队 persona 成员清单）；
+ * - tier / tools 不在 CoHubSkill 上，由 {@link resolveTier} 与快照条目（ResolvedRole.tools）携带。
+ *
+ * @param builtinSkill - 内置技能（COHUB_SKILLS 的元素）
+ * @param override - 命中的覆盖配置
+ * @returns 覆盖后的新技能；override 未提供文本时**原样返回入参**（调用方可据此判等）
+ */
+export function applyRoleOverride(builtinSkill: CoHubSkill, override: RoleOverride): CoHubSkill {
+  const prompt = providedText(override?.prompt);
+  const description = providedText(override?.description);
+  if (prompt.length === 0 && description.length === 0) return builtinSkill;
+  const next: CoHubSkill = { ...builtinSkill };
+  if (prompt.length > 0) {
+    next.brief = prompt;
+    next.content = prompt;
+  }
+  if (description.length > 0) next.description = description;
+  return next;
+}
+
+/**
+ * 按名精确匹配一条 override（两侧空白忽略）。
+ *
+ * @param roleName - 角色名
+ * @param roleOverrides - 覆盖表（可缺省）
+ * @returns 命中的 override；未命中 / 空名 → undefined
+ */
+export function findRoleOverride(
+  roleName: string | undefined,
+  roleOverrides?: readonly RoleOverride[],
+): RoleOverride | undefined {
+  const key = (roleName ?? "").trim();
+  if (key.length === 0) return undefined;
+  return roleOverrides?.find((item) => (item?.name ?? "").trim() === key);
+}
+
 /** 运行时判定一个值是否是合法档位（自定义角色来自用户配置，可能写出脏值） */
 export function isTier(value: unknown): value is Tier {
   return typeof value === "string" && (ALL_TIERS as readonly string[]).includes(value);
@@ -229,24 +299,30 @@ export function isTier(value: unknown): value is Tier {
 /**
  * 解析角色应走的档位。
  *
- * 优先级：自定义角色自身 tier > 内置表 > null。
+ * 优先级：自定义角色自身 tier > roleOverrides 的 tier > 内置表 > null。
  * 返回 null 表示「不知道该给什么档位」（未知角色名 / 空名 / 自定义角色 tier 非法且非内置），
  * 由调用方决定报错还是兜底——本函数不猜、不静默降级。
  *
  * @param roleName - 角色名（如 co-fixer）；undefined / 空串 / 纯空白一律视为未知。
- * @param customRoles - 自定义角色表（可选）；同名时其 tier 覆盖内置。
+ * @param customRoles - 自定义角色表（可选）；同名时其 tier 覆盖内置与 override。
+ * @param roleOverrides - 内置角色覆盖表（可选）；同名时其 tier 覆盖内置、但让位于 customRoles。
  * @returns 档位；null 表示未知。
  */
 export function resolveTier(
   roleName: string | undefined,
   customRoles?: readonly RoleSpec[],
+  roleOverrides?: readonly RoleOverride[],
 ): Tier | null {
   const key = (roleName ?? "").trim();
   if (key.length === 0) return null;
 
   const custom = customRoles?.find((role) => (role?.name ?? "").trim() === key);
-  // 脏 tier（拼错 / 老配置）不拦截整个解析：忽略它继续查内置表，仍未知才返回 null。
+  // 脏 tier（拼错 / 老配置）不拦截整个解析：忽略它继续往下查，仍未知才返回 null。
   if (custom && isTier(custom.tier)) return custom.tier;
+
+  // 第 2 档：内置角色的显式覆盖（customRoles 同名且给了合法 tier 时已在上面返回）。
+  const override = findRoleOverride(key, roleOverrides);
+  if (override !== undefined && isTier(override.tier)) return override.tier;
 
   const builtin = BUILTIN_ROLE_TIERS[key];
   return builtin ?? null;
@@ -278,12 +354,18 @@ export function isRoleKind(value: unknown): value is RoleKind {
 export function resolveRoleKind(
   roleName: string | undefined,
   customRoles?: readonly RoleSpec[],
+  roleOverrides?: readonly RoleOverride[],
 ): RoleKind {
   const key = (roleName ?? "").trim();
   if (key.length === 0) return "member";
 
   const custom = customRoles?.find((role) => (role?.name ?? "").trim() === key);
   if (custom && isRoleKind(custom.kind)) return custom.kind;
+
+  // roleOverrides **不可覆盖 kind**：队长 / 队员是角色身份，不该被「只改提示词的配置」顺手改掉，
+  // 命中 override 的角色名仍按内置表判定。该参数存在的意义是让调用方把同一份覆盖表传给全部
+  // 解析函数（不必按函数维护两套入参），不改变判定结果。
+  if (findRoleOverride(key, roleOverrides) !== undefined) return BUILTIN_ROLE_KINDS[key] ?? "member";
 
   return BUILTIN_ROLE_KINDS[key] ?? "member";
 }
@@ -326,6 +408,11 @@ export interface ResolvedRole {
   readonly tier: Tier | null;
   /** true = 内置角色（提示词取 skill.brief）；false = 自定义角色（提示词取其 prompt） */
   readonly builtin: boolean;
+  /**
+   * Config.roleOverrides 显式给出的工具集；undefined / 空 = 沿用档位推导（TIER_TOOLS[tier]）。
+   * 只在内置角色命中 override 且 tools 非空时出现——派发层据此优先于档位推导。
+   */
+  readonly tools?: readonly string[];
 }
 
 /** 技能查找结果：命中 / 不存在 / 存在但被禁用（错误文案必须能区分后两者） */
@@ -337,6 +424,8 @@ export type SkillLookup =
 export interface SkillSnapshotConfig {
   /** 用户自定义角色表 */
   readonly customRoles?: readonly CustomRoleConfig[];
+  /** 内置角色的字段级覆盖（Config.roleOverrides）；缺省 = 全部沿用内置 */
+  readonly roleOverrides?: readonly RoleOverride[];
   /** 被禁用的角色名（配置层渠道；缺省 = 无禁用） */
   readonly disabledSkills?: readonly string[];
 }
@@ -753,11 +842,31 @@ export const CUSTOM_ROLE_SOURCE = "dsh-cohub:customRole";
  * @returns 不可变快照（每次调用新建；配置热改后重新构造即可生效）
  */
 export function resolveSkillSnapshot(config?: SkillSnapshotConfig): SkillSnapshot {
-  const roles: ResolvedRole[] = COHUB_SKILLS.map((skill) => ({
-    skill,
-    tier: BUILTIN_ROLE_TIERS[skill.name] ?? null,
-    builtin: true,
-  }));
+  const overrides = config?.roleOverrides ?? [];
+  // ① 内置角色：先按 name 精确匹配应用 override（prompt / description → skill；tier / tools → 条目），
+  //    未命中的角色**逐字沿用内置**（skill 与 tier 都不新建对象，行为与改动前完全一致）。
+  const roles: ResolvedRole[] = COHUB_SKILLS.map((skill) => {
+    const override = findRoleOverride(skill.name, overrides);
+    if (override === undefined) {
+      return { skill, tier: BUILTIN_ROLE_TIERS[skill.name] ?? null, builtin: true };
+    }
+    const tier = isTier(override.tier) ? override.tier : BUILTIN_ROLE_TIERS[skill.name] ?? null;
+    const tools = (override.tools ?? [])
+      .map((tool) => (typeof tool === "string" ? tool.trim() : ""))
+      .filter((tool) => tool.length > 0);
+    const overridden = applyRoleOverride(skill, override);
+    return tools.length > 0
+      ? { skill: overridden, tier, builtin: true, tools }
+      : { skill: overridden, tier, builtin: true };
+  });
+  // ② override 里 name 不在内置角色表 → 忽略 + 留痕（不报错，见 RoleOverride 注释）。
+  //    用 console.log 而非 logger：roles.ts 是纯模块、不持有 cordis 上下文（与团队 preset 的观测日志同策略）。
+  const builtinNames = new Set<string>(COHUB_SKILLS.map((skill) => skill.name));
+  for (const raw of overrides) {
+    const name = (raw?.name ?? "").trim();
+    if (name.length === 0 || builtinNames.has(name)) continue;
+    console.log('[cohub/role-override] skip unknown name=' + name);
+  }
   const position = new Map<string, number>(roles.map((role, index) => [role.skill.name, index]));
 
   for (const raw of config?.customRoles ?? []) {
@@ -767,7 +876,8 @@ export function resolveSkillSnapshot(config?: SkillSnapshotConfig): SkillSnapsho
     const description = typeof raw.description === "string" && raw.description.trim().length > 0
       ? raw.description
       : "用户自定义角色 " + name;
-    const tier = isTier(raw.tier) ? raw.tier : BUILTIN_ROLE_TIERS[name] ?? null;
+    // 优先级：customRoles 自身的 tier > 同名 override 的 tier > 内置表（resolveTier 即此顺序）。
+    const tier = isTier(raw.tier) ? raw.tier : resolveTier(name, undefined, overrides);
     const at = position.get(name);
     if (at === undefined) {
       position.set(name, roles.length);

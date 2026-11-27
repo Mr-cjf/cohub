@@ -19,7 +19,7 @@
 
 import { BUILTIN_TEAMS } from "./builtin-teams.ts";
 import { resolveSkillSnapshot, resolveTeamLead } from "./roles.ts";
-import type { RoleSpec } from "./roles.ts";
+import type { RoleOverride, RoleSpec } from "./roles.ts";
 import type { CohubPresetDef } from "./preset-runtime";
 
 /** 最小日志接口（cordis logger 与测试 mock 都能满足） */
@@ -64,6 +64,11 @@ export interface TeamPresetConfig {
   readonly teams?: readonly TeamPresetSource[] | { get(): readonly TeamPresetSource[] };
   /** Config.customRoles（用于取自定义队长的 persona 文本） */
   readonly customRoles?: readonly TeamPresetCustomRole[] | { get(): readonly TeamPresetCustomRole[] };
+  /**
+   * Config.roleOverrides（内置角色的字段级覆盖）：必须一起传进来，否则 preset persona 里的
+   * 「队长职责 / 成员职责」与运行时快照各说各话——override 改了 description，preset 仍是旧文案。
+   */
+  readonly roleOverrides?: readonly RoleOverride[] | { get(): readonly RoleOverride[] };
 }
 
 /** 同步结果（供日志与测试断言） */
@@ -143,8 +148,10 @@ const EMPTY_DUTY = "（未填写职责）";
  * 查不到的成员（配置残留 / 未注册角色）跳过并打印
  * `[cohub/team-preset] persona skip unknown member=<name>`，不抛错——脏配置不该阻断注册。
  */
-export function buildTeamPersona(team: TeamPresetSource, members: readonly string[], lead: string, customRoles: readonly TeamPresetCustomRole[]): string {
-  const snapshot = resolveSkillSnapshot({ customRoles });
+export function buildTeamPersona(team: TeamPresetSource, members: readonly string[], lead: string, customRoles: readonly TeamPresetCustomRole[], roleOverrides: readonly RoleOverride[] = []): string {
+  // description / brief 一律取**合并后**的同一份快照（内置 + roleOverrides + customRoles），与运行时
+  // 派发层同源：否则 override 改了成员职责或队长 brief，preset persona 里仍是内置文案。
+  const snapshot = resolveSkillSnapshot({ customRoles, roleOverrides });
   const lookup = snapshot.resolve(lead);
   const brief = (lookup.ok ? (lookup.role.skill.brief ?? "") : "").trim();
 
@@ -211,7 +218,7 @@ export function buildTeamPresetPlugins(persona: string): unknown[] {
 }
 
 /** 单个团队 → 预设定义（内置团队与用户团队共用同一组装逻辑，避免两套分支漂移） */
-function buildTeamDef(team: TeamPresetSource, order: number, customRoles: readonly TeamPresetCustomRole[]): CohubPresetDef {
+function buildTeamDef(team: TeamPresetSource, order: number, customRoles: readonly TeamPresetCustomRole[], roleOverrides: readonly RoleOverride[] = []): CohubPresetDef {
   const teamId = typeof team.id === "string" ? team.id.trim() : "";
   const members = cleanMembers(team);
   // 队长判定与运行时同源（roles.ts 的 resolveTeamLead）：lead 指向队员类型时同样回退
@@ -224,7 +231,7 @@ function buildTeamDef(team: TeamPresetSource, order: number, customRoles: readon
     name,
     description,
     order,
-    plugins: buildTeamPresetPlugins(buildTeamPersona(team, members, lead, customRoles)),
+    plugins: buildTeamPresetPlugins(buildTeamPersona(team, members, lead, customRoles, roleOverrides)),
   };
 }
 
@@ -244,6 +251,7 @@ function buildTeamDef(team: TeamPresetSource, order: number, customRoles: readon
 export function buildTeamPresetDefs(config?: TeamPresetConfig, logger?: Logger): CohubPresetDef[] {
   const teams = readList<TeamPresetSource>(config?.teams as never);
   const customRoles = readList<TeamPresetCustomRole>(config?.customRoles as never);
+  const roleOverrides = readList<RoleOverride>(config?.roleOverrides as never);
 
   // ① 用户团队（先算出 id 集合，供 ② 判冲突）
   const userDefs: CohubPresetDef[] = [];
@@ -260,7 +268,7 @@ export function buildTeamPresetDefs(config?: TeamPresetConfig, logger?: Logger):
       continue;
     }
     used.add(id);
-    userDefs.push(buildTeamDef(team, TEAM_PRESET_ORDER_BASE + index, customRoles));
+    userDefs.push(buildTeamDef(team, TEAM_PRESET_ORDER_BASE + index, customRoles, roleOverrides));
   }
 
   // ② 内置团队（用户优先：id 已被用户占用 → 跳过该条内置团队）
@@ -271,7 +279,7 @@ export function buildTeamPresetDefs(config?: TeamPresetConfig, logger?: Logger):
       logger?.info?.(`cohub: 团队 ${team.id} 已被用户配置的同名团队覆盖（预设 id ${id}），跳过内置版本`);
       continue;
     }
-    builtinDefs.push(buildTeamDef(team, BUILTIN_TEAM_ORDER_BASE + index, customRoles));
+    builtinDefs.push(buildTeamDef(team, BUILTIN_TEAM_ORDER_BASE + index, customRoles, roleOverrides));
   }
 
   return [...builtinDefs, ...userDefs];
