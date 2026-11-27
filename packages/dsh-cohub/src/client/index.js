@@ -237,6 +237,22 @@ window.__ModuleLoader__.load({
       roleDetailBuiltinHint: "内置，只读",
       roleDetailCustomHint: "自定义，只读",
       roleDetailReadOnly: "仅展示：编辑提示词请用角色卡片里的「提示词」字段。",
+      // ── 内置角色覆盖（Config.roleOverrides）────────────────────────
+      roleBuiltinBadge: "内置",
+      roleBuiltinOverridden: "已覆盖",
+      roleBuiltinEdit: "编辑",
+      roleOverrideTitle: "覆盖内置定义",
+      roleOverrideNameNote: "内置角色名不可修改。",
+      roleOverrideKindNote: "角色类型是身份，不可覆盖。",
+      roleOverridePromptNote: "改动将覆盖内置提示词，可点「恢复默认」还原。",
+      roleOverrideDiffNote: "只有与内置默认不同的字段会被写进 roleOverrides。",
+      roleOverrideReset: "恢复默认",
+      roleOverrideSave: "保存",
+      roleOverrideCancel: "取消",
+      roleOverrideEmptyPrompt: "提示词留空视为恢复默认，不会写入覆盖。",
+      roleOverrideTierInvalid: "档位不合法：请选择一个档位。",
+      roleOverrideSaved: "覆盖已保存。",
+      roleOverrideFailed: "覆盖保存失败，请重试。",
       // ── 模板新建 / 绑定工具 / 运行模型 ──────────────────────────────
       roleTemplateSection: "选择一个模板开始",
       roleTemplateHint: "选中模板会自动填好名称（加 -copy 后缀防重名）、职责、提示词、档位与绑定工具。",
@@ -437,6 +453,22 @@ window.__ModuleLoader__.load({
       roleDetailBuiltinHint: "built-in, read-only",
       roleDetailCustomHint: "custom, read-only",
       roleDetailReadOnly: "Read-only view — edit the prompt in the role card's \"Prompt\" field.",
+      // ── Built-in overrides (Config.roleOverrides) ──────────────────
+      roleBuiltinBadge: "Built-in",
+      roleBuiltinOverridden: "Overridden",
+      roleBuiltinEdit: "Edit",
+      roleOverrideTitle: "Override the built-in definition",
+      roleOverrideNameNote: "A built-in role name cannot be changed.",
+      roleOverrideKindNote: "The role type is its identity and cannot be overridden.",
+      roleOverridePromptNote: "Edits replace the built-in prompt; use \"Restore default\" to undo.",
+      roleOverrideDiffNote: "Only fields that differ from the built-in default are written to roleOverrides.",
+      roleOverrideReset: "Restore default",
+      roleOverrideSave: "Save",
+      roleOverrideCancel: "Cancel",
+      roleOverrideEmptyPrompt: "An empty prompt counts as restoring the default and is not written.",
+      roleOverrideTierInvalid: "Invalid tier — pick one of the listed tiers.",
+      roleOverrideSaved: "Override saved.",
+      roleOverrideFailed: "Saving the override failed. Please retry.",
       roleTemplateSection: "Start from a template",
       roleTemplateHint: "Picking a template fills in the name (-copy suffix avoids collisions), description, prompt, tier and bound tools.",
       roleTemplateBlank: "Blank role",
@@ -721,6 +753,183 @@ window.__ModuleLoader__.load({
         if (!role || typeof role !== "object") continue;
         out.push(copyRole(role));
       }
+      return out;
+    }
+
+    /* ── 纯数据层：Config.roleOverrides（内置角色的字段级覆盖） ─────── */
+
+    /**
+     * 允许被 override 覆盖的档位：五个可委派档位 + 内置主代理档位 "main"
+     * （co-orchestrator 在目录里就是 main，覆盖它不能把档位改成未知值）。
+     */
+    var OVERRIDE_TIERS = ROLE_TIERS.concat(["main"]);
+
+    /** 内置角色在 ROLE_CATALOG 里的条目（缺省 / 形状不对返回 null）。 */
+    function builtinRoleOf(name) {
+      var key = typeof name === "string" ? name : "";
+      var roles = ROLE_CATALOG && ROLE_CATALOG.roles ? ROLE_CATALOG.roles : {};
+      if (key === "" || !Object.prototype.hasOwnProperty.call(roles, key)) return null;
+      var entry = roles[key];
+      return entry && typeof entry === "object" ? entry : null;
+    }
+
+    /** 档位 → 工具 id 列表（与「角色库」里 customRoles[].tools 同一口径）。 */
+    function toolIdsOfTier(tier) {
+      var list = tierToolsOf(tier);
+      var out = [];
+      for (var i = 0; i < list.length; i += 1) {
+        var id = toolIdOfPlugin(list[i].plugin);
+        if (id !== "" && out.indexOf(id) < 0) out.push(id);
+      }
+      return out;
+    }
+
+    /** 工具 id 列表 → 详情面板用的只读工具项（与 tierToolsOf 同形状）。 */
+    function toolsFromIds(ids) {
+      var out = [];
+      var list = Array.isArray(ids) ? ids : [];
+      for (var i = 0; i < list.length; i += 1) {
+        var item = toolItemOf(list[i]);
+        if (item === null) continue;
+        out.push({
+          plugin: item.plugin,
+          pluginShort: pluginShortName(item.plugin),
+          label: "",
+          note: ""
+        });
+      }
+      return out;
+    }
+
+    /** 工具 id 列表去重成字符串数组（顺序保留）。 */
+    function normalizeToolIds(list) {
+      var out = [];
+      var source = Array.isArray(list) ? list : [];
+      for (var i = 0; i < source.length; i += 1) {
+        if (typeof source[i] !== "string" || source[i] === "") continue;
+        if (out.indexOf(source[i]) < 0) out.push(source[i]);
+      }
+      return out;
+    }
+
+    /** 两组工具 id 是否等价（顺序无关）。 */
+    function sameToolIds(left, right) {
+      var a = normalizeToolIds(left).slice().sort();
+      var b = normalizeToolIds(right).slice().sort();
+      if (a.length !== b.length) return false;
+      for (var i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+      return true;
+    }
+
+    /** 单条 override 归一：只保留 name / description / prompt / tier / tools。 */
+    function copyOverride(item) {
+      var out = { name: "" };
+      if (!item || typeof item !== "object") return out;
+      out.name = typeof item.name === "string" ? item.name.trim() : "";
+      if (typeof item.description === "string") out.description = item.description;
+      if (typeof item.prompt === "string") out.prompt = item.prompt;
+      if (typeof item.tier === "string" && OVERRIDE_TIERS.indexOf(item.tier) >= 0) out.tier = item.tier;
+      var tools = normalizeToolIds(item.tools);
+      if (tools.length > 0) out.tools = tools;
+      return out;
+    }
+
+    /** Config.roleOverrides → 归一数组（空名 / 非对象条目跳过，同名校后者覆盖前者）。 */
+    function rowsFromOverrides(list) {
+      var out = [];
+      if (!Array.isArray(list)) return out;
+      for (var i = 0; i < list.length; i += 1) {
+        var row = copyOverride(list[i]);
+        if (row.name === "") continue;
+        var replaced = false;
+        for (var j = 0; j < out.length; j += 1) {
+          if (out[j].name !== row.name) continue;
+          out[j] = row;
+          replaced = true;
+          break;
+        }
+        if (!replaced) out.push(row);
+      }
+      return out;
+    }
+
+    /** 按角色名取 override（找不到返回 null）。 */
+    function findOverride(list, name) {
+      var key = typeof name === "string" ? name.trim() : "";
+      if (key === "") return null;
+      var rows = Array.isArray(list) ? list : [];
+      for (var i = 0; i < rows.length; i += 1) {
+        if (rows[i] && rows[i].name === key) return rows[i];
+      }
+      return null;
+    }
+
+    /**
+     * 内置默认 + 编辑草稿 → **只含差异字段**的 override。
+     * 规则（与 src/roles.ts 的合并语义对齐）：
+     *   - description / prompt：与内置默认（含首尾空白）不同才写；prompt 留空 = 恢复默认，不写；
+     *   - tier：必须是合法档位且与内置不同才写；
+     *   - tools：留空 = 沿用档位推导，不写；否则与「内置档位推导出的工具集」不同才写。
+     * 没有任何差异 → 返回 null（调用方据此从数组里删掉该条）。
+     * @param name - 内置角色名
+     * @param draft - { description, prompt, tier, tools }
+     */
+    function diffOverrideOf(name, draft) {
+      var base = builtinRoleOf(name);
+      if (base === null || !draft || typeof draft !== "object") return null;
+      var source = draft;
+      var out = { name: typeof name === "string" ? name.trim() : "" };
+      var changed = false;
+      var baseDescription = typeof base.description === "string" ? base.description : "";
+      var draftDescription = typeof source.description === "string" ? source.description : "";
+      if (draftDescription.trim() !== baseDescription.trim()) {
+        out.description = draftDescription;
+        changed = true;
+      }
+      var basePrompt = typeof base.brief === "string" ? base.brief : "";
+      var draftPrompt = typeof source.prompt === "string" ? source.prompt : "";
+      if (draftPrompt.trim() !== "" && draftPrompt.trim() !== basePrompt.trim()) {
+        out.prompt = draftPrompt;
+        changed = true;
+      }
+      var baseTier = typeof base.tier === "string" ? base.tier : "";
+      var draftTier = typeof source.tier === "string" && OVERRIDE_TIERS.indexOf(source.tier) >= 0 ? source.tier : "";
+      if (draftTier !== "" && draftTier !== baseTier) {
+        out.tier = draftTier;
+        changed = true;
+      }
+      var draftTools = normalizeToolIds(source.tools);
+      if (draftTools.length > 0 && !sameToolIds(draftTools, toolIdsOfTier(baseTier))) {
+        out.tools = draftTools;
+        changed = true;
+      }
+      return changed ? out : null;
+    }
+
+    /**
+     * 把一条编辑草稿写回 override 表：差异为空 → 删除该条；否则替换 / 追加。
+     * @param overrides - 现有 override 数组（任意形状，逐项归一）
+     * @param draft - { name, description, prompt, tier, tools }
+     * @returns 待写入 Config.roleOverrides 的新数组
+     */
+    function applyOverrideDraft(overrides, draft) {
+      var list = rowsFromOverrides(overrides);
+      var name = draft && typeof draft.name === "string" ? draft.name.trim() : "";
+      var patch = name !== "" ? diffOverrideOf(name, draft) : null;
+      var out = [];
+      var placed = false;
+      for (var i = 0; i < list.length; i += 1) {
+        if (list[i].name !== name) {
+          out.push(list[i]);
+          continue;
+        }
+        // 同名的重复条目一并丢弃（手改坏的配置在这里自愈）。
+        if (patch !== null && !placed) {
+          out.push(patch);
+          placed = true;
+        }
+      }
+      if (patch !== null && !placed) out.push(patch);
       return out;
     }
 
@@ -1035,21 +1244,22 @@ window.__ModuleLoader__.load({
      *
      * @param team - 团队编辑行（members / name / lead / id）
      * @param customRows - 角色库当前编辑行（自定义角色的 kind / prompt / description）
+     * @param overrideRows - Config.roleOverrides（内置角色覆盖后，预览必须显示覆盖后的职责）
      * @returns { text, count }（count = 参与 persona 的成员数，即「共 N 人」）
      */
-    function leadPersonaPreview(team, customRows) {
+    function leadPersonaPreview(team, customRows, overrideRows) {
       var members = team && Array.isArray(team.members) ? team.members : [];
       var teamName = team && typeof team.name === "string" ? team.name.trim() : "";
       var teamId = teamSlugOf(team);
       var lead = effectiveTeamLead(team, customRows);
-      var leadDetail = roleDetailOf(lead, customRows);
+      var leadDetail = roleDetailOf(lead, customRows, overrideRows);
       var brief = typeof leadDetail.prompt === "string" ? leadDetail.prompt.trim() : "";
       var head = "你是 cohub 团队「" + teamName + "」的主代理（团队 id " + teamId +
         "；队长 " + (lead !== "" ? lead : "（未指定）") + "）。";
       var lines = [];
       for (var i = 0; i < members.length; i += 1) {
         var member = members[i];
-        var detail = roleDetailOf(member, customRows);
+        var detail = roleDetailOf(member, customRows, overrideRows);
         if (detail.promptSource === "none") continue;
         var duty = typeof detail.description === "string" ? detail.description.trim() : "";
         lines.push("- " + member + "：" + (duty !== "" ? duty : EMPTY_DUTY) + (member === lead ? "（你）" : ""));
@@ -1324,8 +1534,9 @@ window.__ModuleLoader__.load({
      *   两者都没有 → tier/prompt 为空串、promptSource="none"，由 UI 显示未知角色文案。
      * @param name - 角色名（内置技能名或自定义角色名）。
      * @param customRows - 「角色库」当前编辑行（未保存的草稿也能查到）。
+     * @param overrideRows - Config.roleOverrides（内置角色的字段级覆盖；缺省 = 全用内置默认）。
      */
-    function roleDetailOf(name, customRows) {
+    function roleDetailOf(name, customRows, overrideRows) {
       var roleName = typeof name === "string" ? name : "";
       var custom = null;
       var list = Array.isArray(customRows) ? customRows : [];
@@ -1357,7 +1568,19 @@ window.__ModuleLoader__.load({
         description = typeof custom.description === "string" ? custom.description : "";
         source = "custom";
       }
-      var tools = tierToolsOf(tier);
+      // 内置角色的字段级覆盖（Config.roleOverrides）：只影响展示，不夺权给自定义角色分支。
+      var override = builtin ? findOverride(overrideRows, roleName) : null;
+      var overridden = false;
+      if (override !== null) {
+        if (typeof override.tier === "string" && OVERRIDE_TIERS.indexOf(override.tier) >= 0) tier = override.tier;
+        if (typeof override.prompt === "string" && override.prompt.trim() !== "") prompt = override.prompt;
+        if (typeof override.description === "string") description = override.description;
+        overridden = true;
+      }
+      var overrideTools = override && Array.isArray(override.tools) ? override.tools : null;
+      var tools = overrideTools !== null && overrideTools.length > 0
+        ? toolsFromIds(overrideTools)
+        : tierToolsOf(tier);
       return {
         name: roleName,
         tier: tier,
@@ -1367,7 +1590,9 @@ window.__ModuleLoader__.load({
         prompt: prompt,
         promptSource: source,
         content: content,
-        description: description
+        description: description,
+        overridden: overridden,
+        overrideTools: overrideTools
       };
     }
 
@@ -1404,11 +1629,11 @@ window.__ModuleLoader__.load({
      * 团队成员的档位分布：[{ tier, known, count }]，按 ROLE_TIERS 顺序，未知档位收尾。
      * 成员名查不到角色时归入 tier="unknown"，不会因为配置里多写一个名字而崩。
      */
-    function tierDistributionOf(members, customRows) {
+    function tierDistributionOf(members, customRows, overrideRows) {
       var counts = {};
       var list = Array.isArray(members) ? members : [];
       for (var i = 0; i < list.length; i += 1) {
-        var detail = roleDetailOf(list[i], customRows);
+        var detail = roleDetailOf(list[i], customRows, overrideRows);
         var key = roleTierKey(detail) === "main" ? "main" : detail.tierKnown ? detail.tier : "unknown";
         counts[key] = Object.prototype.hasOwnProperty.call(counts, key) ? counts[key] + 1 : 1;
       }
@@ -1526,6 +1751,7 @@ window.__ModuleLoader__.load({
       var lastRoles = [];
       var lastTeams = [];
       var lastActiveTeam = "";
+      var lastOverrides = [];
       var published = null;
 
       // 设置页 tab 选中态：和草稿一样只活在 controller 闭包里，靠既有的 store 通知通道
@@ -1551,6 +1777,11 @@ window.__ModuleLoader__.load({
       // 只存在于本次编辑会话（Config.customRoles 里没有该字段，保存时不写）。
       var roleTemplates = [];
       var rolePicker = -1;            // 当前展开模板选择器的行下标，-1 = 全收起
+      // 内置角色的编辑草稿：{ name, description, prompt, tier, tools, revision }。
+      // 只活在本次编辑会话（Config.roleOverrides 里没有草稿标记，保存时只写差异）。
+      var builtinEdit = null;
+      var builtinEditNotice = "";     // "" | "saved" | "failed" | "tierInvalid"
+      var builtinEditNoticeName = ""; // notice 归属的角色名（面板收起后仍能显示一次）
 
       /** 模板标记数组对齐到角色行数（新增/删除行后补齐或截断）。 */
       function syncRoleTemplates(size) {
@@ -1689,6 +1920,7 @@ window.__ModuleLoader__.load({
         lastRows = displayRows(rowsFromSkills(snapshot.value && snapshot.value.skills));
         lastRoles = rowsFromCustomRoles(snapshot.value && snapshot.value.customRoles);
         lastTeams = rowsFromTeams(snapshot.value && snapshot.value.teams);
+        lastOverrides = rowsFromOverrides(snapshot.value && snapshot.value.roleOverrides);
         lastActiveTeam = snapshot.value && typeof snapshot.value.activeTeam === "string" ? snapshot.value.activeTeam : "";
       }
 
@@ -1705,6 +1937,11 @@ window.__ModuleLoader__.load({
       function currentTeams() {
         refreshFromValue();
         return lastTeams;
+      }
+
+      function currentOverrides() {
+        refreshFromValue();
+        return lastOverrides;
       }
 
       function currentActiveTeam() {
@@ -1735,6 +1972,10 @@ window.__ModuleLoader__.load({
           roleErrors: roleErrors,
           roleTemplates: roleTemplates,
           rolePicker: rolePicker,
+          overrides: currentOverrides(),
+          builtinEdit: builtinEdit,
+          builtinEditNotice: builtinEditNotice,
+          builtinEditNoticeName: builtinEditNoticeName,
           teams: teamsDraft !== null ? teamsDraft.rows : currentTeams(),
           activeTeam: currentActiveTeam(),
           teamsDirty: teamsDraft !== null,
@@ -1773,6 +2014,10 @@ window.__ModuleLoader__.load({
           && left.roleErrors === right.roleErrors
           && left.roleTemplates === right.roleTemplates
           && left.rolePicker === right.rolePicker
+          && left.overrides === right.overrides
+          && left.builtinEdit === right.builtinEdit
+          && left.builtinEditNotice === right.builtinEditNotice
+          && left.builtinEditNoticeName === right.builtinEditNoticeName
           && left.teams === right.teams
           && left.activeTeam === right.activeTeam
           && left.teamsDirty === right.teamsDirty
@@ -2378,6 +2623,182 @@ window.__ModuleLoader__.load({
         publish();
       }
 
+      /* ── 内置角色：Config.roleOverrides（提示词 / 档位 / 工具的字段级覆盖） ── */
+
+      /** 记一次一次性提示（绑定角色名，面板收起后卡片上仍能看到结果）。 */
+      function setBuiltinNotice(name, kind) {
+        builtinEditNoticeName = typeof name === "string" ? name : "";
+        builtinEditNotice = typeof kind === "string" ? kind : "";
+      }
+
+      /** 打开内置角色编辑面板：字段初值 = 内置默认 + 现有 override 的合并结果。 */
+      function beginBuiltinEdit(name) {
+        var key = typeof name === "string" ? name.trim() : "";
+        var base = key !== "" ? builtinRoleOf(key) : null;
+        if (base === null) return;
+        var override = findOverride(currentOverrides(), key);
+        var tier = override && typeof override.tier === "string" && OVERRIDE_TIERS.indexOf(override.tier) >= 0
+          ? override.tier
+          : (typeof base.tier === "string" ? base.tier : "");
+        var overrideTools = override && Array.isArray(override.tools) ? normalizeToolIds(override.tools) : [];
+        builtinEdit = {
+          name: key,
+          description: override && typeof override.description === "string"
+            ? override.description
+            : (typeof base.description === "string" ? base.description : ""),
+          prompt: override && typeof override.prompt === "string" && override.prompt.trim() !== ""
+            ? override.prompt
+            : (typeof base.brief === "string" ? base.brief : ""),
+          tier: tier,
+          tools: overrideTools.length > 0 ? overrideTools : toolIdsOfTier(tier),
+          revision: readScope().revision
+        };
+        setBuiltinNotice(key, "");
+        expandedRole = "";
+        publish();
+      }
+
+      /** 「编辑」按钮：同一角色再点一次收起；换角色直接重开（草稿不跨角色保留）。 */
+      function toggleBuiltinEdit(name) {
+        var key = typeof name === "string" ? name : "";
+        if (builtinEdit !== null && builtinEdit.name === key) {
+          builtinEdit = null;
+          setBuiltinNotice(key, "");
+          publish();
+          return;
+        }
+        beginBuiltinEdit(key);
+      }
+
+      function cancelBuiltinEdit() {
+        builtinEdit = null;
+        setBuiltinNotice("", "");
+        publish();
+      }
+
+      /** 编辑面板里的单字段写入（只允许 roleOverrides 覆盖的四个字段）。 */
+      function editBuiltinField(field, value) {
+        if (builtinEdit === null) return;
+        if (field !== "description" && field !== "prompt" && field !== "tier" && field !== "tools") return;
+        var next = {
+          name: builtinEdit.name,
+          description: builtinEdit.description,
+          prompt: builtinEdit.prompt,
+          tier: builtinEdit.tier,
+          tools: builtinEdit.tools,
+          revision: builtinEdit.revision
+        };
+        if (field === "tools") next.tools = normalizeToolIds(value);
+        else next[field] = typeof value === "string" ? value : builtinEdit[field];
+        builtinEdit = next;
+        setBuiltinNotice(next.name, "");
+        publish();
+      }
+
+      /** 档位快捷组合：档位与工具集一起切到该档位（与角色库的「点一下批量勾选」同义）。 */
+      function applyBuiltinTier(tier) {
+        if (builtinEdit === null) return;
+        var key = typeof tier === "string" && OVERRIDE_TIERS.indexOf(tier) >= 0 ? tier : builtinEdit.tier;
+        builtinEdit = {
+          name: builtinEdit.name,
+          description: builtinEdit.description,
+          prompt: builtinEdit.prompt,
+          tier: key,
+          tools: toolIdsOfTier(key),
+          revision: builtinEdit.revision
+        };
+        setBuiltinNotice(builtinEdit.name, "");
+        publish();
+      }
+
+      /** 整表写回 Config.roleOverrides（与 customRoles 同一 mutate 契约 + 同一 revision 冲突判定）。 */
+      function writeOverrides(next, expected) {
+        if (disposed || !scope || typeof scope.mutate !== "function") return Promise.resolve(false);
+        saving = true;
+        publish();
+        var request;
+        try {
+          request = scope.mutate([{ op: "set", path: ["roleOverrides"], value: next }], expected);
+        } catch (error) {
+          saving = false;
+          publish();
+          return Promise.resolve(false);
+        }
+        return Promise.resolve(request).then(function (accepted) {
+          if (disposed) return false;
+          saving = false;
+          if (accepted === true) lastValue = undefined;
+          publish();
+          return accepted === true;
+        }, function () {
+          if (disposed) return false;
+          saving = false;
+          publish();
+          return false;
+        });
+      }
+
+      /** 保存内置角色编辑：只写与内置默认不同的字段；全部回默认 → 删掉该条 override。 */
+      function saveBuiltinEdit() {
+        if (disposed || saving || builtinEdit === null) return Promise.resolve(false);
+        var snapshot = readScope();
+        if (snapshot.status !== "ready" || snapshot.writable !== true || conflicted) return Promise.resolve(false);
+        if (builtinEdit.revision !== undefined && snapshot.revision !== builtinEdit.revision) {
+          conflicted = true;
+          publish();
+          return Promise.resolve(false);
+        }
+        var draft = builtinEdit;
+        if (OVERRIDE_TIERS.indexOf(draft.tier) < 0) {
+          setBuiltinNotice(draft.name, "tierInvalid");
+          publish();
+          return Promise.resolve(false);
+        }
+        var name = draft.name;
+        var next = applyOverrideDraft(currentOverrides(), draft);
+        return writeOverrides(next, draft.revision).then(function (accepted) {
+          if (disposed) return false;
+          if (accepted === true) {
+            builtinEdit = null;
+            setBuiltinNotice(name, "saved");
+          } else {
+            setBuiltinNotice(name, "failed");
+          }
+          publish();
+          return accepted === true;
+        });
+      }
+
+      /** 「恢复默认」：删除该角色的 override（没覆盖过就只收起草稿）。 */
+      function resetBuiltinOverride(name) {
+        if (disposed || saving) return Promise.resolve(false);
+        var key = typeof name === "string" ? name.trim() : "";
+        if (key === "") return Promise.resolve(false);
+        var snapshot = readScope();
+        if (snapshot.status !== "ready" || snapshot.writable !== true || conflicted) return Promise.resolve(false);
+        var list = currentOverrides();
+        var next = [];
+        var removed = false;
+        for (var i = 0; i < list.length; i += 1) {
+          if (list[i].name === key) {
+            removed = true;
+            continue;
+          }
+          next.push(list[i]);
+        }
+        if (builtinEdit !== null && builtinEdit.name === key) builtinEdit = null;
+        if (!removed) {
+          publish();
+          return Promise.resolve(true);
+        }
+        return writeOverrides(next, snapshot.revision).then(function (accepted) {
+          if (disposed) return false;
+          setBuiltinNotice(key, accepted === true ? "saved" : "failed");
+          publish();
+          return accepted === true;
+        });
+      }
+
       /**
        * 改团队字段（name / description / slug）。
        * name 变更时：**新建行**（isNew）重算 id 并自动消歧；**已存团队保留原 id**，
@@ -2750,6 +3171,12 @@ window.__ModuleLoader__.load({
         toggleTeam: toggleTeam,
         toggleTeamPreview: toggleTeamPreview,
         toggleRoleDetail: toggleRoleDetail,
+        toggleBuiltinEdit: toggleBuiltinEdit,
+        editBuiltinField: editBuiltinField,
+        applyBuiltinTier: applyBuiltinTier,
+        saveBuiltinEdit: saveBuiltinEdit,
+        resetBuiltinOverride: resetBuiltinOverride,
+        cancelBuiltinEdit: cancelBuiltinEdit,
         editTeam: editTeam,
         toggleTeamMember: toggleTeamMember,
         setTeamLead: setTeamLead,
@@ -2942,6 +3369,8 @@ window.__ModuleLoader__.load({
       /* ── 自定义团队：增删改 Config.customRoles ─────────────────── */
 
       var roles = state.roles || [];
+      // 内置角色的字段级覆盖（Config.roleOverrides）：展示、预览、详情一律用合并后的口径。
+      var overrides = state.overrides || [];
       var roleErrors = state.roleErrors || [];
 
       function roleErrorOf(index) {
@@ -3141,8 +3570,20 @@ window.__ModuleLoader__.load({
        * 绑定工具：5 组 checkbox（中文名 + 插件短名 + 门控）+ 档位快捷组合按钮 +
        * 「已选 N 个工具」实时计数 + Shell 缺文件读写时的黄色提示。
        */
-      function renderToolPicker(index, role, disabled) {
+      function renderToolPicker(index, role, disabled, handlers) {
         var selected = Array.isArray(role.tools) ? role.tools : [];
+        // 写回入口可替换：角色库行走 props.editRole，内置角色编辑面板走 roleOverrides 草稿。
+        var hooks = handlers && typeof handlers === "object" ? handlers : {};
+        var onSelectTools = typeof hooks.onSelectTools === "function"
+          ? hooks.onSelectTools
+          : function (next) {
+            props.editRole(index, "tools", next);
+          };
+        var onApplyTier = typeof hooks.onApplyTier === "function"
+          ? hooks.onApplyTier
+          : function () {
+            props.applyTierTools(index);
+          };
         var groups = [];
         for (var g = 0; g < TOOL_GROUPS.length; g += 1) {
           var group = TOOL_GROUPS[g];
@@ -3161,7 +3602,7 @@ window.__ModuleLoader__.load({
                     var next = [];
                     for (var s = 0; s < selected.length; s += 1) if (selected[s] !== id) next.push(selected[s]);
                     if (isChecked) next.push(id);
-                    props.editRole(index, "tools", next);
+                    onSelectTools(next);
                   };
                 }(item.id, !checked)
               }),
@@ -3185,9 +3626,11 @@ window.__ModuleLoader__.load({
             className: active ? "cohub-tier-chip cohub-seg-active" : "cohub-tier-chip",
             "aria-pressed": active,
             disabled: disabled,
-            onClick: function () {
-              props.applyTierTools(index);
-            }
+            onClick: function (value) {
+              return function () {
+                onApplyTier(value);
+              };
+            }(tier)
           }, tierLabel(tier)));
         }
         return React.createElement("div", { className: "cohub-detail-block cohub-tool-block" },
@@ -3260,7 +3703,7 @@ window.__ModuleLoader__.load({
        * 角色库卡片、团队成员、团队卡片点开的都是这一份，措辞与降级行为完全一致。
        */
       function renderRoleDetail(name) {
-        var detail = roleDetailOf(name, roles);
+        var detail = roleDetailOf(name, roles, overrides);
         var toolItems = [];
         for (var i = 0; i < detail.tools.length; i += 1) {
           var tool = detail.tools[i];
@@ -3306,10 +3749,137 @@ window.__ModuleLoader__.load({
         );
       }
 
-      /** 内置角色卡片：只读，没有编辑字段，只有「查看详情」与详情面板。 */
+      /**
+       * 内置角色编辑面板：角色名 / 类型只读，描述 / 提示词 / 档位 / 工具写 Config.roleOverrides。
+       * 字段初值已在 beginBuiltinEdit 里合并好（内置默认 + 现有 override）。
+       */
+      function renderBuiltinEditor(name, detail) {
+        var draft = state.builtinEdit;
+        if (draft === null || draft === undefined || draft.name !== name) return null;
+        var tierOptions = [];
+        for (var k = 0; k < ROLE_TIERS.length; k += 1) {
+          tierOptions.push(React.createElement("option", { key: ROLE_TIERS[k], value: ROLE_TIERS[k] }, tierLabel(ROLE_TIERS[k])));
+        }
+        // 内置主代理（co-orchestrator）的档位是 main，不在五个可委派档位里，补一个自身选项。
+        if (ROLE_TIERS.indexOf(draft.tier) < 0 && OVERRIDE_TIERS.indexOf(draft.tier) >= 0) {
+          tierOptions.push(React.createElement("option", { key: draft.tier, value: draft.tier }, roleTierLabel(detail)));
+        }
+        var notice = state.builtinEditNoticeName === name ? state.builtinEditNotice : "";
+        return React.createElement("div", { className: "cohub-role-fields cohub-override-editor" },
+          React.createElement("div", { className: "cohub-field" },
+            React.createElement("label", { className: "cohub-label" }, t("roleName")),
+            React.createElement("input", {
+              className: "cohub-input",
+              type: "text",
+              value: name,
+              readOnly: true,
+              disabled: true,
+              "aria-label": name + " · " + t("roleName")
+            }),
+            React.createElement("p", { className: "cohub-desc" }, t("roleOverrideNameNote"))
+          ),
+          React.createElement("div", { className: "cohub-field" },
+            React.createElement("label", { className: "cohub-label" }, t("roleKind")),
+            React.createElement("input", {
+              className: "cohub-input",
+              type: "text",
+              value: roleKindLabel(roleKindOf(name, roles)),
+              readOnly: true,
+              disabled: true,
+              "aria-label": name + " · " + t("roleKind")
+            }),
+            React.createElement("p", { className: "cohub-desc" }, t("roleOverrideKindNote"))
+          ),
+          React.createElement("div", { className: "cohub-field cohub-field-wide" },
+            React.createElement("label", { className: "cohub-label" }, t("roleDescription")),
+            React.createElement("input", {
+              className: "cohub-input",
+              type: "text",
+              value: draft.description,
+              disabled: locked,
+              "aria-label": name + " · " + t("roleDescription"),
+              onChange: function (event) {
+                props.editBuiltinField("description", event.target.value);
+              }
+            })
+          ),
+          React.createElement("div", { className: "cohub-field cohub-field-wide" },
+            React.createElement("label", { className: "cohub-label" }, t("rolePrompt")),
+            React.createElement("textarea", {
+              className: "cohub-textarea",
+              value: draft.prompt,
+              disabled: locked,
+              rows: 4,
+              "aria-label": name + " · " + t("rolePrompt"),
+              onChange: function (event) {
+                props.editBuiltinField("prompt", event.target.value);
+              }
+            }),
+            React.createElement("p", { className: "cohub-desc" }, t("roleOverridePromptNote")),
+            draft.prompt.trim() === ""
+              ? React.createElement("p", { className: "cohub-desc" }, t("roleOverrideEmptyPrompt"))
+              : null
+          ),
+          React.createElement("div", { className: "cohub-field" },
+            React.createElement("label", { className: "cohub-label" }, t("roleTier")),
+            React.createElement("select", {
+              className: "cohub-select",
+              value: draft.tier,
+              disabled: locked,
+              "aria-label": name + " · " + t("roleTier"),
+              onChange: function (event) {
+                props.editBuiltinField("tier", event.target.value);
+              }
+            }, tierOptions),
+            notice === "tierInvalid"
+              ? React.createElement("p", { className: "cohub-role-error" }, t("roleOverrideTierInvalid"))
+              : null
+          ),
+          renderToolPicker(0, { tier: draft.tier, tools: draft.tools }, locked, {
+            onSelectTools: function (next) {
+              props.editBuiltinField("tools", next);
+            },
+            onApplyTier: function (tier) {
+              props.applyBuiltinTier(tier);
+            }
+          }),
+          React.createElement("p", { className: "cohub-desc" }, t("roleOverrideDiffNote")),
+          React.createElement("div", { className: "cohub-actions" },
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-button cohub-button-ghost",
+              disabled: locked,
+              onClick: function () {
+                props.resetBuiltinOverride(name);
+              }
+            }, t("roleOverrideReset")),
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-button",
+              disabled: locked,
+              onClick: function () {
+                props.saveBuiltinEdit();
+              }
+            }, t("roleOverrideSave")),
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-button cohub-button-ghost",
+              disabled: locked,
+              onClick: function () {
+                props.cancelBuiltinEdit();
+              }
+            }, t("roleOverrideCancel"))
+          )
+        );
+      }
+
+      /** 内置角色卡片：查看详情 / 编辑覆盖（Config.roleOverrides）；被覆盖时卡片打「已覆盖」徽标。 */
       function renderBuiltinRole(name) {
-        var detail = roleDetailOf(name, roles);
+        var detail = roleDetailOf(name, roles, overrides);
         var expanded = state.expandedRole === name;
+        var overridden = detail.overridden === true;
+        var editing = state.builtinEdit !== null && state.builtinEdit !== undefined && state.builtinEdit.name === name;
+        var notice = state.builtinEditNoticeName === name ? state.builtinEditNotice : "";
         // 只读目录卡：多一个类名，避免被「代理行 = .cohub-row」的既有契约当成可配置行。
         return React.createElement("li", { key: "builtin-" + name, className: "cohub-row cohub-row-catalog" },
           React.createElement("div", { className: "cohub-row-head" },
@@ -3317,8 +3887,21 @@ window.__ModuleLoader__.load({
             React.createElement("span", { className: "cohub-role-summary" },
               detail.description !== "" ? detail.description : name),
             React.createElement("span", { className: "cohub-badge" }, roleTierLabel(detail)),
+            overridden
+              ? React.createElement("span", { className: "cohub-badge cohub-badge-lead" }, t("roleBuiltinOverridden"))
+              : React.createElement("span", { className: "cohub-badge cohub-badge-muted" }, t("roleBuiltinBadge")),
             // 内置角色的模型路由可单独配置（写 Config.skills），卡片上直接展示当前徽标。
             modelPill(name),
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-row-reset",
+              disabled: locked,
+              "aria-pressed": editing,
+              "aria-label": skillLabel(name) + " · " + t("roleBuiltinEdit"),
+              onClick: function () {
+                props.toggleBuiltinEdit(name);
+              }
+            }, t("roleBuiltinEdit")),
             React.createElement("button", {
               type: "button",
               className: "cohub-row-reset",
@@ -3329,6 +3912,9 @@ window.__ModuleLoader__.load({
               }
             }, expanded ? t("roleDetailCollapse") : t("roleDetailToggle"))
           ),
+          editing ? renderBuiltinEditor(name, detail) : null,
+          notice === "saved" ? React.createElement("p", { className: "cohub-desc" }, t("roleOverrideSaved")) : null,
+          notice === "failed" ? React.createElement("p", { className: "cohub-role-error" }, t("roleOverrideFailed")) : null,
           expanded
             ? React.createElement("div", { key: "builtin-detail" },
               renderRoleDetail(name),
@@ -3563,7 +4149,7 @@ window.__ModuleLoader__.load({
             var checked = team.members.indexOf(name) >= 0;
             // 已经不在角色库、但团队里还留着的成员（删了角色没删团队）也要能看到并取消勾选。
             if (!checked && knownMembers.indexOf(name) < 0) continue;
-            var memberDetail = roleDetailOf(name, roles);
+            var memberDetail = roleDetailOf(name, roles, overrides);
             boxes.push(React.createElement("div", { key: name, className: "cohub-check-item" },
               React.createElement("label", { className: "cohub-check" },
                 React.createElement("input", {
@@ -3672,7 +4258,7 @@ window.__ModuleLoader__.load({
        * 同构」的模板现场拼出，随成员勾选 / 取消、队长切换即时更新（无需保存）。
        */
       function renderPersonaPreview(team, index) {
-        var preview = leadPersonaPreview(team, roles);
+        var preview = leadPersonaPreview(team, roles, overrides);
         var open = state.teamPreview === index;
         return React.createElement("div", { className: "cohub-preview" },
           React.createElement("div", { className: "cohub-preview-head" },
@@ -3724,7 +4310,7 @@ window.__ModuleLoader__.load({
         }
         var memberWarning = badMembers.length > 0 ? badMembers.join(t("listSeparator")) : "";
         // 成员档位分布：一眼看出这组权限构成（未知档位/查不到的角色并入「未知档位」）。
-        var distribution = tierDistributionOf(team.members, roles);
+        var distribution = tierDistributionOf(team.members, roles, overrides);
         var distributionParts = [];
         for (var d = 0; d < distribution.length; d += 1) {
           distributionParts.push(roleTierLabel(distribution[d]) + " ×" + distribution[d].count);
@@ -3863,7 +4449,7 @@ window.__ModuleLoader__.load({
        * 唯一动作是「复制为我的团队」：生成一条普通用户团队草稿行（可改可删）。
        */
       function renderBuiltinTeam(team) {
-        var distribution = tierDistributionOf(team.members, roles);
+        var distribution = tierDistributionOf(team.members, roles, overrides);
         var distributionParts = [];
         for (var d = 0; d < distribution.length; d += 1) {
           distributionParts.push(roleTierLabel(distribution[d]) + " ×" + distribution[d].count);
@@ -4273,6 +4859,24 @@ window.__ModuleLoader__.load({
           toggleRoleDetail: function (name) {
             controller.toggleRoleDetail(name);
           },
+          toggleBuiltinEdit: function (name) {
+            controller.toggleBuiltinEdit(name);
+          },
+          editBuiltinField: function (field, value) {
+            controller.editBuiltinField(field, value);
+          },
+          applyBuiltinTier: function (tier) {
+            controller.applyBuiltinTier(tier);
+          },
+          saveBuiltinEdit: function () {
+            return controller.saveBuiltinEdit();
+          },
+          resetBuiltinOverride: function (name) {
+            return controller.resetBuiltinOverride(name);
+          },
+          cancelBuiltinEdit: function () {
+            controller.cancelBuiltinEdit();
+          },
           toggleTeamMember: function (index, name) {
             controller.toggleTeamMember(index, name);
           },
@@ -4337,7 +4941,11 @@ window.__ModuleLoader__.load({
       roleTierKey: roleTierKey,
       roleKindOf: roleKindOf,
       leadPersonaPreview: leadPersonaPreview,
-      validateRoles: validateRoles
+      validateRoles: validateRoles,
+      rowsFromOverrides: rowsFromOverrides,
+      diffOverrideOf: diffOverrideOf,
+      applyOverrideDraft: applyOverrideDraft,
+      builtinRoleOf: builtinRoleOf
     };
     return module.exports;
   }
