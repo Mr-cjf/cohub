@@ -2,6 +2,18 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.20] - 2026-11-27
+
+### 修复
+
+- **子代理继承了父代理的「纯调度」persona**：0.13.13 让档位子代理不再挂载独立 preset、改为继承父组合（`co-orchestrator`），而后者 persona 写着「绝不亲自调用任何文件/代码读写与执行工具」；该 persona 进入子代理的 system prompt，优先级高于任务书，导致 `co-designer` 等子代理拒绝对文件做任何修改（`tools.restrict` 只能裁工具、裁不掉 persona）。
+
+### 变更
+
+- 恢复档位子代理挂载各自的预设（`cohub-subagent-readonly` / `-readonly-net` / `-write` / `-write-shell`），子代理重新获得「专职子代理」人格与正确工具面；主代理 `co-orchestrator` 仍不挂子代理预设。
+- 这 4 个内部预设重新出现在「Agent 预设」列表中，但保持 `order: 900` 与「内部 ·」名称前缀沉底——这是为换取子代理人格正确所做的取舍。
+- 保留 0.13.13 引入的 `restrict` fail-closed 行为，作为工具裁剪的第二层保险。
+
 ## [0.13.19] - 2026-11-27
 
 ### 变更
