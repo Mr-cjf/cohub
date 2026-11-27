@@ -123,8 +123,11 @@ window.__ModuleLoader__.load({
       "skill.co-rule-project": "项目规则",
       "skill.co-rule-app": "应用规则",
       "skill.co-cordis": "Cordis 插件",
+      tabTeams: "团队",
+      tabRoles: "角色",
+      rolesTabHint: "先在这里建角色，再到「团队」里勾选",
       rolesTitle: "角色库",
-      rolesDescription: "先在这里建角色，再到上面的「团队」里勾选为成员。保存后运行时注册器约 1 秒内热加载，无需重启。",
+      rolesDescription: "先在这里建角色，再到团队里勾选为成员。保存后运行时注册器约 1 秒内热加载，无需重启。",
       teamsTitle: "团队",
       teamsDescription: "把角色编成团队：每个团队会自动注册为一个 Agent 预设，在 DSH 的「Agent 预设」里选它即可开局。",
       teamBuiltinNote: "内置团队随插件提供，可复制后修改。",
@@ -309,8 +312,11 @@ window.__ModuleLoader__.load({
       "skill.co-rule-project": "Project rules",
       "skill.co-rule-app": "App rules",
       "skill.co-cordis": "Cordis plugins",
+      tabTeams: "Teams",
+      tabRoles: "Roles",
+      rolesTabHint: "Create roles here first, then tick them inside a team.",
       rolesTitle: "Role library",
-      rolesDescription: "Create roles here first, then tick them as members under \"Teams\" above. The runtime registrar picks changes up in about 1 second — no restart needed.",
+      rolesDescription: "Create roles here first, then tick them as members under \"Teams\". The runtime registrar picks changes up in about 1 second — no restart needed.",
       teamsTitle: "Teams",
       teamsDescription: "Group roles into teams: every team is registered as an Agent preset — pick it in DSH's \"Agent presets\" to start a session.",
       teamBuiltinNote: "Built-in teams ship with the plugin; duplicate one to customise it.",
@@ -2622,6 +2628,14 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /**
+     * 设置页 tab 归一：只接受 "teams" / "roles" 两个值，其余（含 undefined / null / 脏值）
+     * 一律回落到默认选中项 "teams"。纯函数，便于状态推演与测试。
+     */
+    function normalizeTab(value) {
+      return value === "roles" ? "roles" : "teams";
+    }
+
     /* ── 样式（复用官方 ---dsw-alias-* token，深浅色自动跟随） ─────── */
 
     function installCss() {
@@ -2637,6 +2651,16 @@ window.__ModuleLoader__.load({
         ".cohub-notice-warn{color:var(--dsw-alias-state-warning-primary,#8d6e00);}",
         ".cohub-badge-muted{opacity:.62;font-weight:400;}",
         ".cohub-seg-active{background:var(--dsw-alias-bg-active,#233240);border-color:var(--dsw-alias-border-strong,#4b7193);font-weight:650;}",
+        // ── 顶部 tab：团队 / 角色（沿用分段按钮的激活态观感，改成下划线 tab） ──
+        ".cohub-tabs{display:flex;align-items:center;gap:4px;border-bottom:1px solid var(--dsw-alias-border-l2);}",
+        ".cohub-tab{height:34px;padding:0 14px;font:inherit;font-size:13px;line-height:20px;cursor:pointer;color:var(--dsw-alias-label-secondary);background:transparent;border:none;border-bottom:2px solid transparent;border-radius:0;margin-bottom:-1px;}",
+        ".cohub-tab:hover:not(:disabled){color:var(--dsw-alias-label-primary);}",
+        ".cohub-tab:disabled{opacity:.45;cursor:default;}",
+        ".cohub-tab-active{color:var(--dsw-alias-label-primary);font-weight:650;border-bottom-color:var(--dsw-alias-brand-primary);}",
+        ".cohub-tab-panel{display:flex;flex-direction:column;gap:12px;}",
+        ".cohub-tab-panel[hidden]{display:none;}",
+        ".cohub-tab-panel>.cohub-roles{border-top:none;padding-top:0;margin-top:0;}",
+        ".cohub-tab-hint{color:var(--dsw-alias-label-secondary);}",
         ".cohub-template-head{align-items:center;}",
         ".cohub-templates .cohub-checks{grid-template-columns:repeat(auto-fill,minmax(220px,1fr));}",
         ".cohub-template-card{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:9px 11px;border:1px solid var(--dsw-alias-border-weak,#35434d);border-radius:6px;background:var(--dsw-alias-bg-raised,#1d2227);}",
@@ -2748,6 +2772,17 @@ window.__ModuleLoader__.load({
       var t = typeof props.t === "function" ? props.t : fallbackTranslate;
       var useSkills = typeof props.useCohubSkills === "function" ? props.useCohubSkills : useStaticState;
       var state = useSkills(selectAllSnapshot) || EMPTY_STATE;
+
+      // tab 选中态只活在组件里（不写配置）。切换 tab 只是换渲染分支：
+      // 团队草稿 / 角色草稿 / 模型草稿都在 controller 闭包里，所以切回来未保存的编辑还在。
+      var tabHook = typeof React.useState === "function" ? React.useState("teams") : null;
+      var activeTab = normalizeTab(tabHook !== null ? tabHook[0] : "teams");
+      var setTab = function (next) {
+        var normalized = normalizeTab(next);
+        if (tabHook !== null && typeof tabHook[1] === "function" && normalized !== activeTab) {
+          tabHook[1](normalized);
+        }
+      };
 
       var header = [
         React.createElement("h2", { key: "title", className: "cohub-title" }, t("title")),
@@ -3677,9 +3712,9 @@ window.__ModuleLoader__.load({
 
       var teamsBlock = React.createElement("div", { className: "cohub-roles" },
         React.createElement("h3", { className: "cohub-subtitle" }, t("teamsTitle")),
+        React.createElement("p", { className: "cohub-desc" }, t("teamsDescription")),
         React.createElement("p", { className: "cohub-notice cohub-mono" }, presetNotice),
         React.createElement("p", { className: "cohub-desc" }, t("teamPresetDefaultHint")),
-        React.createElement("p", { className: "cohub-desc" }, t("teamsDescription")),
         // 内置团队随包发布（不在 Config.teams 里）：先渲染它们，再渲染用户团队。
         React.createElement("p", { className: "cohub-desc" }, t("teamBuiltinNote")),
         builtinTeamItems.length > 0
@@ -3754,6 +3789,7 @@ window.__ModuleLoader__.load({
 
       var rolesBlock = React.createElement("div", { className: "cohub-roles" },
         React.createElement("h3", { className: "cohub-subtitle" }, t("rolesTitle")),
+        React.createElement("p", { className: "cohub-desc cohub-tab-hint" }, t("rolesTabHint")),
         React.createElement("p", { className: "cohub-desc" }, t("rolesDescription")),
         mainRoleCard,
         // 内置角色：只读卡片，与下面的自定义角色共用同一份详情面板。
@@ -3811,8 +3847,76 @@ window.__ModuleLoader__.load({
         status = t("readOnly");
       }
 
+      // 模型区写的是 Config.skills（属于角色侧），所以这条动作条留在「角色」tab 里。
+      var skillsBar = React.createElement("div", { className: "cohub-actions" },
+        status !== null ? React.createElement("p", { className: statusClass }, status) : null,
+        React.createElement("button", {
+          type: "button",
+          className: "cohub-button cohub-button-ghost",
+          disabled: !state.dirty || state.saving,
+          onClick: function () {
+            props.discard();
+          }
+        }, t("discard")),
+        React.createElement("button", {
+          type: "button",
+          className: "cohub-button cohub-button-primary",
+          disabled: !state.dirty || !state.writable || state.saving || state.conflicted,
+          onClick: function () {
+            props.save();
+          }
+        }, t(state.saving ? "saving" : "save"))
+      );
+
+      // tab 栏放标题下方：只切渲染分支，不动任何草稿（草稿都在 controller 闭包里）。
+      // 只读 / 保存中 / 冲突态不出 tab 栏：此时页面回到「两块内容平铺」的只读形态，
+      // 全部内容依然可见，控件依旧全部禁用（不额外造出可点的 tab 按钮）。
+      var tabsEnabled = !locked;
+      var tabBar = tabsEnabled
+        ? React.createElement("div", { className: "cohub-tabs", role: "tablist" },
+          React.createElement("button", {
+            type: "button",
+            role: "tab",
+            "aria-selected": activeTab === "teams",
+            className: activeTab === "teams" ? "cohub-tab cohub-tab-active" : "cohub-tab",
+            onClick: function () {
+              setTab("teams");
+            }
+          }, t("tabTeams")),
+          React.createElement("button", {
+            type: "button",
+            role: "tab",
+            "aria-selected": activeTab === "roles",
+            className: activeTab === "roles" ? "cohub-tab cohub-tab-active" : "cohub-tab",
+            onClick: function () {
+              setTab("roles");
+            }
+          }, t("tabRoles")))
+        : null;
+
+      // 两个 tab 各自一套，面板都留在树里、只显示选中的那个（hidden + CSS）：
+      // 这样切 tab 不卸载 DOM，草稿与输入焦点都不会丢。
+      // 团队侧只有团队动作条；角色侧是「角色库（含模型区）+ 模型保存条」。
+      var tabPanels = [
+        React.createElement("div", {
+          key: "panel-teams",
+          className: "cohub-tab-panel",
+          role: "tabpanel",
+          "aria-label": t("tabTeams"),
+          hidden: tabsEnabled ? activeTab !== "teams" : false
+        }, teamsBlock),
+        React.createElement("div", {
+          key: "panel-roles",
+          className: "cohub-tab-panel",
+          role: "tabpanel",
+          "aria-label": t("tabRoles"),
+          hidden: tabsEnabled ? activeTab !== "roles" : false
+        }, rolesBlock, skillsBar)
+      ];
+
       return React.createElement("div", { className: "cohub-section" },
         header,
+        tabBar,
         !state.writable ? React.createElement("p", { className: "cohub-notice" }, t("readOnly")) : null,
         state.catalogStatus === "error"
           ? React.createElement("p", { className: "cohub-notice cohub-notice-error" },
@@ -3829,29 +3933,7 @@ window.__ModuleLoader__.load({
         state.conflicted
           ? React.createElement("p", { className: "cohub-notice cohub-notice-warn" }, t("conflicted"))
           : null,
-        teamsBlock,
-        rolesBlock,
-        // 角色库 / 角色编辑里的模型区写的是 Config.skills，统一由这条动作条落盘。
-        // 顶部「每个代理一行」的模型区块已移除，这里只剩保存 / 放弃与状态提示。
-        React.createElement("div", { className: "cohub-actions" },
-          status !== null ? React.createElement("p", { className: statusClass }, status) : null,
-          React.createElement("button", {
-            type: "button",
-            className: "cohub-button cohub-button-ghost",
-            disabled: !state.dirty || state.saving,
-            onClick: function () {
-              props.discard();
-            }
-          }, t("discard")),
-          React.createElement("button", {
-            type: "button",
-            className: "cohub-button cohub-button-primary",
-            disabled: !state.dirty || !state.writable || state.saving || state.conflicted,
-            onClick: function () {
-              props.save();
-            }
-          }, t(state.saving ? "saving" : "save"))
-        )
+        tabPanels
       );
     }
 
@@ -3984,6 +4066,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject;
     // 纯函数契约（仅 test/client-runtime-0.2.ts 断言用；宿主不读）。
     exports.__internals = {
+      normalizeTab: normalizeTab,
       rowsFromSkills: rowsFromSkills,
       rowsToSkills: rowsToSkills,
       reasoningEffortsOf: reasoningEffortsOf,
