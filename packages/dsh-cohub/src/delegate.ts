@@ -21,12 +21,10 @@ import { COHUB_SKILLS, type CoHubSkill } from "./skills.ts";
 import {
   describeRoleNotAllowed,
   isRoleAllowed,
-  presetForTier,
   resolveSkillSnapshot,
   resolveTeamFilter,
   resolveTier,
   TIER_TOOLS,
-  TIER_TO_PRESET,
   type CustomRoleConfig,
   type ResolvedRole,
   type SkillSnapshot,
@@ -349,23 +347,23 @@ export const CORDIS_PRESET = "cohub-cordis";
 /**
  * 按 skill 名解析子代理应挂载的独立 preset id。
  *
- * **本批语义（每个档位子代理挂自己的预设）**：
- *   - 除 `co-orchestrator` 外，一律 `presetForTier(resolveTier(...))` ——
- *     ro → cohub-subagent-readonly、ro-net → cohub-subagent-readonly-net、
- *     rw → cohub-subagent-write、rw-shell → cohub-subagent-write-shell、cordis → cohub-cordis。
- *     子代理因此拿到「专职子代理」persona 与刚好够用的工具面。
- *   - `co-orchestrator` 是委派发起方，被委派时返回 undefined：继承父组合、不裁剪、不挂 preset。
- *   - 空名 / 未知角色：resolveTier 返回 null，按 `rw-shell` 兜底（与历史「未知 skill → 写类」一致）。
+ * **本批语义（恢复 0.13.13 的「不挂档位预设」）**：
+ *   - `co-cordis` → `cohub-cordis`：它提供 `tool-cordis` 类工具，父组合里没有，
+ *     restrict 只能做减法（补不出工具）→ 无法用「继承父组合 + 裁剪」实现。
+ *   - 其余（含 co-orchestrator / 空名 / 未知角色 / 自定义角色）→ `undefined`，
+ *     即继承父组合、不裁剪、不挂 preset；权限边界由 spawn 后的 tools.restrict 收窄
+ *     （见 applyChildToolFilterDirectly，fail-closed 不动）。
  *
- * 为什么必须挂档位预设（0.13.13 的回归教训）：0.13.13 曾让档位子代理改走「继承父组合 +
- * spawn 后 tools.restrict 裁剪」以省掉 4 份组合的维护。但 restrict 只做工具减法，**裁不掉
- * persona**——子代理继承了父（co-orchestrator / 团队队长）的「主调度者……绝不亲自调用任何
- * 文件/代码读写与执行工具」人格，且 system prompt 优先级高于任务书，于是子代理自认纯调度者、
- * 拒绝读写文件。故恢复每档一个独立预设；restrict 仍保留为第二层保险（fail-closed 不动）。
+ * 为什么现在可以不挂档位预设（0.13.14 的修法）：0.13.13 之所以失败，是因为父代理
+ * （co-orchestrator / 团队队长）的 preset persona 里写着「绝不亲自调用任何文件/代码读写
+ * 与执行工具」这类**硬禁令**，子代理继承后 system prompt 压过任务书而拒绝改文件。
+ * 本批把该禁令从 persona 里删掉（改成中性表述「优先委派」），并让纯调度硬约束改由
+ * dsh-cohub 运行时按 agent 类型注入（`cohub:lead` section，子代理不注入）——
+ * 于是「继承父组合 + restrict」不再有毒，4 份档位组合也无需再维护。
  *
- * @param skillName - 规范化后的 skill 名（如 co-fixer / 自定义角色名）。
+ * @param skillName - 规范化后的 skill 名（如 co-cordis / co-fixer / 自定义角色名）。
  * @param enabled - 总开关（Config.delegateSubagentPreset.enabled，默认 true）。
- * @param customRoles - 自定义角色表（其 tier 覆盖内置）；缺省 = 仅内置角色。
+ * @param customRoles - 自定义角色表（保留参数：签名不变以免破坏调用点）。
  * @param _logger - 保留参数（签名不变以免破坏调用点）。
  * @returns preset id；undefined 表示不指定（继承父组合）。
  */
