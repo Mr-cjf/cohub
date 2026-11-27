@@ -2,6 +2,14 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.19] - 2026-11-27
+
+### 变更
+
+- **队长并发派发口径**：有 2 个以上可独立验收的任务时，必须用 `delegate_batch` 一次批量派出，不再并列推荐"多个并行 delegate"（同消息多个 delegate 常被串行执行，batch 才是真并行）。
+- 派发顺序规则：先按职责切分（不按数量）→ 同职责且无依赖的任务放入同一批次、可给同一职责派多个实例 → 任务书必须自包含且单批不超过 `maxParallelBatch` → 有依赖必须串行并把上一步产出写进后一任务书 → 拿不准默认串行 → 只有一个任务时用单发 `delegate`，不为凑批次拆碎任务。
+- 该口径已同步到 `co-team-lead`（通用队长）、`co-orchestrator`（开发团队队长）与 `orchestrator` 技能正文三处。
+
 ## [0.13.18] - 2026-11-27
 
 ### 新增
