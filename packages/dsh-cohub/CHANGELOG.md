@@ -2,6 +2,19 @@
 
 本文件记录 dsh-cohub 的所有重要变更。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.10] - 2026-11-27
+
+### 新增
+
+- **停滞检测分档可配置**：新增 `stall.advisorySignals`（默认 `["S2","S3"]`，置空数组即退回旧行为，所有信号都直接中止）与 `stall.advisoryMaxMs`（省略时默认 `idleMs × 2`）。
+- **S2/S3 降级为告警**：S2（无事件空转）与 S3（推理多不行动）不再直接中止，改为经 `logger.warn` 输出告警，含档位、静默时长与升级上限；S1（连续同类错误）与 S4（循环）保留直接中止。
+
+### 变更
+
+- **清理 `delegate.ts` 死代码**：移除不可达的 `"run error:"` 兜底分支与死变量 `lastRunError`。
+- **错误文本脱敏**：新增 `maskSecrets`，对 `sk-*`、`Bearer *`、`api_key`/`token`/`secret`/`password` 键值与 URL 查询串值做掩码，执行顺序为「单行化 → 脱敏 → 200 字截断」。
+- **收紧测试断言**：`client-runtime` 测试中的恒真断言改为真校验。
+
 ## [0.13.9] - 2026-11-26
 
 ### 变更
