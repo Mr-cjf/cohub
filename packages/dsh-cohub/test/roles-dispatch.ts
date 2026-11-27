@@ -21,6 +21,7 @@ import {
   resolveSkillAgentPreset,
   resolveSkillAndRoute,
   resolveSkillToolFilter,
+  startSubagentRun,
 } from "../src/delegate.ts";
 import { assertKnownSkill } from "../src/delegate_batch.ts";
 
@@ -84,12 +85,10 @@ const BUILTIN_NAMES: readonly string[] = COHUB_SKILLS.map((skill) => skill.name)
   .filter((name) => !POST_COMPAT_ADDITIONS.has(name));
 
 /**
- * 有意变化清单（档位表驱动的能力升级，上一批 d6c43d9 新增 readonly-net / write-shell 的目的）：
- * 除这三项外，其余内置角色的 tier → preset → deny 必须与接线前逐项相等。
+ * 本批语义（档位子代理继承父组合）：除 co-cordis 外**一律不传 agentPreset**，
+ * 权限边界改由 spawn 后的 tools.restrict（roles.ts TIER_TOOLS）施加。
  */
-const EXPECTED_PRESET_CHANGES: Readonly<Record<string, string>> = {
-  "co-librarian": "cohub-subagent-readonly-net",
-  "co-fixer": "cohub-subagent-write-shell",
+const EXPECTED_SUBAGENT_PRESET: Readonly<Record<string, string | undefined>> = {
   "co-cordis": "cohub-cordis",
 };
 
@@ -107,7 +106,7 @@ for (const name of BUILTIN_NAMES) {
   const newDeny = resolveSkillToolFilter(name, true);
   const oldDeny = oldToolFilter(name);
   const denyEqual = JSON.stringify(newDeny?.deny) === JSON.stringify(oldDeny);
-  const expectedPreset = EXPECTED_PRESET_CHANGES[name] ?? oldPreset;
+  const expectedPreset = EXPECTED_SUBAGENT_PRESET[name];
   const presetOk = newPreset === expectedPreset;
   if (presetOk) presetSame++;
   if (denyEqual) denySame++;
@@ -119,7 +118,7 @@ for (const name of BUILTIN_NAMES) {
   );
 }
 console.log("");
-check("13 个内置角色 preset 全部等于「旧值或已声明的档位升级」", presetSame === 13);
+check("13 个内置角色：只有 co-cordis 传 preset，其余继承父组合（不传 agentPreset）", presetSame === 13);
 check("13 个内置角色 deny 列表全部与接线前逐项相等（含顺序）", denySame === 13);
 check("内置角色 deny 里仍含 shell/write 裁剪差异（ro 裁、rw 不裁）",
   resolveSkillToolFilter("co-explorer", true)!.deny.includes(SHELL_TOOL)
@@ -127,11 +126,11 @@ check("内置角色 deny 里仍含 shell/write 裁剪差异（ro 裁、rw 不裁
 check("co-orchestrator 仍不裁剪、不挂 preset（继承父）",
   resolveSkillToolFilter("co-orchestrator", true) === undefined
   && resolveSkillAgentPreset("co-orchestrator", true) === undefined);
-check("空 skill 仍兜底 write preset / 通用 deny",
-  resolveSkillAgentPreset("", true) === OLD_WRITE_PRESET
+check("空 skill 继承父组合（不传 preset）+ 通用 deny",
+  resolveSkillAgentPreset("", true) === undefined
   && JSON.stringify(resolveSkillToolFilter("", true)!.deny) === JSON.stringify(OLD_UNIVERSAL_DENY));
-check("未知 skill 仍兜底 write preset / 通用 deny",
-  resolveSkillAgentPreset("co-nonexistent", true) === OLD_WRITE_PRESET
+check("未知 skill 继承父组合（不传 preset）+ 通用 deny",
+  resolveSkillAgentPreset("co-nonexistent", true) === undefined
   && JSON.stringify(resolveSkillToolFilter("co-nonexistent", true)!.deny)
     === JSON.stringify(OLD_UNIVERSAL_DENY));
 check("关闭总开关时两者都返回 undefined（旧行为）",
@@ -152,8 +151,8 @@ check("自定义角色可被技能查表命中", customLookup.ok === true);
 check("自定义角色出现在快照名单里（全部内置角色 + 1）",
   snapshotWithCustom.names.includes("my-researcher") && snapshotWithCustom.names.length === COHUB_SKILLS.length + 1);
 check("自定义角色档位 = ro-net", resolveTier("my-researcher", CUSTOM) === "ro-net");
-check("自定义角色 preset = cohub-subagent-readonly-net",
-  resolveSkillAgentPreset("my-researcher", true, CUSTOM) === "cohub-subagent-readonly-net");
+check("自定义角色也继承父组合（不传 agentPreset，改由 restrict 裁剪）",
+  resolveSkillAgentPreset("my-researcher", true, CUSTOM) === undefined);
 
 const customDeny = resolveSkillToolFilter("my-researcher", true, undefined, CUSTOM)!.deny;
 check("自定义角色工具白名单含 web 检索/抓取（web 工具不在 deny 里）",
@@ -209,7 +208,7 @@ check("批量：存在但被禁用的名字报错，文案区分于「不存在�
   disabledCheck.ok === false && disabledCheck.error.includes("已被禁用")
   && disabledCheck.error.includes("config.disabledSkills") && !disabledCheck.error.includes("不存在"));
 check("批量：同一份快照下的 preset / 裁剪与单发一致（同一条解析路径）",
-  resolveSkillAgentPreset("my-researcher", true, CUSTOM) === "cohub-subagent-readonly-net"
+  resolveSkillAgentPreset("my-researcher", true, CUSTOM) === undefined
   && JSON.stringify(resolveSkillToolFilter("my-researcher", true, undefined, CUSTOM))
     === JSON.stringify({ deny: customDeny }));
 const batchPrompt = buildDelegatePrompt({
@@ -237,6 +236,91 @@ check("单发：不存在 → 兜底 co-fixer 且 note 说明「未匹配任何�
   && (unknownSingle.note ?? "").includes("未匹配任何角色"));
 
 // ── 汇总 ────────────────────────────────────────────────────────────────
+// ── 用例 6：档位子代理改为「继承父组合 + restrict 裁剪」的四条硬断言 ─────────
+group("用例 6：spawn spec 不带 agentPreset（除 co-cordis）+ restrict 覆盖 + fail-closed");
+
+/** 与 test/delegate-p1.ts 同构的 0.2.1 桩：startActivation(spec) → { childId, result, dispose } */
+function makeSpawnCtx(restrictImpl: (filter: any) => void) {
+  const specs: any[] = [];
+  const disposed: number[] = [];
+  const ctx: any = {
+    logger: { warn: () => {}, info: () => {} },
+    subagents: {
+      async startActivation(spec: any) {
+        specs.push(spec);
+        const n = specs.length;
+        return { childId: "child-" + n, result: Promise.resolve({ text: "ok" }), dispose: () => disposed.push(n) };
+      },
+    },
+    agents: { get: () => ({ ctx: { tools: { restrict: restrictImpl } } }) },
+  };
+  return { ctx, specs, disposed };
+}
+
+async function spawnWith(skill: string, restrictImpl: (filter: any) => void = () => {}) {
+  const made = makeSpawnCtx(restrictImpl);
+  await startSubagentRun(made.ctx, "spawn", {
+    label: "t:" + skill,
+    prompt: [{ type: "text", text: "任务正文" }],
+    parent: { id: "parent-1" },
+    toolFilter: resolveSkillToolFilter(skill, true),
+    agentPreset: resolveSkillAgentPreset(skill, true),
+  });
+  return made;
+}
+
+// ① 四个档位各取一个代表角色：spec 里**没有** agentPreset 字段（顶层与 request 都没有）
+const TIER_REPS: ReadonlyArray<readonly [string, string]> = [
+  ["ro", "co-explorer"],
+  ["ro-net", "co-librarian"],
+  ["rw", "co-designer"],
+  ["rw-shell", "co-fixer"],
+];
+for (const [tier, skill] of TIER_REPS) {
+  const { specs } = await spawnWith(skill);
+  const spec = specs[0];
+  check(tier + " 档（" + skill + "）spawn spec 不带 agentPreset",
+    spec !== undefined && !("agentPreset" in spec) && spec.request?.agentPreset === undefined);
+}
+
+// ② co-cordis 仍挂 cohub-cordis（tool-cordis 无法由 restrict 补出）
+const cordisSpawn = await spawnWith("co-cordis");
+const cordisSpec = cordisSpawn.specs[0];
+check("co-cordis 仍带 agentPreset = cohub-cordis（顶层 + request 双写）",
+  cordisSpec?.agentPreset === "cohub-cordis" && cordisSpec?.request?.agentPreset === "cohub-cordis");
+
+// ③ 只读两档的 deny 覆盖 write / edit / shell（裁剪是唯一权限边界）
+for (const skill of ["co-explorer", "co-librarian"]) {
+  const deny = resolveSkillToolFilter(skill, true)!.deny;
+  check(skill + " 的 deny 同时含 write / edit / shell（" + SHELL_TOOL + "）",
+    deny.includes("write") && deny.includes("edit") && deny.includes(SHELL_TOOL));
+}
+// 写类两档：保留 write/edit，不需要 shell 裁（preset 层按平台挂一个 shell，档位表不裁）
+for (const skill of ["co-designer", "co-fixer"]) {
+  const deny = resolveSkillToolFilter(skill, true)!.deny;
+  check(skill + " 的 deny 不含 write / edit（写类保留）",
+    !deny.includes("write") && !deny.includes("edit"));
+}
+
+// ④ fail-closed：restrict 抛错 → 本次派发失败（不再放行为全量工具）
+const { ctx: boomCtx } = makeSpawnCtx(() => { throw new Error("restrict exploded"); });
+let enforced: any;
+try {
+  await startSubagentRun(boomCtx, "spawn", {
+    label: "t:co-fixer",
+    prompt: [{ type: "text", text: "任务正文" }],
+    parent: { id: "parent-1" },
+    toolFilter: resolveSkillToolFilter("co-fixer", true),
+    agentPreset: resolveSkillAgentPreset("co-fixer", true),
+  });
+} catch (error) {
+  enforced = error;
+}
+check("restrict 抛错时派发失败（fail-closed，不放行全量工具）", enforced !== undefined);
+check("派发失败的错误文案点名 fail-closed 与裁剪未施加",
+  String(enforced?.message ?? "").includes("fail-closed")
+  && String(enforced?.message ?? "").includes("子代理工具裁剪未能施加"));
+
 console.log("");
 console.log(`===== 汇总：PASS ${pass}，FAIL ${fail}（共 ${pass + fail} 个用例） =====`);
 process.exit(fail === 0 ? 0 : 1);

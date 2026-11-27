@@ -275,18 +275,6 @@ const UNIVERSAL_DENY: readonly string[] = [
 ];
 
 /**
- * 档位映射缺失时的降级方向：只读族 → readonly preset，写类族 → write preset。
- *
- * 约束（任务要求）：preset 缺失时**不得静默换成权限更大的 preset**。读写类档位本身已含
- * 写权限，落到 write preset 不扩大；只读族（ro / ro-net）必须落到 readonly，绝不落到 write。
- */
-function fallbackPresetForTier(tier: string): string {
-  return tier === "rw" || tier === "rw-shell" || tier === "cordis"
-    ? SUBAGENT_WRITE_PRESET
-    : SUBAGENT_READONLY_PRESET;
-}
-
-/**
  * 未提供 skill（缺字段 / 空串 / 纯空白）时的兜底代理名。
  *
  * 实测事故：某次 delegate_batch 调用的某个 task 漏传 skill，原始 undefined 直接流进了
@@ -346,53 +334,50 @@ export function resolveSkillToolFilter(
 // 官方 dsh-tool-subagent 的 Config.agentPreset 走的就是这条路。cohub 自己构造 request，
 // 因此直接传 id 即可，无需 allowlist。两个 preset 随包安装在 ~/.dsh/.agent-presets/。
 
-/** 只读子代理 preset（包内 presets/cohub-subagent-readonly；tool-fs 关掉 write/edit，不挂 shell） */
+/** 只读子代理 preset（包内 presets/cohub-subagent-readonly；**自本批起不再注册**，仅保留包内目录） */
 export const SUBAGENT_READONLY_PRESET = "cohub-subagent-readonly";
 
-/** 实施类子代理 preset（包内 presets/cohub-subagent-write；含 write/edit + shell，无委派工具） */
+/** 实施类子代理 preset（包内 presets/cohub-subagent-write；**自本批起不再注册**，仅保留包内目录） */
 export const SUBAGENT_WRITE_PRESET = "cohub-subagent-write";
+
+/**
+ * cordis 档位仍需独立 preset：它提供 `tool-cordis` 类工具，父组合里没有，
+ * 而 restrict 只能做减法（补不出工具）→ 无法用「继承父组合 + 裁剪」实现。
+ */
+export const CORDIS_PRESET = "cohub-cordis";
 
 /**
  * 按 skill 名解析子代理应挂载的独立 preset id。
  *
- * 语义（fail-soft 优先）：
- *   - co-orchestrator → undefined（= 继承父 preset，它本身是委派发起方）
- *   - 其余名字 → `presetForTier(resolveTier(name, customRoles))`
- *   - 空/未传 skill 或名字未知 → write preset（等价兜底 co-fixer：漏传 skill 的委派多为
- *     实施类任务；若返回 undefined 会退化成「继承父 preset」，把父的纯调度 persona 白烧一遍）
- *   - 档位存在但 preset 映射缺失 → {@link fallbackPresetForTier} 按权限族降级 + warn，
- *     **绝不静默换成权限更大的 preset**（只读族不会落到 write）。
+ * **本批语义（档位子代理继承父组合）**：
+ *   - 除 `co-cordis`（tier = cordis）外，**一律返回 undefined** —— 即不传 `agentPreset`，
+ *     子代理继承父组合；权限差异全部由 spawn 后的 `tools.restrict(filter)` 施加
+ *     （filter 来自 roles.ts 的 TIER_TOOLS[tier].deny，见 resolveSkillToolFilter）。
+ *     `agentPreset` 在 startActivation 里本就是可选字段（child-agent.js:150），不传即继承。
+ *   - `co-cordis` 是唯一例外：`cohub-cordis` 提供父组合没有的 `tool-cordis` 工具，
+ *     restrict 补不出来，故仍以独立 preset 挂载。
  *
- * 档位化后内置角色的 preset 变化（有意的能力升级，见 roles.ts 的档位表）：
- *   co-librarian ro → cohub-subagent-readonly-net；co-fixer rw-shell → cohub-subagent-write-shell；
- *   co-cordis cordis → cohub-cordis。其余内置角色与接线前逐字一致。
+ * 为什么去掉 4 个档位 preset：注册 4 份组合只为「加减几个工具」不值当（组合要随宿主版本
+ * 同步维护、还要写 profile patch），而 tool 裁剪本来就在 cohub 手里（restrict 是既有机制）。
  *
  * @param skillName - 规范化后的 skill 名（如 co-fixer / 自定义角色名）。
  * @param enabled - 总开关（Config.delegateSubagentPreset.enabled，默认 true）。
  * @param customRoles - 自定义角色表（其 tier 覆盖内置）；缺省 = 仅内置角色。
- * @param logger - 可选日志器（仅用于 preset 缺失的 warn）。
- * @returns preset id；undefined 表示不指定（继承父）。
+ * @param logger - 保留参数（本批不再产生 preset 降级 warn，签名不变以免破坏调用点）。
+ * @returns preset id；undefined 表示不指定（继承父组合）。
  */
 export function resolveSkillAgentPreset(
   skillName: string | undefined,
   enabled = true,
   customRoles?: readonly CustomRoleConfig[],
-  logger?: { warn?: (...args: unknown[]) => void },
+  _logger?: { warn?: (...args: unknown[]) => void },
 ): string | undefined {
   if (!enabled) return undefined;
   const key = (skillName ?? "").trim();
+  // co-orchestrator 是委派发起方，被委派时继承父组合（不裁剪、不挂 preset）
   if (key === "co-orchestrator") return undefined;
-  const tier = resolveTier(key, customRoles);
-  // 空/纯空白 / 未登记的名字：与 DEFAULT_FALLBACK_SKILL 对齐（实施类 preset）
-  if (tier === null) return SUBAGENT_WRITE_PRESET;
-  const mapped = TIER_TO_PRESET[tier];
-  if (typeof mapped !== "string" || mapped.length === 0) {
-    const fallback = fallbackPresetForTier(tier);
-    logger?.warn?.("[cohub preset] 档位 \"" + tier + "\"（skill=" + key + "）没有对应的子代理 preset，"
-      + "已降级为 " + fallback + "（不扩大权限）");
-    return fallback;
-  }
-  return presetForTier(tier);
+  // 只有 cordis 档位需要独立 preset（tool-cordis 无法由 restrict 补出）
+  return resolveTier(key, customRoles) === "cordis" ? CORDIS_PRESET : undefined;
 }
 
 /**
@@ -732,6 +717,8 @@ async function spawnWithToolFilterFallout(
       }
       return handle;
     } catch (error) {
+      // fail-closed 前置：裁剪未能施加不是「可回退的 toolFilter 错误」，绝不降级成全量工具重试
+      if (isToolFilterEnforced(error)) throw error;
       const message = error instanceof Error ? error.message : String(error);
       const aborted = spec.signal?.aborted === true || /abort/i.test(message);
       // 没有 filter 可背锅 / 中止 / 非 filter 类错误 → 原样抛出（不掩盖真实故障）
@@ -787,6 +774,31 @@ function resolveAgentsService(ctx: any): any {
 }
 
 /**
+ * 工具裁剪「未能施加」的**硬失败**（fail-closed）。
+ *
+ * 语义：档位子代理现在不再挂独立 preset，权限边界**完全**由 spawn 后的 restrict 决定。
+ * 因此 restrict 抛错时不能像旧版那样「记一条降级提示就放行」（那等于让子代理带着父组合的
+ * 全量工具跑，只读代理也能写盘/跑 shell）——必须让该次派发失败。
+ *
+ * 携带 `code` 便于上层按类型判定（跨 bundle 时 instanceof 可能失效）。
+ */
+export class ToolFilterEnforcedError extends Error {
+  readonly code = TOOL_FILTER_ENFORCED_CODE;
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolFilterEnforcedError";
+  }
+}
+
+const TOOL_FILTER_ENFORCED_CODE = "cohub/toolfilter-enforced";
+
+/** 是否是「裁剪未能施加」的硬失败（fail-closed 判定，不依赖 instanceof） */
+export function isToolFilterEnforced(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === TOOL_FILTER_ENFORCED_CODE;
+}
+
+/**
  * 直接对「已创建的子代理 scope」施加工具裁剪 —— 绕开运行时不消费 toolFilter 的问题。
  *
  * 根因（0.2.1-rc.3 实测，app.asar 内 dsh-subagent lib/index.js）：
@@ -801,8 +813,10 @@ function resolveAgentsService(ctx: any): any {
  *   restrict 本来就是 scope-local 的层追加，语义与运行时内部那条完全一致（且晚追加同样有效，
  *   因为 view() 每次按 scope 链实时求值）。
  *
- * fail-soft：拿不到 scope / 被拒 / 交集为空都只登记一条降级提示（绝不阻断委派），
- *   保证失败一定在工具返回文本里可见。
+ * **fail-closed（本批）**：档位子代理不再挂独立 preset，裁剪是唯一的权限边界，
+ *   故 restrict 抛错 → 抛 {@link ToolFilterEnforcedError} 让派发失败；
+ *   只有「拿不到 agents 服务 / childId 缺失」（单测桩或未来服务改名）才静默跳过，
+ *   因为那不是「裁剪被拒」而是「本环境没有可施加的 scope」。
  */
 function applyChildToolFilterDirectly(
   ctx: any,
@@ -824,7 +838,6 @@ function applyChildToolFilterDirectly(
     // 静默跳过而非降级：只有 startActivation 会调本函数，而它内部就用
     // `ownerCtx.agents.create()` 建子代理（dsh-subagent lib/index.js），
     // 故真实宿主必然存在 agents 服务；取不到只可能是单测桩 / 未来服务改名。
-    // 这种情况登记「裁剪未生效」属于对外部环境的误报，故不下发提示（仍不阻断委派）。
     return;
   }
   if (childId === undefined) return;
@@ -862,12 +875,17 @@ function applyChildToolFilterDirectly(
           tools.restrict(next);
           return;
         } catch (retryError) {
-          noteFailure(describeDegradeReason(retryError));
-          return;
+          throw new ToolFilterEnforcedError(
+            "cohub: 子代理工具裁剪未能施加（restrict 被拒），已 fail-closed 终止本次派发："
+            + describeDegradeReason(retryError),
+          );
         }
       }
     }
-    noteFailure(describeDegradeReason(error));
+    throw new ToolFilterEnforcedError(
+      "cohub: 子代理工具裁剪未能施加（restrict 被拒），已 fail-closed 终止本次派发："
+      + describeDegradeReason(error),
+    );
   }
 }
 
@@ -967,7 +985,18 @@ async function startSubagentRunOnce(
   // composition 也只组装 { agentPreset: request.agentPreset }，没有可透传的裁剪通道；
   // 所以必须由 cohub 自己拿到 childId 后对子 scope 施加 restrict
   // —— 见 applyChildToolFilterDirectly 的长注释。
-  applyChildToolFilterDirectly(ctx, receipt.childId, spec.toolFilter, spec.degradeNotes);
+  try {
+    applyChildToolFilterDirectly(ctx, receipt.childId, spec.toolFilter, spec.degradeNotes);
+  } catch (error) {
+    // fail-closed：档位子代理的权限边界只由裁剪决定，裁剪没施加上就回收子运行并让派发失败，
+    // 绝不放行（放行 = 子代理带着父组合的全量工具跑，只读代理也能写盘/跑 shell）。
+    try {
+      receipt?.dispose?.();
+    } catch {
+      /* 回收失败不掩盖原始错误 */
+    }
+    throw error;
+  }
   return {
     id: receipt.childId,
     result: receipt.result,
@@ -1378,17 +1407,17 @@ export function resolveSkillAndRoute(
     // 原因必须回到返回文本，否则调用方只会看到「跑出一个 co-fixer」而不知道是自己写错了名字。
     note = reason === "disabled"
       ? '传入的 skill 名 "' + echoName + '" 存在但已被禁用（config.disabledSkills），已兜底为 '
-        + DEFAULT_FALLBACK_SKILL + "，子代理 preset 同步回退为实施类 " + SUBAGENT_WRITE_PRESET
+        + DEFAULT_FALLBACK_SKILL + "，子代理档位同步回退为 rw-shell（继承父组合 + restrict 裁剪）"
         + "；如需使用请从禁用清单中移除，而不是改名"
       : '传入的 skill 名 "' + echoName + '" 未匹配任何角色（内置角色 + config.customRoles），已兜底为 '
-        + DEFAULT_FALLBACK_SKILL + "，子代理 preset 同步回退为实施类 " + SUBAGENT_WRITE_PRESET;
+        + DEFAULT_FALLBACK_SKILL + "，子代理档位同步回退为 rw-shell（继承父组合 + restrict 裁剪）";
   } else if (fallback) {
     (logger ?? ctx.logger)?.warn?.(
       "delegate: skill 未提供（缺字段/空串/纯空白），已兜底为 " + DEFAULT_FALLBACK_SKILL
       + "；schema 已要求必填，出现本告警说明调用绕过了参数校验",
     );
     note = "skill 未提供（缺字段/空串/纯空白），已兜底为 " + DEFAULT_FALLBACK_SKILL
-      + "，子代理 preset 回退为实施类 " + SUBAGENT_WRITE_PRESET;
+      + "，子代理档位回退为 rw-shell（继承父组合 + restrict 裁剪）";
   }
   // 路由查找使用规范化后的 requested（可能为空），而非 skillName（兜底后）
   const route = (getRoutes() ?? []).find(s => s.name === requested);

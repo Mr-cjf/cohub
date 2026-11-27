@@ -420,6 +420,7 @@ export {
   materializeJsTags,
   parseMiniYaml,
   registerCohubPresets,
+  TEAM_OWNED_PRESET_IDS,
   unregisterCohubPresets,
 } from "./preset-runtime";
 // 测试与维护入口：团队 preset（内置团队 ∪ Config.teams → Agent 预设）的定义生成 / 幂等同步 / 卸载

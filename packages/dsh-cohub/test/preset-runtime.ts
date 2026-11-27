@@ -8,7 +8,8 @@
 // 另覆盖：YAML → 对象 的一致性（plugins 条数 / Shell 行 / !!js 求值 / persona 块标量）。
 //
 // 用法：bun run build && node test/preset-runtime.ts（node >= 24）
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 // lib/ 是 bun 产物（无 .d.ts），在产物边界按 any 使用；类型正确性由 bun run typecheck:src 覆盖
 import * as libBuild from "../lib/index.js";
 const {
@@ -18,6 +19,7 @@ const {
   parseMiniYaml,
   evaluatePlatformExpr,
   COHUB_PRESETS_DIR,
+  TEAM_OWNED_PRESET_IDS,
 }: any = libBuild;
 
 let pass = 0;
@@ -28,15 +30,20 @@ function check(name: string, cond: boolean) {
   else fail++;
 }
 
-/** 5 个档位（4 个子代理档位 + cohub-cordis）；co-orchestrator 目录由开发团队注册接管，不计入档位 */
-const TIER_PRESETS = [
+/** 唯一仍注册的档位（cohub-cordis：提供父组合没有的 tool-cordis 工具，restrict 补不出来） */
+const TIER_PRESETS = ["cohub-cordis"];
+/**
+ * 由团队注册接管的 preset（不参与档位注册）：
+ *   · co-orchestrator —— team-presets.ts 以「开发团队」名义注册；
+ *   · 4 个子代理档位 —— 本批改为「继承父组合 + spawn 后 restrict 裁剪」，不再注册。
+ */
+const TEAM_OWNED_PRESETS = [
+  "co-orchestrator",
   "cohub-subagent-readonly",
   "cohub-subagent-readonly-net",
   "cohub-subagent-write",
   "cohub-subagent-write-shell",
-  "cohub-cordis",
 ];
-const TEAM_OWNED_PRESET = "co-orchestrator";
 
 /** mock agentPresets 注册表：记录调用序列，可注入「已存在」与「注册抛错」 */
 function makeRegistry(options: { failOn?: string[]; existing?: string[] } = {}) {
@@ -95,29 +102,30 @@ function makeLogger() {
 console.log("===== 0：YAML → 对象 一致性 =====");
 const defs: any[] = loadCohubPresetDefs(COHUB_PRESETS_DIR);
 const defIds = defs.map((def) => def.id);
-check("解析出 5 个档位 preset 目录", defs.length === 5);
-check("5 个档位都在", TIER_PRESETS.every((id) => defIds.includes(id)));
-check("co-orchestrator 由团队接管（不在档位列表）", !defIds.includes(TEAM_OWNED_PRESET));
+check("解析出 1 个档位 preset（只余 cohub-cordis）", defs.length === 1);
+check("唯一档位就是 cohub-cordis", TIER_PRESETS.every((id) => defIds.includes(id)));
+check("co-orchestrator 由团队接管（不在档位列表）", !defIds.includes("co-orchestrator"));
+check("4 个档位子代理不再注册（readonly / readonly-net / write / write-shell）",
+  ["cohub-subagent-readonly", "cohub-subagent-readonly-net", "cohub-subagent-write", "cohub-subagent-write-shell"]
+    .every((id) => !defIds.includes(id)));
+check("TEAM_OWNED_PRESET_IDS 恰好是这 5 个", (() => {
+  const owned: string[] = [...(TEAM_OWNED_PRESET_IDS as string[])].sort();
+  return JSON.stringify(owned) === JSON.stringify([...TEAM_OWNED_PRESETS].sort());
+})());
 check("每个 def 的 plugins 是非空数组", defs.every((def) => Array.isArray(def.plugins) && def.plugins.length > 0));
 
-/** mock 里使用的 register 参数样例（与 presets/<id>/agent.cordis.yml 逐项对齐） */
-const sampleWrite: any = defs.find((def) => def.id === "cohub-subagent-write");
-const writeIds = sampleWrite.plugins.map((line: any) => line.id);
-console.log(
-  "  样例 register 参数：",
-  JSON.stringify({
-    id: sampleWrite.id,
-    name: sampleWrite.name,
-    order: sampleWrite.order,
-    plugins: sampleWrite.plugins.length,
-    pluginIds: writeIds,
-  }),
-);
-check("cohub-subagent-write 有 10 行 plugins", sampleWrite.plugins.length === 10);
+/** 已下线注册的写类 preset：文件仍在包内（作为工具面事实源），这里直接解析 YAML 断言 */
+const writePluginsRaw: any[] = parseMiniYaml(
+  readFileSync(join(COHUB_PRESETS_DIR, "cohub-subagent-write", "agent.cordis.yml"), "utf8"),
+) as any[];
+const writeIds = writePluginsRaw.map((line: any) => line.id);
+console.log("  样例（已不注册，仅文件）：", JSON.stringify({ id: "cohub-subagent-write", pluginIds: writeIds }));
+check("cohub-subagent-write 的 YAML 有 10 行 plugins", writePluginsRaw.length === 10);
 check("cohub-subagent-write 含 Shell 行 tool-pwsh", writeIds.includes("tool-pwsh"));
 check("cohub-subagent-write 含 Shell 行 tool-bash", writeIds.includes("tool-bash"));
-check("name 来自 preset.yml（非目录名）", sampleWrite.name.includes("CoHub 子代理·可写"));
-check("description 来自 preset.yml", typeof sampleWrite.description === "string" && sampleWrite.description.length > 0);
+check("cordis 档位仍带 name/description（preset.yml）",
+  typeof defs.find((def) => def.id === "cohub-cordis")?.name === "string"
+  && typeof defs.find((def) => def.id === "cohub-cordis")?.description === "string");
 
 // nested group / isolate / 块标量：cohub-cordis 的 compaction group 与 persona prefix
 const cordis: any = defs.find((def) => def.id === "cohub-cordis");
@@ -128,13 +136,19 @@ const persona = cordis.plugins.find((line: any) => line.id === "persona");
 check("块标量 |- 保留了多行正文", typeof persona?.config?.prefix === "string" && persona.config.prefix.split("\n").length > 5);
 check("块标量正文里的 # 未被当注释剥掉", persona.config.prefix.includes("#"));
 
-// !!js：按当前平台求值成真布尔（win32 → bash 禁用、pwsh 启用）
-const winDefs: any[] = defs;
-const writeBash = winDefs.find((def) => def.id === "cohub-subagent-write")!.plugins.find((l: any) => l.id === "tool-bash");
-const writePwsh = winDefs.find((def) => def.id === "cohub-subagent-write")!.plugins.find((l: any) => l.id === "tool-pwsh");
-check("!!js 已求值为布尔（bash）", typeof writeBash?.disabled === "boolean");
-check("!!js 已求值为布尔（pwsh）", typeof writePwsh?.disabled === "boolean");
-check("win32 语义：bash 禁用 / pwsh 启用", process.platform !== "win32" || (writeBash.disabled === true && writePwsh.disabled === false));
+// !!js：文件里保留 `!!js <expr>`，按当前平台求值成真布尔（win32 → bash 禁用、pwsh 启用）
+const bashExpr = typeof writePluginsRaw.find((l: any) => l.id === "tool-bash")?.disabled === "string"
+  ? (writePluginsRaw.find((l: any) => l.id === "tool-bash")!.disabled as string).replace(/^!!js\s+/, "")
+  : undefined;
+const pwshExpr = typeof writePluginsRaw.find((l: any) => l.id === "tool-pwsh")?.disabled === "string"
+  ? (writePluginsRaw.find((l: any) => l.id === "tool-pwsh")!.disabled as string).replace(/^!!js\s+/, "")
+  : undefined;
+check("!!js 表达式可被识别（bash / pwsh 都是 process.platform 比较）",
+  typeof bashExpr === "string" && typeof pwshExpr === "string");
+check("!!js 已求值为布尔", typeof evaluatePlatformExpr(bashExpr) === "boolean"
+  && typeof evaluatePlatformExpr(pwshExpr) === "boolean");
+check("win32 语义：bash 禁用 / pwsh 启用",
+  process.platform !== "win32" || (evaluatePlatformExpr(bashExpr) === true && evaluatePlatformExpr(pwshExpr) === false));
 check("evaluatePlatformExpr 支持 === / !==", evaluatePlatformExpr("process.platform === 'win32'", "win32") === true
   && evaluatePlatformExpr("process.platform !== 'win32'", "linux") === true);
 check("evaluatePlatformExpr 无法识别时返回 undefined", evaluatePlatformExpr("Date.now()") === undefined);
@@ -144,55 +158,56 @@ function deepEqual(a: any, b: any): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-// ── ① 空注册表 → 全部注册 ──────────────────────────────────────────────────
-console.log("===== ① 空注册表 → 5 个档位都注册（co-orchestrator 归团队） =====");
+// ── ① 空注册表 → 只注册 cohub-cordis ───────────────────────────────────────
+console.log("===== ① 空注册表 → 1 个档位注册（+团队注册的 co-orchestrator 共 2） =====");
 const r1 = makeRegistry();
 const logger1 = makeLogger();
 const ctx1 = makeCtx(r1);
 ctx1.logger = logger1;
 const result1 = await registerCohubPresets(ctx1, logger1);
-check("registered 共 5 个", result1.registered.length === 5);
+check("registered 共 1 个（原为 5 个档位）", result1.registered.length === 1);
 check("failed 为空", result1.failed.length === 0);
-check("5 个档位都进了注册表", TIER_PRESETS.every((id) => r1.registered.has(id)));
-check("register 调用 5 次", r1.calls.filter((c) => c.startsWith("register:")).length === 5);
+check("注册的就是 cohub-cordis", result1.registered[0] === "cohub-cordis");
+check("register 调用 1 次", r1.calls.filter((c) => c.startsWith("register:")).length === 1);
+check("4 个档位子代理一次都没被 register",
+  !r1.calls.some((c) => c.startsWith("register:cohub-subagent-")));
 check("首轮不带任何 unregister（无旧注册）", r1.calls.every((c) => !c.startsWith("unregister:")));
 
 // ── ② 已存在同 id → 先 unregister 再 register ─────────────────────────────
 console.log("===== ② 已存在同 id → 先 unregister 再 register（幂等） =====");
-const r2 = makeRegistry({ existing: ["cohub-subagent-write-shell"] });
+const r2 = makeRegistry({ existing: ["cohub-cordis"] });
 const logger2 = makeLogger();
 const ctx2 = makeCtx(r2);
 ctx2.logger = logger2;
 const result2 = await registerCohubPresets(ctx2, logger2);
-const writeShellSeq = r2.calls.filter((c) => c.endsWith(":cohub-subagent-write-shell"));
-check("registered 仍含 cohub-subagent-write-shell", result2.registered.includes("cohub-subagent-write-shell"));
+const cordisSeq = r2.calls.filter((c) => c.endsWith(":cohub-cordis"));
+check("registered 仍含 cohub-cordis", result2.registered.includes("cohub-cordis"));
 check(
   "调用序列 = get → unregister → register",
-  deepEqual(writeShellSeq, ["get:cohub-subagent-write-shell", "unregister:cohub-subagent-write-shell", "register:cohub-subagent-write-shell"]),
+  deepEqual(cordisSeq, ["get:cohub-cordis", "unregister:cohub-cordis", "register:cohub-cordis"]),
 );
-check("unregister 在 register 之前", r2.calls.indexOf("unregister:cohub-subagent-write-shell") < r2.calls.indexOf("register:cohub-subagent-write-shell"));
+check("unregister 在 register 之前", r2.calls.indexOf("unregister:cohub-cordis") < r2.calls.indexOf("register:cohub-cordis"));
 check("没有档位注册失败", result2.failed.length === 0);
 
-// ── ③ 某个 register 抛错 → 其余 4 个档位仍完成 + warn ──────────────────────
-console.log("===== ③ 单个档位注册抛错 → 其余档位继续 + warn =====");
-const r3 = makeRegistry({ failOn: ["cohub-subagent-write"] });
+// ── ③ 唯一档位 register 抛错 → failed 登记 + warn，不抛（fail-soft）────────
+console.log("===== ③ 单个档位注册抛错 → failed 登记 + warn（fail-soft） =====");
+const r3 = makeRegistry({ failOn: ["cohub-cordis"] });
 const logger3 = makeLogger();
 const ctx3 = makeCtx(r3);
 ctx3.logger = logger3;
 const result3 = await registerCohubPresets(ctx3, logger3);
-check("failed 含 cohub-subagent-write", result3.failed.includes("cohub-subagent-write"));
-check("其余 4 个档位仍注册完成", TIER_PRESETS.filter((id) => id !== "cohub-subagent-write").every((id) => result3.registered.includes(id)));
-check("registered 共 4 个（5 - 1）", result3.registered.length === 4);
-check("产生了一条 warn", logger3.warns.some((line) => line.includes("cohub-subagent-write")));
+check("failed 含 cohub-cordis", result3.failed.includes("cohub-cordis"));
+check("registered 为空（1 - 1）", result3.registered.length === 0);
+check("产生了一条 warn", logger3.warns.some((line) => line.includes("cohub-cordis")));
 check("失败不抛（fail-soft）", true);
 
 // ── ④ dispose → 全部 unregister ───────────────────────────────────────────
 console.log("===== ④ 插件卸载 → 全部 unregister =====");
-const removed4 = unregisterCohubPresets(ctx3, logger3);
-check("卸载数量 = 已注册数量（4）", removed4.length === 4);
-check("每个已注册 id 都被 unregister", result3.registered.every((id: string) => r3.calls.includes(`unregister:${id}`)));
-check("注册表回到空", r3.registered.size === 0);
-check("重复卸载是幂等的（第二次为空）", unregisterCohubPresets(ctx3, logger3).length === 0);
+const removed4 = unregisterCohubPresets(ctx1, logger1);
+check("卸载数量 = 已注册数量（1）", removed4.length === 1);
+check("每个已注册 id 都被 unregister", result1.registered.every((id: string) => r1.calls.includes(`unregister:${id}`)));
+check("注册表回到空", r1.registered.size === 0);
+check("重复卸载是幂等的（第二次为空）", unregisterCohubPresets(ctx1, logger1).length === 0);
 
 // ── ⑤ 缺少 agentPresets 服务 → 不抛（fail-soft，回退 patch 声明）───────────
 console.log("===== ⑤ 无 agentPresets 服务 → 不抛 =====");
