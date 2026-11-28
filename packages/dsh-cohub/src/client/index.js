@@ -300,6 +300,7 @@ window.__ModuleLoader__.load({
       // 推理强度分段按钮下方的只读生效值（前缀 + 档位名 / 「跟随会话设置」）。
       roleModelEffortNowPrefix: "当前：",
       roleModelEffortInherit: "跟随会话设置",
+      roleModelEffortUnknown: "未知（{value}）",
       roleModelEffortUnsupported: "该模型不支持调整推理强度",
       roleModelMaxOutput: "最大输出",
       roleModelMaxOutputPlaceholder: "例如 4000",
@@ -540,6 +541,7 @@ window.__ModuleLoader__.load({
       roleModelReasoningHint: "Default follows the session setting",
       roleModelEffortNowPrefix: "Current: ",
       roleModelEffortInherit: "Follow the session setting",
+      roleModelEffortUnknown: "Unknown ({value})",
       roleModelEffortUnsupported: "This model does not support reasoning effort",
       roleModelMaxOutput: "Max output",
       roleModelMaxOutputPlaceholder: "e.g. 4000",
@@ -3693,13 +3695,24 @@ window.__ModuleLoader__.load({
         return skillLabel(templateId);
       }
 
-      /** 推理强度档位 → 展示名（空 = 跟随会话设置，未知档位原样显示 id）。 */
+      /**
+       * 推理强度 id → 语义槽（low / medium / high）。
+       * 档位 id 由 adapter 决定（low/medium/high，也可能 minimal/…/max/xhigh），
+       * 归一到槽之后，「当前值 === 按钮」的判定才不会被别名/字段差异弄成永远不等。
+       */
+      function effortSlotOf(value) {
+        if (value === "minimal" || value === "low") return "low";
+        if (value === "medium") return "medium";
+        if (value === "high" || value === "max" || value === "xhigh") return "high";
+        return "";
+      }
+
+      /** 推理强度档位 → 展示名（空 = 跟随会话设置；未知档位带括号原样显示，不裸甩 id）。 */
       function effortLabelOf(value) {
         if (value === "") return t("roleModelEffortInherit");
-        if (value === "low") return t("effort.low");
-        if (value === "medium") return t("effort.medium");
-        if (value === "high") return t("effort.high");
-        return value;
+        var slot = effortSlotOf(value);
+        if (slot !== "") return t("effort." + slot);
+        return t("roleModelEffortUnknown", { value: value });
       }
 
       /**
@@ -3738,16 +3751,36 @@ window.__ModuleLoader__.load({
           && state.catalogStatus === "ready"
           && (modelEfforts === null || modelEfforts.length === 0);
         var effortDisabled = disabled || effortUnsupported;
-        var effortChoices = [["", "effort.default"], ["low", "effort.low"], ["medium", "effort.medium"], ["high", "effort.high"]];
+        // 四个按钮：默认 + 三个语义槽，槽的真实 id 取自模型目录
+        // （档位 id 由 adapter 决定，点「高」必须写入该 provider 支持的 id，不能硬编码 high）。
+        var effortChoices = [{ id: "", slot: "", labelKey: "effort.default" }];
+        var effortSlots = [["low", "effort.low"], ["medium", "effort.medium"], ["high", "effort.high"]];
+        for (var s = 0; s < effortSlots.length; s += 1) {
+          var slot = effortSlots[s][0];
+          var pick = modelEfforts === null ? slot : "";
+          if (modelEfforts !== null) {
+            for (var c = 0; c < modelEfforts.length; c += 1) {
+              if (effortSlotOf(modelEfforts[c].id) === slot) pick = modelEfforts[c].id;
+            }
+            // 目录里没有这一槽 → 不出按钮，绝不写入 provider 不支持的档位。
+            if (pick === "") continue;
+          }
+          effortChoices.push({ id: pick, slot: slot, labelKey: effortSlots[s][1] });
+        }
         var effortButtons = [];
         for (var e = 0; e < effortChoices.length; e += 1) {
-          var choice = effortChoices[e][0];
-          var active = effort === choice;
+          var choice = effortChoices[e];
+          // 选中态按语义槽比对：当前值 max 也点亮「高」，未知值 xx 则一个都不亮。
+          var active = choice.slot === ""
+            ? effort === ""
+            : (effort !== "" && effortSlotOf(effort) === choice.slot);
           effortButtons.push(React.createElement("button", {
-            key: choice === "" ? "__default" : choice,
+            key: choice.slot === "" ? "__default" : choice.slot,
             type: "button",
             className: active ? "cohub-tier-chip cohub-tier-chip-on" : "cohub-tier-chip",
             "aria-pressed": active,
+            // 实际写入 Config.skills[].reasoningEffort 的档位 id（来自模型目录，默认档为空串）。
+            value: choice.id,
             disabled: effortDisabled,
             onClick: function (value) {
               return function () {
@@ -3755,8 +3788,8 @@ window.__ModuleLoader__.load({
                 // 点击后立刻看到高亮与下方「当前：」文案变化。
                 props.editSkill(name, "reasoningEffort", value);
               };
-            }(choice)
-          }, t(effortChoices[e][1])));
+            }(choice.id)
+          }, t(choice.labelKey)));
         }
         return React.createElement("div", { className: "cohub-detail-block cohub-model-block" },
           React.createElement("p", { className: "cohub-label" }, t("roleModelTitle")),
