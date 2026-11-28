@@ -260,6 +260,7 @@ window.__ModuleLoader__.load({
       roleOverrideTierInvalid: "档位不合法：请选择一个档位。",
       roleOverrideSaved: "覆盖已保存。",
       roleOverrideFailed: "覆盖保存失败，请重试。",
+      roleOverrideResetModelNote: "「恢复默认」只还原提示词 / 档位 / 工具，模型配置请在模型区单独恢复默认。",
       // ── 模板新建 / 绑定工具 / 运行模型 ──────────────────────────────
       roleTemplateSection: "选择一个模板开始",
       roleTemplateHint: "选中模板会自动填好名称（加 -copy 后缀防重名）、职责、提示词、档位与绑定工具。",
@@ -487,6 +488,7 @@ window.__ModuleLoader__.load({
       roleOverrideTierInvalid: "Invalid tier — pick one of the listed tiers.",
       roleOverrideSaved: "Override saved.",
       roleOverrideFailed: "Saving the override failed. Please retry.",
+      roleOverrideResetModelNote: "\"Restore default\" only restores prompt / tier / tools; reset the model separately in the Model block.",
       roleTemplateSection: "Start from a template",
       roleTemplateHint: "Picking a template fills in the name (-copy suffix avoids collisions), description, prompt, tier and bound tools.",
       roleTemplateBlank: "Blank role",
@@ -3992,6 +3994,11 @@ window.__ModuleLoader__.load({
               props.applyBuiltinTier(tier);
             }
           }),
+          // 模型区（供应商 / 模型 / 推理强度 / 最大输出）：与自定义角色共用 renderRoleModel，
+          // 按**内置角色名**定位 Config.skills 里的那一行（不是 customRoles，也不吃 roleOverrides）。
+          // 它走独立的 skills 草稿 → 保存通道，所以「保存」「恢复默认」只作用于上面的 roleOverrides。
+          renderRoleModel(name, locked),
+          React.createElement("p", { className: "cohub-desc" }, t("roleModelBuiltinNote")),
           React.createElement("p", { className: "cohub-desc" }, t("roleOverrideDiffNote")),
           React.createElement("div", { className: "cohub-actions" },
             React.createElement("button", {
@@ -4002,6 +4009,7 @@ window.__ModuleLoader__.load({
                 props.resetBuiltinOverride(name);
               }
             }, t("roleOverrideReset")),
+            React.createElement("small", { className: "cohub-desc" }, t("roleOverrideResetModelNote")),
             React.createElement("button", {
               type: "button",
               className: "cohub-button",
@@ -4078,8 +4086,12 @@ window.__ModuleLoader__.load({
           expanded
             ? React.createElement("div", { key: "builtin-detail" },
               renderRoleDetail(name),
-              React.createElement("p", { className: "cohub-desc" }, t("roleModelBuiltinNote")),
-              renderRoleModel(name, locked)
+              // 编辑面板里已有模型区：同时展开详情时不重复渲染同一块，
+              // 避免同一角色名出现两组会互相打脸的模型控件。
+              editing
+                ? null
+                : React.createElement("p", { className: "cohub-desc" }, t("roleModelBuiltinNote")),
+              editing ? null : renderRoleModel(name, locked)
             )
             : null
         );
