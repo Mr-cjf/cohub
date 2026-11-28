@@ -244,6 +244,16 @@ window.__ModuleLoader__.load({
       roleDetailBuiltinHint: "内置，只读",
       roleDetailCustomHint: "自定义，只读",
       roleDetailReadOnly: "仅展示：编辑提示词请用角色卡片里的「提示词」字段。",
+      roleDetailNameLabel: "角色名",
+      roleDetailNoDescription: "（未填写职责）",
+      roleDetailModel: "模型",
+      roleDetailModelInherit: "继承默认",
+      roleRestoreTemplate: "恢复为模板默认",
+      roleRestoreTemplateHint: "将按当前模板重新填充字段",
+      roleRestoreTemplateNone: "空白角色没有模板可恢复",
+      roleDuplicate: "另存为副本",
+      roleDuplicateHint: "以当前字段生成一条新的自定义角色（名称加 -copy）。",
+      roleGoEdit: "去编辑",
       // ── 内置角色覆盖（Config.roleOverrides）────────────────────────
       roleBuiltinBadge: "内置",
       roleBuiltinOverridden: "已覆盖",
@@ -472,6 +482,16 @@ window.__ModuleLoader__.load({
       roleDetailBuiltinHint: "built-in, read-only",
       roleDetailCustomHint: "custom, read-only",
       roleDetailReadOnly: "Read-only view — edit the prompt in the role card's \"Prompt\" field.",
+      roleDetailNameLabel: "Role name",
+      roleDetailNoDescription: "(no responsibility set)",
+      roleDetailModel: "Model",
+      roleDetailModelInherit: "Inherit default",
+      roleRestoreTemplate: "Restore template defaults",
+      roleRestoreTemplateHint: "Refills every field from the current template",
+      roleRestoreTemplateNone: "A blank role has no template to restore",
+      roleDuplicate: "Save as copy",
+      roleDuplicateHint: "Creates a new custom role from the current fields (name gets a -copy suffix).",
+      roleGoEdit: "Edit role",
       // ── Built-in overrides (Config.roleOverrides) ──────────────────
       roleBuiltinBadge: "Built-in",
       roleBuiltinOverridden: "Overridden",
@@ -2606,6 +2626,50 @@ window.__ModuleLoader__.load({
         publish();
       }
 
+      /**
+       * 「另存为副本」：以当前行字段生成一条新的自定义角色草稿（name 加 -copy 并消歧）。
+       * 只写草稿（保存后随机整表写回 Config.customRoles），模板标记沿用原行的来源。
+       */
+      function duplicateRole(index) {
+        if (!canEdit()) return;
+        var current = beginRolesDraft();
+        if (index < 0 || index >= current.rows.length) return;
+        var source = current.rows[index];
+        var taken = [];
+        for (var i = 0; i < current.rows.length; i += 1) {
+          if (typeof current.rows[i].name === "string" && current.rows[i].name !== "") taken.push(current.rows[i].name);
+        }
+        for (var b = 0; b < BUILTIN_ROLE_NAMES.length; b += 1) taken.push(BUILTIN_ROLE_NAMES[b]);
+        var copy = copyRole(source);
+        copy.name = templateRoleName(source.name, taken);
+        var next = [];
+        for (var j = 0; j < current.rows.length; j += 1) next.push(copyRole(current.rows[j]));
+        next.push(copy);
+        var marks = [];
+        for (var m = 0; m < roleTemplates.length; m += 1) marks.push(roleTemplates[m]);
+        syncRoleTemplates(next.length);
+        for (var s = 0; s < marks.length; s += 1) roleTemplates[s] = marks[s];
+        roleTemplates[next.length - 1] = index < roleTemplates.length ? roleTemplates[index] : "";
+        rolesDraft.rows = next;
+        roleErrors = roleErrors.length > 0 ? validateRoles(next) : [];
+        rolePicker = -1;
+        rolesSaved = false;
+        rolesFailed = false;
+        publish();
+      }
+
+      /**
+       * 「去编辑」（团队成员详情 → 角色 tab）：切到角色 tab、确保该角色详情展开，
+       * 并收起团队编辑区（teamIndex 有效时）。纯 UI 状态，不写配置。
+       */
+      function focusRoleEditor(name, teamIndex) {
+        var key = typeof name === "string" ? name.trim() : "";
+        if (key !== "") expandedRole = key;
+        if (typeof teamIndex === "number" && expandedTeam === teamIndex) expandedTeam = -1;
+        tab = "roles";
+        publish();
+      }
+
       function discardRoles() {
         if (saving) return;
         rolesDraft = null;
@@ -3308,6 +3372,8 @@ window.__ModuleLoader__.load({
         editRole: editRole,
         addRole: addRole,
         removeRole: removeRole,
+        duplicateRole: duplicateRole,
+        focusRoleEditor: focusRoleEditor,
         discardRoles: discardRoles,
         saveRoles: saveRoles,
         chooseTemplate: chooseTemplate,
@@ -3868,7 +3934,32 @@ window.__ModuleLoader__.load({
         var promptHint = detail.promptSource === "custom"
           ? t("roleDetailCustomHint")
           : detail.promptSource === "builtin" ? t("roleDetailBuiltinHint") : "";
+        // 只读模型行：取 Config.skills 里该角色的那一行（内置 / 自定义同名共用同一份），
+        // 未配置供应商时显示「继承默认」——只读文本，控件仍只在角色卡片里。
+        var modelRow = skillRowOf(detail.name);
+        var modelProvider = modelRow && typeof modelRow.provider === "string" ? modelRow.provider : "";
+        var modelId = modelRow && typeof modelRow.model === "string" ? modelRow.model : "";
+        var modelEffort = modelRow ? effortOf(modelRow) : "";
+        var effortLabel = t("effort." + (modelEffort === "" ? "default" : modelEffort));
+        var modelText = modelProvider === ""
+          ? t("roleDetailModelInherit")
+          : [modelProvider, modelId !== "" ? modelId : t("roleModelInherit"), effortLabel].join(" · ");
         return React.createElement("div", { className: "cohub-role-detail" },
+          // 头部：本地化角色名 + 原始角色名（等宽小字，复制到配置里用得上）+「已覆盖」徽标。
+          React.createElement("div", { className: "cohub-detail-head" },
+            React.createElement("span", { className: "cohub-label" }, t("roleDetailNameLabel")),
+            React.createElement("span", { className: "cohub-row-name" }, skillLabel(detail.name)),
+            React.createElement("span", { className: "cohub-row-id cohub-mono" }, detail.name),
+            detail.overridden === true
+              ? React.createElement("span", { className: "cohub-badge cohub-badge-lead" }, t("roleBuiltinOverridden"))
+              : null
+          ),
+          React.createElement("p", { className: "cohub-desc" },
+            detail.description !== "" ? detail.description : t("roleDetailNoDescription")),
+          React.createElement("div", { className: "cohub-detail-line" },
+            React.createElement("span", { className: "cohub-label" }, t("roleDetailModel")),
+            React.createElement("span", { className: "cohub-desc cohub-mono" }, modelText)
+          ),
           React.createElement("div", { className: "cohub-detail-line" },
             React.createElement("span", { className: "cohub-label" }, t("roleDetailTier")),
             React.createElement("span", { className: "cohub-badge cohub-badge-tier" }, roleTierLabel(detail)),
@@ -3927,7 +4018,12 @@ window.__ModuleLoader__.load({
               disabled: true,
               "aria-label": name + " · " + t("roleName")
             }),
-            React.createElement("p", { className: "cohub-desc" }, t("roleOverrideNameNote"))
+            React.createElement("p", { className: "cohub-desc" }, t("roleOverrideNameNote")),
+            // 只读摘要：档位 · N 个工具 —— 免得为了看工具数还要另开详情。
+            React.createElement("p", {
+              className: "cohub-desc cohub-mono",
+              "aria-label": name + " · " + t("roleDetailTools")
+            }, roleToolSummary(detail))
           ),
           React.createElement("div", { className: "cohub-field" },
             React.createElement("label", { className: "cohub-label" }, t("roleKind")),
@@ -4250,6 +4346,30 @@ window.__ModuleLoader__.load({
             }, t("roleTemplateReselect"))
           ),
           pickerOpen ? renderTemplatePicker(index) : null,
+          // 模板动作：恢复为模板默认（按当前模板整行重填，清掉手动改动）/ 另存为副本（复制本行为新草稿）。
+          React.createElement("div", { className: "cohub-actions cohub-template-head" },
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-button cohub-button-ghost",
+              disabled: locked || !hasTemplate,
+              "aria-label": typeLabel + " · " + t("roleRestoreTemplate"),
+              onClick: function () {
+                props.chooseTemplate(index, templateId);
+              }
+            }, t("roleRestoreTemplate")),
+            React.createElement("small", { className: "cohub-desc" },
+              hasTemplate ? t("roleRestoreTemplateHint") : t("roleRestoreTemplateNone")),
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-button cohub-button-ghost",
+              disabled: locked,
+              "aria-label": typeLabel + " · " + t("roleDuplicate"),
+              onClick: function () {
+                props.duplicateRole(index);
+              }
+            }, t("roleDuplicate")),
+            React.createElement("small", { className: "cohub-desc" }, t("roleDuplicateHint"))
+          ),
           renderToolPicker(index, role, locked || !hasTemplate),
           roleTitle !== "" ? renderRoleModel(role.name, locked || !hasTemplate) : null,
           message !== "" ? React.createElement("p", { className: "cohub-role-error" }, message) : null,
@@ -4374,7 +4494,25 @@ window.__ModuleLoader__.load({
                   };
                 }(name)
               }, roleToolSummary(memberDetail)),
-              state.expandedRole === name ? renderRoleDetail(name) : null
+              // 详情旁的「去编辑」：切到角色 tab 并展开该角色，同时收起当前团队编辑区。
+              state.expandedRole === name
+                ? React.createElement("div", { className: "cohub-member-detail" },
+                  renderRoleDetail(name),
+                  React.createElement("div", { className: "cohub-actions" },
+                    React.createElement("button", {
+                      type: "button",
+                      className: "cohub-button cohub-button-ghost",
+                      disabled: locked,
+                      "aria-label": skillLabel(name) + " · " + t("roleGoEdit"),
+                      onClick: function (roleName, teamIndex) {
+                        return function () {
+                          props.focusRoleEditor(roleName, teamIndex);
+                        };
+                      }(name, index)
+                    }, t("roleGoEdit"))
+                  )
+                )
+                : null
             ));
           }
           if (boxes.length === 0) continue;
@@ -5043,6 +5181,12 @@ window.__ModuleLoader__.load({
           },
           removeRole: function (index) {
             controller.removeRole(index);
+          },
+          duplicateRole: function (index) {
+            controller.duplicateRole(index);
+          },
+          focusRoleEditor: function (name, teamIndex) {
+            controller.focusRoleEditor(name, teamIndex);
           },
           discardRoles: function () {
             controller.discardRoles();
