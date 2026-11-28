@@ -166,6 +166,13 @@ window.__ModuleLoader__.load({
       teamLeadNotLeadKind: "该角色不是队长类型，保存将被拒绝",
       teamLeadOnlyHint: "队长下拉只列「队长」类型的成员；把角色类型改成「队长」后才会出现在这里。",
       teamLeadNoLeadMember: "本团队没有「队长」类型的成员：先勾选 co-team-lead / co-orchestrator，或到角色库把某个自定义角色设为队长类型。",
+      // 队长类型角色每队最多一个：勾选拦截 / 下拉占位 / 成员徽标 / 保存校验四条文案
+      teamLeadKindOnly: "该团队已有一位队长（{name}），队长类型角色只能有一个",
+      teamLeadPickFirst: "请先勾选一个队长类型的角色作为队长",
+      teamLeadKindChip: "队长类型 · 只能一位",
+      teamMemberLeadBadge: "队长",
+      teamErrLeadSingle: "一个团队只能有一位队长",
+      teamErrLeadRequired: "必须有一位队长类型角色",
       teamPreviewTitle: "队长提示词预览（含 {count} 个成员）",
       teamPreviewShow: "展开预览",
       teamPreviewHide: "收起预览",
@@ -387,6 +394,12 @@ window.__ModuleLoader__.load({
       teamLeadNotLeadKind: "This role is not a lead type — saving will be rejected",
       teamLeadOnlyHint: "The lead dropdown only lists members of type \"Lead\"; set a role's type to Lead to make it selectable here.",
       teamLeadNoLeadMember: "This team has no member of type Lead: tick co-team-lead / co-orchestrator, or set a custom role's type to Lead.",
+      teamLeadKindOnly: "This team already has a lead ({name}); only one Lead-type role is allowed per team",
+      teamLeadPickFirst: "Tick a Lead-type role first — it will become the team lead",
+      teamLeadKindChip: "Lead type · only one allowed",
+      teamMemberLeadBadge: "Lead",
+      teamErrLeadSingle: "A team can have only one lead",
+      teamErrLeadRequired: "A Lead-type role is required",
       teamPreviewTitle: "Lead prompt preview ({count} member(s))",
       teamPreviewShow: "Show preview",
       teamPreviewHide: "Hide preview",
@@ -1245,6 +1258,73 @@ window.__ModuleLoader__.load({
       return members.length > 0 && typeof members[0] === "string" ? members[0] : "";
     }
 
+    /**
+     * members 里**类型为队长**的角色（顺序即 members 顺序）。
+     *
+     * 唯一判据是 {@link roleKindOf}（与 src/roles.ts 的 resolveRoleKind 逐条对齐）：
+     * 空名 / 非字符串 / 不在角色库的名字一律按 member 处理，故不会凭空多出队长。
+     *
+     * @param team - 团队编辑行（只用 members）
+     * @param customRows - 角色库当前编辑行（自定义角色的 kind）
+     * @returns 队长类型角色名数组（每次新建）
+     */
+    function leadKindMembersOf(team, customRows) {
+      var out = [];
+      var members = team && Array.isArray(team.members) ? team.members : [];
+      for (var i = 0; i < members.length; i += 1) {
+        var name = typeof members[i] === "string" ? members[i].trim() : "";
+        if (name === "" || out.indexOf(name) >= 0) continue;
+        if (roleKindOf(name, customRows) === "lead") out.push(name);
+      }
+      return out;
+    }
+
+    /**
+     * 勾选 / 取消一个成员的**纯函数判定**（controller 与自测共用；不改入参）。
+     *
+     * 规则（一个团队最多一个队长类型角色）：
+     *   ① 取消勾选 → 从 members 移除；取消的正是当前 lead → lead 清空（团队暂时无队长，
+     *      保存时由 validateTeams 报「必须有一位队长类型角色」）；
+     *   ② 勾选的是队长类型角色：
+     *      - members 里还没有队长类型 → 允许，并**自动设为队长**；
+     *      - members 里已有队长类型 → **拒绝**（members / lead 原样返回，rejected = 该角色名，
+     *        currentLead = 现队长名，供 UI 提示）；
+     *   ③ 勾选的是队员类型 → 照常加入，lead 不动。
+     *
+     * @param team - 团队编辑行（members / lead）
+     * @param roleName - 被勾选 / 取消的角色名
+     * @param customRows - 角色库当前编辑行（决定 kind）
+     * @returns `{ members, lead, rejected, currentLead }`；rejected 非空 = 本次勾选被拒绝
+     */
+    function toggleMemberState(team, roleName, customRows) {
+      var name = typeof roleName === "string" ? roleName.trim() : "";
+      var members = team && Array.isArray(team.members) ? team.members.slice() : [];
+      var lead = team && typeof team.lead === "string" ? team.lead : "";
+      if (name === "") return { members: members, lead: lead, rejected: "", currentLead: "" };
+      var at = members.indexOf(name);
+      if (at >= 0) {
+        members.splice(at, 1);
+        return {
+          members: members,
+          lead: lead === name ? "" : lead,
+          rejected: "",
+          currentLead: ""
+        };
+      }
+      var kind = roleKindOf(name, customRows);
+      var leadsNow = leadKindMembersOf({ members: members }, customRows);
+      if (kind === "lead" && leadsNow.length > 0) {
+        return { members: members, lead: lead, rejected: name, currentLead: leadsNow[0] };
+      }
+      members.push(name);
+      return {
+        members: members,
+        lead: kind === "lead" ? name : lead,
+        rejected: "",
+        currentLead: ""
+      };
+    }
+
     /** 成员职责缺失时的兜底文案（与 src/team-presets.ts 的 EMPTY_DUTY 逐字一致）。 */
     var EMPTY_DUTY = "（未填写职责）";
 
@@ -1439,8 +1519,17 @@ window.__ModuleLoader__.load({
         // 空 lead 保存时会落成 effectiveTeamLead（默认队长），所以校验的必须是**将要写入的那个值**，
         // 否则会出现「校验通过但写进去的队长是队员类型」的静默错配。
         var written = lead !== "" ? lead : effectiveTeamLead(team, customRows);
+        // 队长类型角色每队最多一个：先按 members 统计（同名重复只算一次），再逐条判定。
+        var leadMembers = leadKindMembersOf(team, customRows);
+        var memberCount = Array.isArray(team.members) ? team.members.length : 0;
         if (written !== "" && (!Array.isArray(team.members) || team.members.indexOf(written) < 0)) {
           error.lead = "notMember";
+        } else if (memberCount > 0 && leadMembers.length === 0) {
+          // members 非空却没有队长类型成员：此时 effectiveTeamLead 会回退成 members[0]（队员类型），
+          // 落到下面只会报「不是队长类型」；真正的原因是「缺一个队长类型角色」，故优先报这条。
+          error.lead = "leadRequired";
+        } else if (leadMembers.length > 1) {
+          error.lead = "leadSingle";
         } else if (written !== "" && roleKindOf(written, customRows) !== "lead") {
           // 队员类型当队长：服务端会静默回退成别的角色，这里直接拦截（提示语即「保存将被拒绝」）。
           error.lead = "notLeadKind";
@@ -1828,6 +1917,7 @@ window.__ModuleLoader__.load({
       var teamsFailed = false;
       var teamErrors = [];
       var teamsNotice = "";           // 一次性提示（保留 "activeCleared" 旧词条，本版不再触发）
+      var teamMemberNotice = null;    // 成员勾选被拒的一次性提示 { index, code, name }（null = 无）
       var expandedTeam = -1;          // 展开编辑的团队行下标，-1 = 全收起
       var teamPreview = -1;           // 展开队长提示词预览的团队行下标，-1 = 全收起
       var expandedRole = "";          // 展开详情的角色名，"" = 全收起（角色库/成员/团队三处共用）
@@ -2016,6 +2106,7 @@ window.__ModuleLoader__.load({
           teamsFailed: teamsFailed,
           teamErrors: teamErrors,
           teamsNotice: teamsNotice,
+          teamMemberNotice: teamMemberNotice,
           expandedTeam: expandedTeam,
           teamPreview: teamPreview,
           expandedRole: expandedRole,
@@ -2059,6 +2150,7 @@ window.__ModuleLoader__.load({
           && left.teamsFailed === right.teamsFailed
           && left.teamErrors === right.teamErrors
           && left.teamsNotice === right.teamsNotice
+          && left.teamMemberNotice === right.teamMemberNotice
           && left.expandedTeam === right.expandedTeam
           && left.teamPreview === right.teamPreview
           && left.expandedRole === right.expandedRole
@@ -2632,6 +2724,7 @@ window.__ModuleLoader__.load({
         teamsSaved = false;
         teamsFailed = false;
         teamsNotice = "";
+        teamMemberNotice = null;
         publish();
       }
 
@@ -2864,10 +2957,27 @@ window.__ModuleLoader__.load({
         pushTeamsRows(next);
       }
 
-      /** 勾选/取消一个成员（成员多选）。 */
+      /**
+       * 勾选/取消一个成员（成员多选）。
+       *
+       * 判定全部交给纯函数 {@link toggleMemberState}：一个团队最多一个队长类型角色 ——
+       * 勾选队长类型且队里已有队长类型 → **拒绝**（草稿不动，只记一条提示）；否则自动设为队长。
+       * 取消的若是当前队长 → lead 清空（保存时由 validateTeams 报「必须有一位队长类型角色」）。
+       */
       function toggleTeamMember(index, roleName) {
         if (typeof roleName !== "string" || roleName === "") return;
         if (!canEdit()) return;
+        var rolesNow = currentRoles();
+        var rowsNow = teamsDraft !== null ? teamsDraft.rows : currentTeams();
+        if (index < 0 || index >= rowsNow.length) return;
+        // 先在草稿之外做一次纯判定：被拒时**根本不建草稿**，避免把「点了一下」记成未保存改动。
+        var probe = toggleMemberState(copyTeam(rowsNow[index]), roleName, rolesNow);
+        if (probe.rejected !== "") {
+          teamMemberNotice = { index: index, code: "leadExists", name: probe.currentLead };
+          teamsNotice = "";
+          publish();
+          return;
+        }
         var current = beginTeamsDraft();
         if (index < 0 || index >= current.rows.length) return;
         var next = [];
@@ -2876,9 +2986,9 @@ window.__ModuleLoader__.load({
           var copy = copyTeam(row);
           copy.isNew = row.isNew === true;
           if (i === index) {
-            var at = copy.members.indexOf(roleName);
-            if (at >= 0) copy.members.splice(at, 1);
-            else copy.members.push(roleName);
+            var result = toggleMemberState(copy, roleName, rolesNow);
+            copy.members = result.members;
+            copy.lead = result.lead;
           }
           next.push(copy);
         }
@@ -3012,6 +3122,7 @@ window.__ModuleLoader__.load({
         teamsFailed = false;
         teamErrors = [];
         teamsNotice = "";
+        teamMemberNotice = null;
         expandedTeam = -1;
         publish();
       }
@@ -3061,6 +3172,7 @@ window.__ModuleLoader__.load({
             teamsFailed = false;
             teamsSaved = true;
             teamsNotice = "";
+            teamMemberNotice = null;
             lastValue = undefined;
           } else {
             teamsFailed = true;
@@ -4227,7 +4339,16 @@ window.__ModuleLoader__.load({
                   }(name)
                 }),
                 React.createElement("span", null, skillLabel(name)),
-                React.createElement("span", { className: "cohub-check-id" }, name)
+                React.createElement("span", { className: "cohub-check-id" }, name),
+                // 队长类型角色常驻「只能一位」标注；已加入并担任队长的再标一个「队长」。
+                roleKindOf(name, roles) === "lead"
+                  ? React.createElement("span", { className: "cohub-badge cohub-badge-lead" },
+                    t("teamLeadKindChip"))
+                  : null,
+                team.lead === name
+                  ? React.createElement("span", { className: "cohub-badge cohub-badge-lead" },
+                    t("teamMemberLeadBadge"))
+                  : null
               ),
               // 勾选区旁边常驻一行：档位 · N 个工具；点它展开与角色库同一份详情面板。
               React.createElement("button", {
@@ -4250,15 +4371,25 @@ window.__ModuleLoader__.load({
             React.createElement("div", { className: "cohub-checks" }, boxes)
           ));
         }
+        // 勾选被拒的一次性提示（只在被拒的那一行下方显示，下一次成功编辑即清掉）。
+        var notice = state.teamMemberNotice;
+        if (notice !== null && typeof notice === "object" && notice.index === index) {
+          blocks.push(React.createElement("p", {
+            key: "member-notice",
+            className: "cohub-desc cohub-invalid-label"
+          }, t("teamLeadKindOnly", { name: notice.name })));
+        }
         return blocks;
       }
 
       /**
-       * 队长选择器：选项**只列已勾选且类型为「队长」的成员**（队员类型的 lead 会被服务端
-       * resolveTeamLead 静默回退，validateTeams 也会拦「notLeadKind」）。
-       * 没勾任何成员 → 禁用并提示「先选成员」；lead 为空时按 effectiveTeamLead 预选默认值；
-       * 当前 lead 已不是成员、或类型不是队长（老配置）时，额外留一个标红选项，
-       * 让「保存被拦」的原因在控件上直接可见。
+       * 队长选择器：选项**只列 members 里类型为「队长」的角色**（一个团队最多一位队长类型角色，
+       * 见 {@link toggleMemberState} 与 validateTeams，故通常只有一个）。
+       *   - members 为空 → 禁用并提示「先选成员」；
+       *   - members 非空但没有队长类型角色 → **禁用**并提示「请先勾选一个队长类型的角色作为队长」；
+       *   - 有队长类型成员 → 启用；lead 为空时按 effectiveTeamLead 预选默认值；
+       *     当前 lead 已不是成员、或类型不是队长（老配置）时，额外留一个标红选项，
+       *     让「保存被拦」的原因在控件上直接可见。
        */
       function renderLeadPicker(team, index, title) {
         var members = Array.isArray(team.members) ? team.members : [];
@@ -4272,6 +4403,17 @@ window.__ModuleLoader__.load({
               "aria-label": label
             }, React.createElement("option", { value: "" }, t("teamLeadEmpty"))),
             React.createElement("span", { className: "cohub-desc" }, t("teamLeadEmpty")));
+        }
+        if (leadKindMembersOf(team, roles).length === 0) {
+          return React.createElement("div", { className: "cohub-lead-picker" },
+            React.createElement("select", {
+              className: "cohub-input",
+              disabled: true,
+              value: "",
+              "aria-label": label
+            }, React.createElement("option", { value: "" }, t("teamLeadPickFirst"))),
+            React.createElement("span", { className: "cohub-desc cohub-invalid-label" },
+              t("teamLeadPickFirst")));
         }
         var raw = typeof team.lead === "string" ? team.lead : "";
         var selected = raw !== "" ? raw : effectiveTeamLead(team, roles);
@@ -4441,9 +4583,13 @@ window.__ModuleLoader__.load({
                 renderLeadPicker(team, index, title),
                 error.lead === "notLeadKind"
                   ? React.createElement("p", { className: "cohub-desc cohub-invalid-label" }, t("teamLeadNotLeadKind"))
-                  : error.lead !== ""
-                    ? React.createElement("p", { className: "cohub-desc cohub-invalid-label" }, t("teamErrLeadNotMember"))
-                    : null
+                  : error.lead === "leadSingle"
+                    ? React.createElement("p", { className: "cohub-desc cohub-invalid-label" }, t("teamErrLeadSingle"))
+                    : error.lead === "leadRequired"
+                      ? React.createElement("p", { className: "cohub-desc cohub-invalid-label" }, t("teamErrLeadRequired"))
+                      : error.lead !== ""
+                        ? React.createElement("p", { className: "cohub-desc cohub-invalid-label" }, t("teamErrLeadNotMember"))
+                        : null
               ),
               // 队长提示词实时预览（折叠区）：随成员勾选 / 队长切换即时重算，只读。
               React.createElement("div", { className: "cohub-field cohub-field-wide" },
@@ -4990,6 +5136,8 @@ window.__ModuleLoader__.load({
       tierDistributionOf: tierDistributionOf,
       teamTitle: teamTitle,
       effectiveTeamLead: effectiveTeamLead,
+      leadKindMembersOf: leadKindMembersOf,
+      toggleMemberState: toggleMemberState,
       builtinTeamsOf: builtinTeamsOf,
       isMainAgent: isMainAgent,
       roleTierKey: roleTierKey,

@@ -427,6 +427,37 @@ let zhDict: Record<string, string> = {};
   }]);
   check("用户自建团队 lead 不在 members 仍被拦（notMember）",
     danglingLead.length === 1 && danglingLead[0].lead === "notMember");
+
+  // ── 一个团队最多一个「队长类型」角色（勾选拦截 / 自动设队长 / 取消清空 / 保存校验）──
+  const firstLead = internals.toggleMemberState({ members: [], lead: "" }, "co-team-lead", []);
+  check("空团队勾队长类型角色 → 允许且自动设为队长",
+    firstLead.rejected === "" && firstLead.members.join(",") === "co-team-lead"
+    && firstLead.lead === "co-team-lead");
+  const secondLead = internals.toggleMemberState(
+    { members: ["co-team-lead"], lead: "co-team-lead" }, "co-orchestrator", []);
+  check("已有队长类型成员再勾另一个队长类型 → 拒绝且提示当前队长",
+    secondLead.rejected === "co-orchestrator" && secondLead.currentLead === "co-team-lead"
+    && secondLead.members.join(",") === "co-team-lead" && secondLead.lead === "co-team-lead");
+  const memberTick = internals.toggleMemberState(
+    { members: ["co-team-lead"], lead: "co-team-lead" }, "co-writer", []);
+  check("勾选队员类型角色 → 正常加入且队长不变",
+    memberTick.rejected === "" && memberTick.members.join(",") === "co-team-lead,co-writer"
+    && memberTick.lead === "co-team-lead");
+  const leadUntick = internals.toggleMemberState(
+    { members: ["co-team-lead", "co-writer"], lead: "co-team-lead" }, "co-team-lead", []);
+  check("取消勾选当前队长 → lead 清空（团队暂时无队长）",
+    leadUntick.rejected === "" && leadUntick.members.join(",") === "co-writer" && leadUntick.lead === "");
+  const noLead = internals.validateTeams([{
+    id: "my-team", name: "我的团队", members: ["co-writer"], lead: "", presetId: "",
+  }]);
+  check("members 非空但无队长类型角色 → 保存被拦（leadRequired）",
+    noLead.length === 1 && noLead[0].lead === "leadRequired");
+  const twoLeads = internals.validateTeams([{
+    id: "my-team", name: "我的团队",
+    members: ["co-team-lead", "co-orchestrator"], lead: "co-team-lead", presetId: "",
+  }]);
+  check("两个队长类型角色同队 → 保存被拦（leadSingle）",
+    twoLeads.length === 1 && twoLeads[0].lead === "leadSingle");
 }
 
 // ── 层 5：组件渲染契约（5 个特殊态 + 状态提示） ──
