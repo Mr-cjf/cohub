@@ -297,6 +297,10 @@ window.__ModuleLoader__.load({
       roleModelPickModel: "选择模型",
       roleModelReasoning: "推理强度",
       roleModelReasoningHint: "默认 = 跟随会话设置",
+      // 推理强度分段按钮下方的只读生效值（前缀 + 档位名 / 「跟随会话设置」）。
+      roleModelEffortNowPrefix: "当前：",
+      roleModelEffortInherit: "跟随会话设置",
+      roleModelEffortUnsupported: "该模型不支持调整推理强度",
       roleModelMaxOutput: "最大输出",
       roleModelMaxOutputPlaceholder: "例如 4000",
       roleModelReset: "恢复默认",
@@ -534,6 +538,9 @@ window.__ModuleLoader__.load({
       roleModelPickModel: "Pick a model",
       roleModelReasoning: "Reasoning effort",
       roleModelReasoningHint: "Default follows the session setting",
+      roleModelEffortNowPrefix: "Current: ",
+      roleModelEffortInherit: "Follow the session setting",
+      roleModelEffortUnsupported: "This model does not support reasoning effort",
       roleModelMaxOutput: "Max output",
       roleModelMaxOutputPlaceholder: "e.g. 4000",
       roleModelReset: "Reset",
@@ -3519,7 +3526,13 @@ window.__ModuleLoader__.load({
         ".cohub-tool-plugin{margin-left:6px;color:var(--dsw-alias-label-tertiary);}",
         ".cohub-check-item{display:flex;flex-direction:column;gap:4px;flex:1 1 220px;min-width:0;}",
         ".cohub-tier-chip{align-self:flex-start;background:transparent;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:0 8px;font:inherit;font-size:11px;line-height:17px;color:var(--dsw-alias-label-tertiary);cursor:pointer;}",
-        ".cohub-tier-chip:hover{color:var(--dsw-alias-label-primary);}",
+        ".cohub-tier-chip:hover:not(:disabled){color:var(--dsw-alias-label-primary);}",
+        // 选中态必须一眼可辨：主色实底 + 白字（未选中仍是描边），并覆盖 hover 的字色。
+        ".cohub-tier-chip:disabled{opacity:.45;cursor:default;}",
+        ".cohub-tier-chip.cohub-tier-chip-on{background:var(--dsw-alias-brand-primary,#2f6feb);border-color:var(--dsw-alias-brand-primary,#2f6feb);color:#fff;font-weight:650;}",
+        ".cohub-tier-chip.cohub-tier-chip-on:hover:not(:disabled){background:var(--dsw-alias-brand-primary,#2f6feb);border-color:var(--dsw-alias-brand-primary,#2f6feb);color:#fff;}",
+        ".cohub-effort-now{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);}",
+        ".cohub-effort-now strong{font-weight:650;color:var(--dsw-alias-label-primary);}",
         ".cohub-tier-dist{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:17px;}",
         // ── 角色类型（队长 / 队员 分段按钮）与队长提示词预览（只读 pre） ──
         ".cohub-kind-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}",
@@ -3680,6 +3693,15 @@ window.__ModuleLoader__.load({
         return skillLabel(templateId);
       }
 
+      /** 推理强度档位 → 展示名（空 = 跟随会话设置，未知档位原样显示 id）。 */
+      function effortLabelOf(value) {
+        if (value === "") return t("roleModelEffortInherit");
+        if (value === "low") return t("effort.low");
+        if (value === "medium") return t("effort.medium");
+        if (value === "high") return t("effort.high");
+        return value;
+      }
+
       /**
        * 模型区：供应商（真实目录，取不到只有「继承默认」）→ 模型联动 →
        * 推理强度分段按钮（默认/低/中/高 = ""/low/medium/high）→ 最大输出 → 恢复默认。
@@ -3705,6 +3727,17 @@ window.__ModuleLoader__.load({
             modelOptions.push(React.createElement("option", { key: models[m].id, value: models[m].id }, models[m].label));
           }
         }
+        // 模型目录口径：effortsByModel[provider][modelId] 缺失 = 该模型不支持推理强度；
+        // 目录未就绪（loading/error）时不做判断，避免加载中把控件误禁用。
+        var effortCatalog = state.effortsByModel || {};
+        var providerEfforts = provider !== "" && effortCatalog[provider] ? effortCatalog[provider] : null;
+        var modelEfforts = providerEfforts !== null && model !== "" && Array.isArray(providerEfforts[model])
+          ? providerEfforts[model]
+          : null;
+        var effortUnsupported = !disabled && provider !== "" && model !== ""
+          && state.catalogStatus === "ready"
+          && (modelEfforts === null || modelEfforts.length === 0);
+        var effortDisabled = disabled || effortUnsupported;
         var effortChoices = [["", "effort.default"], ["low", "effort.low"], ["medium", "effort.medium"], ["high", "effort.high"]];
         var effortButtons = [];
         for (var e = 0; e < effortChoices.length; e += 1) {
@@ -3713,11 +3746,13 @@ window.__ModuleLoader__.load({
           effortButtons.push(React.createElement("button", {
             key: choice === "" ? "__default" : choice,
             type: "button",
-            className: active ? "cohub-tier-chip cohub-seg-active" : "cohub-tier-chip",
+            className: active ? "cohub-tier-chip cohub-tier-chip-on" : "cohub-tier-chip",
             "aria-pressed": active,
-            disabled: disabled,
+            disabled: effortDisabled,
             onClick: function (value) {
               return function () {
+                // 与供应商/模型同一通道：写 Config.skills 草稿并 publish 触发重渲染，
+                // 点击后立刻看到高亮与下方「当前：」文案变化。
                 props.editSkill(name, "reasoningEffort", value);
               };
             }(choice)
@@ -3752,7 +3787,12 @@ window.__ModuleLoader__.load({
           React.createElement("div", { className: "cohub-field" },
             React.createElement("span", { className: "cohub-label" }, t("roleModelReasoning")),
             React.createElement("div", { className: "cohub-actions" }, effortButtons),
-            React.createElement("small", { className: "cohub-desc" }, t("roleModelReasoningHint"))
+            React.createElement("p", { className: "cohub-effort-now" },
+              t("roleModelEffortNowPrefix"),
+              React.createElement("strong", null, effortLabelOf(effort))),
+            effortUnsupported
+              ? React.createElement("small", { className: "cohub-desc cohub-notice-warn" }, t("roleModelEffortUnsupported"))
+              : React.createElement("small", { className: "cohub-desc" }, t("roleModelReasoningHint"))
           ),
           React.createElement("div", { className: "cohub-field" },
             React.createElement("label", { className: "cohub-label" }, t("roleModelMaxOutput")),
