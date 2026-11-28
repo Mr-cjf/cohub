@@ -3455,6 +3455,13 @@ window.__ModuleLoader__.load({
         ".cohub-role-search{width:min(100%,420px);margin:0 0 4px;}",
         ".cohub-role-search .cohub-input{width:100%;}",
         ".cohub-model-block,.cohub-tool-block{margin-top:10px;}",
+        ".cohub-model-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}",
+        ".cohub-model-effort-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;}",
+        ".cohub-effort-buttons{justify-content:flex-start;}",
+        ".cohub-effort-now{margin:0 0 0 auto;white-space:nowrap;}",
+        ".cohub-model-output-row{display:flex;align-items:flex-end;gap:8px;}",
+        ".cohub-model-output-row>.cohub-field{flex:1;min-width:0;}",
+        ".cohub-model-output-row>.cohub-actions{flex:0 0 auto;}",
         ".cohub-notice-ok{color:var(--dsw-alias-state-success-primary);}",
         ".cohub-rows{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;}",
         ".cohub-row{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;padding:10px 12px;background:var(--dsw-alias-bg-layer-2);}",
@@ -3486,9 +3493,10 @@ window.__ModuleLoader__.load({
         ".cohub-roles{display:flex;flex-direction:column;gap:12px;margin-top:8px;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2);}",
         ".cohub-subtitle{margin:0;font-size:14px;font-weight:600;line-height:22px;}",
         ".cohub-role-summary{flex:1 1 140px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;}",
-        // 名称 + 档位并排，描述与提示词各自独占一行（prompt 是多行文本域，需要整行宽度）。
-        ".cohub-role-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,150px);gap:8px;margin-top:8px;align-items:start;}",
-        "@media (max-width:560px){.cohub-role-fields{grid-template-columns:minmax(0,1fr);}}",
+        // 名称与类型并排，其余字段占满整行。
+        ".cohub-role-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px;align-items:start;}",
+        ".cohub-role-fields>:nth-child(n+3){grid-column:1/-1;}",
+        "@media (max-width:519px){.cohub-role-fields{grid-template-columns:minmax(0,1fr);}.cohub-role-fields>*{grid-column:1/-1;}.cohub-model-pair{grid-template-columns:minmax(0,1fr);}}",
         ".cohub-field-wide{grid-column:1 / -1;}",
         ".cohub-textarea{box-sizing:border-box;width:100%;min-height:64px;resize:vertical;font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;font-size:13px;line-height:20px;}",
         ".cohub-textarea:focus-visible{border-color:var(--dsw-alias-brand-primary);outline:none;}",
@@ -3508,9 +3516,15 @@ window.__ModuleLoader__.load({
          ".cohub-team-body{margin-top:8px;display:flex;flex-direction:column;gap:8px;}",
         ".cohub-check-group{display:flex;flex-direction:column;gap:4px;}",
         ".cohub-checks{display:flex;flex-wrap:wrap;gap:6px 14px;}",
-        ".cohub-check{display:flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);cursor:pointer;}",
-        ".cohub-check input{margin:0;cursor:pointer;}",
+        ".cohub-check{display:flex;align-items:center;gap:8px;min-width:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);cursor:pointer;}",
+        ".cohub-check input{flex:0 0 auto;margin:0;cursor:pointer;}",
+        ".cohub-check-name{flex:0 0 auto;white-space:nowrap;}",
         ".cohub-check-id{color:var(--dsw-alias-label-tertiary);}",
+        ".cohub-tool-block .cohub-checks{display:flex;flex-direction:column;gap:2px;}",
+        ".cohub-tool-block .cohub-check{width:100%;flex:0 0 auto;}",
+        ".cohub-tool-block .cohub-check-id{margin-left:auto;min-width:0;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;}",
+        ".cohub-tool-block .cohub-check-group+.cohub-check-group{margin-top:8px;padding-top:6px;border-top:1px solid var(--dsw-alias-border-l2);}",
+        ".cohub-tool-block .cohub-check-group>.cohub-label{font-size:11px;line-height:16px;}",
         ".cohub-invalid-label{color:var(--dsw-alias-state-error-primary);}",
         // ── 角色详情：档位 / 提示词（等宽只读块）/ 绑定工具；成员格 + 档位分布摘要 ──
         ".cohub-sublabel{margin:0;font-size:13px;font-weight:600;line-height:20px;color:var(--dsw-alias-label-secondary);}",
@@ -3793,65 +3807,71 @@ window.__ModuleLoader__.load({
         }
         return React.createElement("div", { className: "cohub-detail-block cohub-model-block" },
           React.createElement("p", { className: "cohub-label" }, t("roleModelTitle")),
-          React.createElement("div", { className: "cohub-field" },
-            React.createElement("label", { className: "cohub-label" }, t("roleModelProvider")),
-            React.createElement("select", {
-              className: "cohub-select",
-              value: provider,
-              disabled: disabled,
-              "aria-label": name + " · " + t("roleModelProvider"),
-              onChange: function (event) {
-                props.editSkill(name, "provider", event.target.value);
-              }
-            }, providerOptions)
+          React.createElement("div", { className: "cohub-model-pair" },
+            React.createElement("div", { className: "cohub-field" },
+              React.createElement("label", { className: "cohub-label" }, t("roleModelProvider")),
+              React.createElement("select", {
+                className: "cohub-select",
+                value: provider,
+                disabled: disabled,
+                "aria-label": name + " · " + t("roleModelProvider"),
+                onChange: function (event) {
+                  props.editSkill(name, "provider", event.target.value);
+                }
+              }, providerOptions)
+            ),
+            React.createElement("div", { className: "cohub-field" },
+              React.createElement("label", { className: "cohub-label" }, t("roleModelModel")),
+              React.createElement("select", {
+                className: "cohub-select",
+                value: model,
+                disabled: disabled || provider === "",
+                "aria-label": name + " · " + t("roleModelModel"),
+                onChange: function (event) {
+                  props.editSkill(name, "model", event.target.value);
+                }
+              }, modelOptions)
+            )
           ),
-          React.createElement("div", { className: "cohub-field" },
-            React.createElement("label", { className: "cohub-label" }, t("roleModelModel")),
-            React.createElement("select", {
-              className: "cohub-select",
-              value: model,
-              disabled: disabled || provider === "",
-              "aria-label": name + " · " + t("roleModelModel"),
-              onChange: function (event) {
-                props.editSkill(name, "model", event.target.value);
-              }
-            }, modelOptions)
-          ),
-          React.createElement("div", { className: "cohub-field" },
+          React.createElement("div", { className: "cohub-field cohub-model-effort" },
             React.createElement("span", { className: "cohub-label" }, t("roleModelReasoning")),
-            React.createElement("div", { className: "cohub-actions" }, effortButtons),
-            React.createElement("p", { className: "cohub-effort-now" },
-              t("roleModelEffortNowPrefix"),
-              React.createElement("strong", null, effortLabelOf(effort))),
+            React.createElement("div", { className: "cohub-model-effort-row" },
+              React.createElement("div", { className: "cohub-actions cohub-effort-buttons" }, effortButtons),
+              React.createElement("p", { className: "cohub-effort-now" },
+                t("roleModelEffortNowPrefix"),
+                React.createElement("strong", null, effortLabelOf(effort)))
+            ),
             effortUnsupported
               ? React.createElement("small", { className: "cohub-desc cohub-notice-warn" }, t("roleModelEffortUnsupported"))
               : React.createElement("small", { className: "cohub-desc" }, t("roleModelReasoningHint"))
           ),
-          React.createElement("div", { className: "cohub-field" },
-            React.createElement("label", { className: "cohub-label" }, t("roleModelMaxOutput")),
-            React.createElement("input", {
-              className: "cohub-input",
-              type: "number",
-              min: 1,
-              step: 1,
-              value: maxTokens,
-              disabled: disabled || provider === "",
-              placeholder: t("roleModelMaxOutputPlaceholder"),
-              "aria-label": name + " · " + t("roleModelMaxOutput"),
-              onChange: function (event) {
-                props.editSkill(name, "maxTokens", event.target.value);
-              }
-            })
-          ),
-          React.createElement("div", { className: "cohub-actions" },
-            React.createElement("button", {
-              type: "button",
-              className: "cohub-button cohub-button-ghost",
-              disabled: disabled,
-              onClick: function () {
-                props.resetSkill(name);
-              }
-            }, t("roleModelReset"))
+          React.createElement("div", { className: "cohub-model-output-row" },
+            React.createElement("div", { className: "cohub-field" },
+              React.createElement("label", { className: "cohub-label" }, t("roleModelMaxOutput")),
+              React.createElement("input", {
+                className: "cohub-input",
+                type: "number",
+                min: 1,
+                step: 1,
+                value: maxTokens,
+                disabled: disabled || provider === "",
+                placeholder: t("roleModelMaxOutputPlaceholder"),
+                "aria-label": name + " · " + t("roleModelMaxOutput"),
+                onChange: function (event) {
+                  props.editSkill(name, "maxTokens", event.target.value);
+                }
+              })
+            ),
+            React.createElement("div", { className: "cohub-actions" },
+              React.createElement("button", {
+                type: "button",
+                className: "cohub-button cohub-button-ghost",
+                disabled: disabled,
+                onClick: function () {
+                  props.resetSkill(name);
+                }
+              }, t("roleModelReset"))
+            )
           )
         );
       }
@@ -3896,7 +3916,7 @@ window.__ModuleLoader__.load({
                   };
                 }(item.id, !checked)
               }),
-              React.createElement("span", null, t("tool." + item.id)),
+              React.createElement("span", { className: "cohub-check-name" }, t("tool." + item.id)),
               React.createElement("span", { className: "cohub-check-id" }, item.plugin),
               item.gate ? React.createElement("span", { className: "cohub-badge cohub-badge-muted" }, t("gate." + item.gate)) : null
             ));
@@ -4354,17 +4374,14 @@ window.__ModuleLoader__.load({
                 }
               })
             ),
+            // 角色类型（必填）：与名称并列；没选时整行标红并给出提示。
             React.createElement("div", { className: "cohub-field" },
-              React.createElement("label", { className: "cohub-label" }, t("roleTier")),
-              React.createElement("select", {
-                className: "cohub-select",
-                value: role.tier,
-                disabled: locked,
-                "aria-label": typeLabel + " · " + t("roleTier"),
-                onChange: function (event) {
-                  props.editRole(index, "tier", event.target.value);
-                }
-              }, tierOptions)
+              React.createElement("label", {
+                className: error.kind !== "" ? "cohub-label cohub-invalid-label" : "cohub-label"
+              }, t("roleKind")),
+              React.createElement("div", { className: "cohub-kind-row" }, kindButtons),
+              React.createElement("p", { className: "cohub-desc" }, t("roleKindHint")),
+              error.kind !== "" ? React.createElement("p", { className: "cohub-role-error" }, t("roleErrKind")) : null
             ),
             React.createElement("div", { className: "cohub-field cohub-field-wide" },
               React.createElement("label", { className: "cohub-label" }, t("roleDescription")),
@@ -4392,14 +4409,17 @@ window.__ModuleLoader__.load({
                 }
               })
             ),
-            // 角色类型（必填）：两个分段按钮；没选时整行标红并给出「请选择角色类型」。
             React.createElement("div", { className: "cohub-field cohub-field-wide" },
-              React.createElement("label", {
-                className: error.kind !== "" ? "cohub-label cohub-invalid-label" : "cohub-label"
-              }, t("roleKind")),
-              React.createElement("div", { className: "cohub-kind-row" }, kindButtons),
-              React.createElement("p", { className: "cohub-desc" }, t("roleKindHint")),
-              error.kind !== "" ? React.createElement("p", { className: "cohub-role-error" }, t("roleErrKind")) : null
+              React.createElement("label", { className: "cohub-label" }, t("roleTier")),
+              React.createElement("select", {
+                className: "cohub-select",
+                value: role.tier,
+                disabled: locked,
+                "aria-label": typeLabel + " · " + t("roleTier"),
+                onChange: function (event) {
+                  props.editRole(index, "tier", event.target.value);
+                }
+              }, tierOptions)
             )
           ),
           // 模板状态行：已选 → 「基于模板：xxx」+「重新选择模板」；未选 → 禁用提示。
