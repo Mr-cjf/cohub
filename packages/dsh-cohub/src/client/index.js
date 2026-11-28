@@ -285,6 +285,11 @@ window.__ModuleLoader__.load({
       roleMainBadge: "通用编排主代理 · 纯调度 · 不绑定档位",
       roleMainNew: "以此模板新建",
       roleMainDetail: "查看详情",
+      // 内置角色卡与新建入口的模板动作：写 customRoles（与「编辑」写 roleOverrides 不同）。
+      roleTemplateNew: "以此模板新建",
+      roleSearchPlaceholder: "搜索角色名或职责…",
+      roleSearchLabel: "搜索角色名或职责",
+      roleSearchEmpty: "没有匹配的角色：换个关键词，或清空搜索查看全部。",
       "effort.default": "默认",
       "effort.low": "低",
       "effort.medium": "中",
@@ -500,6 +505,10 @@ window.__ModuleLoader__.load({
       roleMainBadge: "General orchestrator · dispatch only · no tier",
       roleMainNew: "New role from this template",
       roleMainDetail: "View details",
+      roleTemplateNew: "New role from this template",
+      roleSearchPlaceholder: "Search role name or responsibility…",
+      roleSearchLabel: "Search role name or responsibility",
+      roleSearchEmpty: "No matching roles: try another keyword, or clear the search to see all.",
       "effort.default": "Default",
       "effort.low": "Low",
       "effort.medium": "Medium",
@@ -1071,6 +1080,17 @@ window.__ModuleLoader__.load({
         n += 1;
       }
       return candidate;
+    }
+
+    /**
+     * 角色库搜索匹配（纯函数）：关键词与「角色名 + 职责」文本的**不区分大小写**子串匹配。
+     * 只影响渲染过滤，不改任何数据；关键词为空（含纯空格）时全部命中。
+     */
+    function roleMatchesSearch(keyword, text) {
+      var needle = typeof keyword === "string" ? keyword.trim().toLowerCase() : "";
+      if (needle === "") return true;
+      var haystack = typeof text === "string" ? text.toLowerCase() : "";
+      return haystack.indexOf(needle) >= 0;
     }
 
     /**
@@ -1759,11 +1779,23 @@ window.__ModuleLoader__.load({
       // 组件体内的任何 hook 都会抛 Invalid hook call，进而让整个设置节注册失败。
       var tab = "teams";
 
+      // 角色库搜索关键词：同样只活在 controller 闭包里（不写配置、不是 hook），
+      // 只用于过滤渲染，清空即恢复全部。
+      var roleSearch = "";
+
       /** 切换设置页 tab：先归一（脏值回落 teams），变了才写闭包态并发布一次。 */
       function setTab(next) {
         var normalized = normalizeTab(next);
         if (normalized === tab) return;
         tab = normalized;
+        publish();
+      }
+
+      /** 角色库搜索：值变了才发布（输入框每敲一个字符都会走到这里）。 */
+      function setRoleSearch(next) {
+        var normalized = typeof next === "string" ? next : "";
+        if (normalized === roleSearch) return;
+        roleSearch = normalized;
         publish();
       }
 
@@ -1972,6 +2004,7 @@ window.__ModuleLoader__.load({
           roleErrors: roleErrors,
           roleTemplates: roleTemplates,
           rolePicker: rolePicker,
+          roleSearch: roleSearch,
           overrides: currentOverrides(),
           builtinEdit: builtinEdit,
           builtinEditNotice: builtinEditNotice,
@@ -2014,6 +2047,7 @@ window.__ModuleLoader__.load({
           && left.roleErrors === right.roleErrors
           && left.roleTemplates === right.roleTemplates
           && left.rolePicker === right.rolePicker
+          && left.roleSearch === right.roleSearch
           && left.overrides === right.overrides
           && left.builtinEdit === right.builtinEdit
           && left.builtinEditNotice === right.builtinEditNotice
@@ -2495,17 +2529,17 @@ window.__ModuleLoader__.load({
         publish();
       }
 
-      /** 主代理卡「以此模板新建」：加一行并套上通用队长 co-team-lead（co-orchestrator 提示词写死成员名单，不作模板）。 */
-      function newRoleFromMain() {
+      /**
+       * 内置角色卡「以此模板新建」：加一行自定义角色草稿，再用该内置角色的
+       * description / brief / tier / tools / kind 预填（name 加 -copy 后缀并自动消歧）。
+       * 与「编辑」不同：这里写的是 Config.customRoles，不动 Config.roleOverrides。
+       */
+      function newRoleFromTemplate(templateId) {
         if (!canEdit()) return;
-        var current = beginRolesDraft();
-        var next = [];
-        for (var i = 0; i < current.rows.length; i += 1) next.push(copyRole(current.rows[i]));
-        next.push(emptyRole());
-        rolesDraft.rows = next;
-        syncRoleTemplates(next.length);
-        publish();
-        chooseTemplate(next.length - 1, "co-team-lead");
+        addRole();
+        if (rolesDraft === null || rolesDraft.rows.length === 0) return;
+        var index = rolesDraft.rows.length - 1;
+        chooseTemplate(index, templateId);
       }
 
       /**
@@ -3165,7 +3199,8 @@ window.__ModuleLoader__.load({
         chooseTemplate: chooseTemplate,
         applyTierTools: applyTierTools,
         toggleRolePicker: toggleRolePicker,
-        newRoleFromMain: newRoleFromMain,
+        newRoleFromTemplate: newRoleFromTemplate,
+        setRoleSearch: setRoleSearch,
         editSkillRow: editSkillRow,
         resetSkillRow: resetSkillRow,
         toggleTeam: toggleTeam,
@@ -3227,7 +3262,9 @@ window.__ModuleLoader__.load({
         ".cohub-template-card{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:9px 11px;border:1px solid var(--dsw-alias-border-weak,#35434d);border-radius:6px;background:var(--dsw-alias-bg-raised,#1d2227);}",
         ".cohub-template-card:hover{border-color:var(--dsw-alias-border-strong,#4b7193);}",
         ".cohub-template-main{border-color:var(--dsw-alias-state-info-primary,#3f6f9e);background:var(--dsw-alias-bg-info-weak,#1c2c3b);grid-column:1/-1;}",
-        ".cohub-row-main{border-left:2px solid var(--dsw-alias-state-info-primary,#3f6f9e);}",
+        // 角色库搜索框：宽度与原型一致（上限 420px），只过滤渲染、不改数据。
+        ".cohub-role-search{width:min(100%,420px);margin:0 0 4px;}",
+        ".cohub-role-search .cohub-input{width:100%;}",
         ".cohub-model-block,.cohub-tool-block{margin-top:10px;}",
         ".cohub-notice-ok{color:var(--dsw-alias-state-success-primary);}",
         ".cohub-rows{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;}",
@@ -3910,7 +3947,18 @@ window.__ModuleLoader__.load({
               onClick: function () {
                 props.toggleRoleDetail(name);
               }
-            }, expanded ? t("roleDetailCollapse") : t("roleDetailToggle"))
+            }, expanded ? t("roleDetailCollapse") : t("roleDetailToggle")),
+            // 第三个动作：以该内置角色的职责 / 提示词 / 档位 / 工具 / 类型预填一条
+            // **自定义角色**草稿（写 Config.customRoles），与上面的「编辑」写 roleOverrides 不同。
+            React.createElement("button", {
+              type: "button",
+              className: "cohub-row-reset",
+              disabled: locked,
+              "aria-label": skillLabel(name) + " · " + t("roleTemplateNew"),
+              onClick: function () {
+                props.newRoleFromTemplate(name);
+              }
+            }, t("roleTemplateNew"))
           ),
           editing ? renderBuiltinEditor(name, detail) : null,
           notice === "saved" ? React.createElement("p", { className: "cohub-desc" }, t("roleOverrideSaved")) : null,
@@ -4085,12 +4133,28 @@ window.__ModuleLoader__.load({
         );
       }
 
+      // 角色库搜索：只过滤渲染（角色名 + 职责，不区分大小写），不改任何草稿或配置。
+      // 关键词为空时 roleMatchesSearch 恒真，即「清空恢复全部」。
+      var roleQuery = typeof state.roleSearch === "string" ? state.roleSearch : "";
+      var roleHits = 0;
+
       var roleItems = [];
-      for (var r = 0; r < roles.length; r += 1) roleItems.push(renderRole(roles[r], r));
+      for (var r = 0; r < roles.length; r += 1) {
+        var row = roles[r] || {};
+        if (!roleMatchesSearch(roleQuery, (row.name || "") + " " + (row.description || ""))) continue;
+        // 保留真实行下标：编辑 / 删除动作都按它定位草稿行，过滤不能重排。
+        roleItems.push(renderRole(roles[r], r));
+        roleHits += 1;
+      }
 
       var builtinRoleItems = [];
       for (var br = 0; br < BUILTIN_ROLE_NAMES.length; br += 1) {
-        builtinRoleItems.push(renderBuiltinRole(BUILTIN_ROLE_NAMES[br]));
+        var builtinName = BUILTIN_ROLE_NAMES[br];
+        var builtinDetail = roleDetailOf(builtinName, roles, overrides);
+        var builtinText = skillLabel(builtinName) + " " + builtinName + " " + builtinDetail.description;
+        if (!roleMatchesSearch(roleQuery, builtinText)) continue;
+        builtinRoleItems.push(renderBuiltinRole(builtinName));
+        roleHits += 1;
       }
 
       var roleErrorCount = countRoleErrors(roleErrors);
@@ -4579,51 +4643,38 @@ window.__ModuleLoader__.load({
         )
       );
 
-      // 角色库顶部固定一张主代理卡：标注纯调度 / 不绑定档位，可直接「以此模板新建」。
-      var mainRoleCard = React.createElement("ul", { className: "cohub-rows" },
-        React.createElement("li", { className: "cohub-row cohub-row-catalog cohub-row-main" },
-          React.createElement("div", { className: "cohub-row-head" },
-            React.createElement("span", { className: "cohub-row-name" }, MAIN_AGENT_NAME),
-            React.createElement("span", { className: "cohub-role-summary" }, t("roleMainBadge")),
-            modelPill(MAIN_AGENT_NAME),
-            React.createElement("button", {
-              type: "button",
-              className: "cohub-row-reset",
-              disabled: locked,
-              "aria-expanded": state.expandedRole === MAIN_AGENT_NAME,
-              onClick: function () {
-                props.toggleRoleDetail(MAIN_AGENT_NAME);
-              }
-            }, state.expandedRole === MAIN_AGENT_NAME ? t("roleDetailCollapse") : t("roleMainDetail")),
-            React.createElement("button", {
-              type: "button",
-              className: "cohub-row-reset",
-              disabled: locked,
-              onClick: function () {
-                props.newRoleFromMain();
-              }
-            }, t("roleMainNew"))
-          ),
-          state.expandedRole === MAIN_AGENT_NAME
-            ? React.createElement("div", { key: "main-detail" },
-              renderRoleDetail(MAIN_AGENT_NAME),
-              React.createElement("p", { className: "cohub-desc" }, t("roleModelBuiltinNote")),
-              renderRoleModel(MAIN_AGENT_NAME, locked))
-            : null
-        )
-      );
+      // 角色库顶部不再固定主代理卡：co-orchestrator 就是内置角色之一（在下面的内置列表里
+      // 正常显示，可查看详情 / 编辑 / 以此模板新建），没有专属占位。
 
       var rolesBlock = React.createElement("div", { className: "cohub-roles" },
         React.createElement("h3", { className: "cohub-subtitle" }, t("rolesTitle")),
         React.createElement("p", { className: "cohub-desc cohub-tab-hint" }, t("rolesTabHint")),
         React.createElement("p", { className: "cohub-desc" }, t("rolesDescription")),
-        mainRoleCard,
-        // 内置角色：只读卡片，与下面的自定义角色共用同一份详情面板。
-        React.createElement("div", { className: "cohub-roles" },
-          React.createElement("p", { className: "cohub-sublabel" }, t("builtinRolesTitle")),
-          React.createElement("p", { className: "cohub-desc" }, t("builtinRolesDescription")),
-          React.createElement("ul", { className: "cohub-rows" }, builtinRoleItems)
+        // 搜索：只过滤渲染（角色名 + 职责），不改数据；清空即恢复全部。
+        React.createElement("div", { className: "cohub-role-search" },
+          React.createElement("input", {
+            type: "search",
+            className: "cohub-input",
+            value: roleQuery,
+            placeholder: t("roleSearchPlaceholder"),
+            "aria-label": t("roleSearchLabel"),
+            disabled: locked,
+            onChange: function (event) {
+              props.setRoleSearch(event.target.value);
+            }
+          })
         ),
+        // 内置角色：只读卡片，与下面的自定义角色共用同一份详情面板。
+        builtinRoleItems.length === 0
+          ? null
+          : React.createElement("div", { className: "cohub-roles" },
+            React.createElement("p", { className: "cohub-sublabel" }, t("builtinRolesTitle")),
+            React.createElement("p", { className: "cohub-desc" }, t("builtinRolesDescription")),
+            React.createElement("ul", { className: "cohub-rows" }, builtinRoleItems)
+          ),
+        roleQuery.trim() !== "" && roleHits === 0
+          ? React.createElement("p", { className: "cohub-notice" }, t("roleSearchEmpty"))
+          : null,
         roles.length === 0
           ? React.createElement("p", { className: "cohub-notice" }, t("roleEmpty"))
           : React.createElement("ul", { className: "cohub-rows" }, roleItems),
@@ -4817,8 +4868,11 @@ window.__ModuleLoader__.load({
           toggleRolePicker: function (index) {
             controller.toggleRolePicker(index);
           },
-          newRoleFromMain: function () {
-            controller.newRoleFromMain();
+          newRoleFromTemplate: function (templateId) {
+            controller.newRoleFromTemplate(templateId);
+          },
+          setRoleSearch: function (value) {
+            controller.setRoleSearch(value);
           },
           editSkill: function (name, field, value) {
             controller.editSkillRow(name, field, value);

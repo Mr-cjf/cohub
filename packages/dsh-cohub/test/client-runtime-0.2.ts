@@ -123,6 +123,7 @@ let captured: { id?: string; factory?: (require: (id: string) => unknown) => any
 
 // ── 层 3：执行 apply —— settings.section 注册形状 + configForms 读写 + 目录加载 + 冲突栅栏 ──
 let sectionComponent: any = null;
+let roleLibraryFace: any = null;
 let zhDict: Record<string, string> = {};
 {
   console.log("===== 层 3：apply 行为（settings.section / configForms / modelCatalog） =====");
@@ -243,6 +244,7 @@ let zhDict: Record<string, string> = {};
   check("section 暴露 inject 面", typeof injectedFace === "function");
   const face = typeof injectedFace === "function" ? injectedFace() : {};
   const observable = face?.hooks?.cohubSkills;
+  roleLibraryFace = face;
   check("hooks.cohubSkills 是可观察量（getSnapshot/subscribe）",
     !!observable && typeof observable.getSnapshot === "function" && typeof observable.subscribe === "function");
 
@@ -516,9 +518,10 @@ let zhDict: Record<string, string> = {};
     BUILTIN_NAMES.every((name) => textOf(plain).includes(zhDict["skill." + name])));
   check("折叠态不渲染运行模型区（模型配置收进角色详情，不再有顶部全局区块）",
     blocksOf(plain, "cohub-model-block").length === 0);
-  check("角色库顶部固定一张主代理卡（co-orchestrator）",
-    blocksOf(plain, "cohub-row-main").length === 1
-    && textOf(blocksOf(plain, "cohub-row-main")[0]).includes("co-orchestrator"));
+  // 角色库不再固定主代理卡：co-orchestrator 回到内置角色列表（0.13.24 对齐原型）。
+  check("没有主代理专属卡：co-orchestrator 作为内置角色之一渲染",
+    blocksOf(plain, "cohub-row-main").length === 0
+    && textOf(plain).includes(zhDict["skill.co-orchestrator"]));
 
   // provider 为空 → 模型下拉禁用并提示「先选供应商」；供应商下拉必须有 value="" 的继承默认项
   const mainExpanded = render(baseState({ expandedRole: "co-orchestrator" }));
@@ -640,13 +643,12 @@ let zhDict: Record<string, string> = {};
       "co-fixer", "co-designer", "co-council", "co-rule-user", "co-rule-project", "co-rule-app", "co-cordis",
     ].map((name) => ({ name, provider: "", model: "", extra: {} })),
   }));
-  // 只读目录卡：18 个内置角色 + 顶部主代理卡都带「查看详情」（aria-expanded）；团队卡没有。
+  // 只读目录卡：18 个内置角色都带「查看详情」（aria-expanded）；团队卡没有。
   const detailCards = blocksOf(allRows, "cohub-row-catalog")
     .filter((el) => collect(el, "button").some((b) => "aria-expanded" in (b.props ?? {})));
   const builtinCards = detailCards
-    .filter((el) => !String(el.props?.className ?? "").split(/\s+/).includes("cohub-row-main"))
     .filter((el) => BUILTIN_NAMES.some((name) => textOf(el).includes(zhDict["skill." + name])));
-  check("18 个内置角色 + 主代理卡都可展开详情", detailCards.length === 19);
+  check("18 个内置角色都可展开详情（含 co-orchestrator，无专属卡）", detailCards.length === 18);
   check("13 个可委派技能各渲染一张内置角色卡（含 co-cordis）", builtinCards.length === 13);
   check("行标签用中文字典（co-cordis → Cordis 插件）", textOf(allRows).includes(zhDict["skill.co-cordis"]));
 
@@ -656,6 +658,38 @@ let zhDict: Record<string, string> = {};
     rowsOf(unready).length === 0 && textOf(unready).includes(zhDict["title"]) && textOf(unready).includes(zhDict["loading"]));
   const unavailableNs = render(baseState({ status: "unavailable", writable: false }));
   check("命名空间不可用：给出明确提示", textOf(unavailableNs).includes(zhDict["unavailable"]));
+
+  // ── 角色库对齐原型（docs/prototype/team-builder.html）：三动作 / 模板新建 / 搜索 ──
+  const cardsWithDetail = (tree: any) => blocksOf(tree, "cohub-row-catalog")
+    .filter((el) => collect(el, "button").some((b) => "aria-expanded" in (b.props ?? {})));
+
+  const writerCards = cardsWithDetail(render(baseState({ roles: [], roleSearch: "" })))
+    .filter((el) => textOf(el).includes("co-writer"));
+  const writerButtons = writerCards.length === 1 ? collect(writerCards[0], "button").map((b) => textOf(b)) : [];
+  check("① 内置角色卡三个动作：查看详情 / 编辑 / 以此模板新建",
+    writerButtons.includes(zhDict["roleDetailToggle"])
+    && writerButtons.includes(zhDict["roleBuiltinEdit"])
+    && writerButtons.includes(zhDict["roleTemplateNew"]));
+
+  const liveState = () => roleLibraryFace?.hooks?.cohubSkills?.getSnapshot() ?? {};
+
+  roleLibraryFace.setRoleSearch("");
+  roleLibraryFace.newRoleFromTemplate("co-writer");
+  const drafted = Array.isArray(liveState().roles) ? liveState().roles : [];
+  check("②「以此模板新建」生成 -copy 草稿并预填提示词 / 类型（写 customRoles，不是 roleOverrides）",
+    drafted.length === 1 && drafted[0].name === "co-writer-copy"
+    && drafted[0].kind === "member" && typeof drafted[0].prompt === "string" && drafted[0].prompt !== ""
+    && liveState().rolesDirty === true);
+  roleLibraryFace.discardRoles();
+
+  roleLibraryFace.setRoleSearch("writer");
+  const searchedCards = cardsWithDetail(render(baseState({ roles: [], roleSearch: String(liveState().roleSearch ?? "") })));
+  check("③ 搜索 \"writer\" 只保留匹配的内置角色（不区分大小写）",
+    searchedCards.length === 1 && textOf(searchedCards[0]).includes("co-writer"));
+
+  roleLibraryFace.setRoleSearch("");
+  check("④ 清空搜索恢复全部 18 个内置角色",
+    cardsWithDetail(render(baseState({ roles: [], roleSearch: String(liveState().roleSearch ?? "") }))).length === 18);
 }
 
 console.log("");
